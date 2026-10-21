@@ -1,7 +1,7 @@
 # 络雀（ploceusTidy）
 
 <p align="center">
-  <img src="assets/ploceusTidy.png" alt="络雀：正在织巢的织雀" width="360">
+  <img src="assets/ploceusTidy.jpg" alt="络雀：正在织巢的织雀" width="480">
 </p>
 
 方便快捷的个人文件整理客户端：扫描指定目录，按规则生成整理方案，预演确认后执行，并支持按操作记录撤销。

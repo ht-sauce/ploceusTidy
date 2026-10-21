@@ -21,7 +21,7 @@ ploceusTidy/
 ├── AGENTS.md                       # AI 协作入口：速览、命令、硬边界、文档索引
 ├── README.md                       # 人类入口：简介、当前状态、文档链接
 ├── assets/
-│   └── ploceusTidy.png             # README 首图：织雀与鸟巢插画
+│   └── ploceusTidy.jpg             # README 首图：织雀与鸟巢插画（480×480）
 ├── prototypes/
 │   └── README.md                   # 原型目录用途、命名与演进规则（原型本体待建）
 ├── docs/
