@@ -1,3 +1,4 @@
+/** 图片预览：复用 Ant Design Image 的缩放与拖拽能力，不额外引入查看器。 */
 import { Image, Modal } from 'antd'
 
 interface ImagePreviewDialogProps {

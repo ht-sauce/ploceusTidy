@@ -1,3 +1,9 @@
+//! 工作空间与 SQLite 访问层。
+//!
+//! - `dataWorkSpace` 是唯一写入区域：`ploceus.db`、`assets/`、`thumbnails/`；
+//! - 所有主键与关联键使用 UUID（HC-15），文件/文件夹按规范化真实路径去重；
+//! - 每条命令一个事务，失败整体回滚；用户文件永远只读（HC-12）。
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -14,12 +20,15 @@ use crate::platform::{
     clean_path, file_icon_and_kind, normalize_path_key, now_ms, subtitle_for_path,
 };
 
+/// 全局状态：单一 SQLite 连接由 Mutex 串行化，工作空间路径在启动时确定。
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub workspace: PathBuf,
     pub assets: PathBuf,
 }
 
+/// 初始化表结构；只做 `CREATE ... IF NOT EXISTS`，不破坏已有数据。
+/// 关系表使用复合主键，`refs` 只在文件/文件夹上建立部分唯一索引用于去重。
 fn schema() -> &'static str {
     r#"
     CREATE TABLE IF NOT EXISTS refs (
@@ -79,6 +88,8 @@ fn schema() -> &'static str {
     "#
 }
 
+/// 选择工作空间目录：优先安装目录（可写时），否则回退 `%LOCALAPPDATA%`。
+/// 两个候选都按“能否创建目录”判断可写性，避免把数据库写到只读目录。
 fn resolve_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
 
@@ -101,6 +112,7 @@ fn resolve_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     Err("无法创建 dataWorkSpace".to_string())
 }
 
+/// 打开数据库并完成建表；WAL + 外键 + busy_timeout 是并发与一致性的前提。
 pub fn initialize(app: &AppHandle) -> Result<AppState, String> {
     let workspace = resolve_workspace(app)?;
     let assets = workspace.join("assets");
@@ -143,6 +155,8 @@ fn row_to_node(row: &Row<'_>) -> rusqlite::Result<SceneNode> {
     })
 }
 
+/// 节点查询模板：节点字段来自 `nodes`，`path` / `url` 来自关联的 `refs`。
+/// 统一使用它可避免各处 SELECT 字段顺序与 `row_to_node` 错位。
 const NODE_SELECT: &str = r#"
     SELECT n.id, n.type, n.icon, n.name, n.subtitle, n.body, n.group_id,
            n.x, n.y, n.w, n.h, r.path, r.url
@@ -160,6 +174,8 @@ fn load_node_by_id(connection: &Connection, node_id: &str) -> rusqlite::Result<O
         .optional()
 }
 
+/// 读取完整场景：节点、连线、标注分三次查询，避免 N+1 与笛卡尔积。
+/// 标注目标用 `GROUP_CONCAT` 聚合，无目标的标注直接丢弃。
 pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
     let connection = state.db.lock().map_err(|error| error.to_string())?;
 
@@ -242,6 +258,8 @@ fn ext_of(path: Option<&String>) -> Option<String> {
         .map(|value| value.to_lowercase())
 }
 
+/// 覆盖保存完整场景：单事务内清空再重建，失败整体回滚。
+/// 场景规模有限，整表重写比逐项 diff 更简单，也不会产生悬挂关联。
 pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
     let mut connection = state.db.lock().map_err(|error| error.to_string())?;
     let transaction = connection
@@ -358,6 +376,10 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
     Ok(())
 }
 
+/// 批量导入绝对路径：
+/// - 用 `symlink_metadata` 拒绝符号链接，再 `canonicalize` 得到真实路径；
+/// - 文件/文件夹按 `(kind, dedupe_key)` 去重，命中的节点进入 `existing`；
+/// - 失败项带路径与原因进入 `errors`，不允许静默跳过（HC-14）。
 pub fn import_paths(state: &AppState, request: &ImportRequest) -> Result<ImportResult, String> {
     let mut connection = state.db.lock().map_err(|error| error.to_string())?;
     let transaction = connection
@@ -524,6 +546,7 @@ pub fn import_paths(state: &AppState, request: &ImportRequest) -> Result<ImportR
     })
 }
 
+/// 工作空间信息：路径、数据库文件位置与节点总数。
 pub fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     let connection = state.db.lock().map_err(|error| error.to_string())?;
     let node_count: i64 = connection
@@ -541,6 +564,7 @@ pub fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     })
 }
 
+/// 查询节点的打开目标（文件路径 / URL）；打开与定位命令只接受 `nodeId`，不接受任意路径。
 pub fn node_target(
     state: &AppState,
     node_id: &str,
@@ -562,6 +586,7 @@ pub fn node_target(
         .ok_or_else(|| "引用不存在".to_string())
 }
 
+/// 将截图写入 assets 目录，文件名用 UUID 避免冲突；返回落盘绝对路径。
 pub fn save_asset(state: &AppState, bytes: &[u8], ext: &str) -> Result<String, String> {
     fs::create_dir_all(&state.assets).map_err(|error| format!("创建 assets 失败：{error}"))?;
     let path = state.assets.join(format!("{}.{}", Uuid::new_v4(), ext));
@@ -569,6 +594,7 @@ pub fn save_asset(state: &AppState, bytes: &[u8], ext: &str) -> Result<String, S
     Ok(path.to_string_lossy().to_string())
 }
 
+/// 按 ID 读取单个节点；不存在时返回 `None`，由调用方决定是否报错。
 pub fn node_by_id(state: &AppState, node_id: &str) -> Result<Option<SceneNode>, String> {
     let connection = state.db.lock().map_err(|error| error.to_string())?;
     load_node_by_id(&connection, node_id).map_err(|error| format!("读取节点失败：{error}"))

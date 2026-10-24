@@ -11,6 +11,18 @@ import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent }
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import FileTile from './FileTile'
 
+/**
+ * 画布容器：平移/缩放、视口裁剪、LOD、框选、节点拖动与迷你地图。
+ *
+ * 坐标约定：
+ * - world：场景节点坐标（px），原点在世界左上角；
+ * - screen：相对 `.canvas-board` 的像素坐标；
+ * - viewport { x, y, scale }：screen = world * scale + (x, y)。
+ *
+ * 组件只负责渲染与交互，场景数据与选中状态由 App 持有。
+ */
+
+// 迷你地图与连线 SVG 使用的世界尺寸；节点坐标可超出该范围，迷你地图会自行裁剪。
 const WORLD_W = 4000
 const WORLD_H = 2900
 
@@ -37,6 +49,7 @@ export interface CanvasBoardHandle {
   getCenterWorld: () => { x: number; y: number }
 }
 
+/** 平移会话：按下时的屏幕坐标 + 当时的视口位移，避免增量累计误差。 */
 interface PanSession {
   startX: number
   startY: number
@@ -44,18 +57,21 @@ interface PanSession {
   y: number
 }
 
+/** 拖动会话：记录节点拖动开始时的世界坐标，移动量统一按起始值计算。 */
 interface DragSession {
   items: { id: string; x: number; y: number }[]
   startX: number
   startY: number
 }
 
+/** 框选会话：世界坐标起点；`additive` 对应 Shift 追加选择。 */
 interface BoxSession {
   startX: number
   startY: number
   additive: boolean
 }
 
+/** 框选矩形（世界坐标），只用于绘制选框。 */
 interface SelectionRect {
   x: number
   y: number
@@ -63,6 +79,7 @@ interface SelectionRect {
   h: number
 }
 
+/** 视口：屏幕坐标 = 世界坐标 * scale + (x, y)。 */
 interface Viewport {
   x: number
   y: number
@@ -73,6 +90,10 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
 
+/**
+ * 生成两个节点之间的有向连线路径。
+ * 水平距离更大时从左右侧边出发，否则从上下侧边出发，避免线条穿过卡片内容。
+ */
 function edgePath(from: SceneNode, to: SceneNode) {
   const fromX = from.x + from.w / 2
   const fromY = from.y + from.h / 2
@@ -102,6 +123,7 @@ function edgePath(from: SceneNode, to: SceneNode) {
   return `M ${x1} ${y1} C ${x1} ${c1}, ${x2} ${c2}, ${x2} ${y2}`
 }
 
+/** 远景色点颜色：按文件类型区分，保持与系统图标语义一致。 */
 function lodColor(node: SceneNode) {
   switch (node.icon) {
     case 'folder':
@@ -125,6 +147,7 @@ function lodColor(node: SceneNode) {
   }
 }
 
+/** 框选命中：矩形相交即可，不做像素级判定。 */
 function intersect(node: SceneNode, rect: SelectionRect) {
   return (
     node.x + node.w >= rect.x &&
@@ -153,7 +176,9 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   ref,
 ) {
   const shellRef = useRef<HTMLDivElement>(null)
+  // 可视区域尺寸，由 ResizeObserver 维护；视口裁剪与居中定位都依赖它。
   const [size, setSize] = useState({ width: 1280, height: 720 })
+  // 默认 82%：既能读清节点名称，又保留足够的画布上下文。
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, scale: 0.82 })
   const [panning, setPanning] = useState(false)
   const [pulseId, setPulseId] = useState<string | null>(null)
@@ -162,7 +187,9 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const panSession = useRef<PanSession | null>(null)
   const dragSession = useRef<DragSession | null>(null)
   const boxSession = useRef<BoxSession | null>(null)
+  // 区分「拖动过画布」与「单击空白」，避免拖动结束误清选中。
   const panMoved = useRef(false)
+  // 行拖动会设置指针捕获，click 会落到画布上；用它标记本次按下来自节点。
   const pressedOnNode = useRef(false)
   const pulseTimer = useRef<number | null>(null)
 
@@ -206,6 +233,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   }, [annotations])
 
   const visibleNodes = useMemo(() => {
+    // 视口外扩预取，平移时不会等到节点进入视口才挂载。
     const margin = 180
     const left = -viewport.x / viewport.scale - margin
     const top = -viewport.y / viewport.scale - margin
@@ -218,9 +246,11 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     )
   }, [nodes, size.height, size.width, viewport])
 
+  // 低于 50% 时行内文字已不可读，直接退化为色点以控制 DOM 数量。
   const lod = viewport.scale < 0.5
 
   const visibleEdges = useMemo(() => {
+    // 低缩放且无选中时不画边，避免线条淹没色点。
     if (viewport.scale < 0.62 && selectedSet.size === 0) return []
     const visibleIds = new Set(visibleNodes.map((node) => node.id))
 
@@ -231,6 +261,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     })
   }, [edges, nodeById, selectedSet, viewport.scale, visibleNodes])
 
+  /** 以屏幕锚点为中心缩放：锚点下的世界坐标保持不动，缩放范围 22%–200%。 */
   const zoomAt = useCallback((nextScale: number, anchorX: number, anchorY: number) => {
     setViewport((previous) => {
       const scale = clamp(nextScale, 0.22, 2)
@@ -243,6 +274,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     })
   }, [])
 
+  /** 把节点移到可视中心；详情面板展开时为其预留 300px，避免被面板压住。 */
   const locateNode = useCallback(
     (id: string) => {
       const node = nodeById.get(id)
@@ -261,6 +293,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     [detailsOpen, nodeById, size.height, size.width],
   )
 
+  /** 缩放到可看到全部节点/分组，四周保留 80px 内边距。 */
   const fitView = useCallback(() => {
     const boxes = groups.length > 0 ? groups : nodes
     if (!boxes.length) return
@@ -311,6 +344,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     const element = shellRef.current
     if (!element) return
 
+    // 滚轮以指针位置为锚点缩放，因此不需要额外的 Ctrl 修饰键。
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault()
       const rect = element.getBoundingClientRect()
@@ -326,6 +360,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     return () => element.removeEventListener('wheel', handleWheel)
   }, [zoomAt])
 
+  /** 屏幕坐标 → 世界坐标；与 canvas-world 的 transform 保持同一套公式。 */
   const toWorld = (clientX: number, clientY: number) => {
     const rect = shellRef.current?.getBoundingClientRect()
     if (!rect) return { x: 0, y: 0 }
@@ -336,6 +371,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     }
   }
 
+  /** 空白处按下：Shift 进入框选，否则进入平移；统一用指针捕获保证拖出画布仍能收尾。 */
   const handleShellPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
@@ -438,6 +474,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onClearSelection()
   }
 
+  /** 节点上按下：先更新选中，再建立拖动会话；指针捕获挂到画布上以支持拖出视口。 */
   const handleNodePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
@@ -520,6 +557,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
         }}
       >
+        {/* 分组框只画虚线边界，放在节点下层，不拦截指针事件。 */}
         <div className="groups-layer">
           {groups.map((group) => (
             <div
@@ -537,6 +575,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           ))}
         </div>
 
+        {/* 连线用单个 SVG 批量绘制，避免每条边一个 DOM 节点。 */}
         <svg
           className="edge-layer"
           width={WORLD_W}
@@ -571,6 +610,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           })}
         </svg>
 
+        {/* 只挂载视口内的节点；低于 LOD 阈值时用色点替代完整行。 */}
         <div
           className="nodes-layer"
           onPointerDown={handleNodePointerDown}
@@ -619,6 +659,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         ) : null}
       </div>
 
+      {/* 迷你地图按世界尺寸比例映射分组与当前视口，不参与交互。 */}
       <div className="minimap" aria-hidden="true">
         {groups.map((group) => (
           <span

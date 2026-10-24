@@ -1,3 +1,7 @@
+/**
+ * 浏览器调试用模拟数据：1000 条引用 + 分组 + 连线 + 标注。
+ * 只在 `pnpm dev` 的浏览器模式下加载；桌面客户端始终从 SQLite 读取。
+ */
 import type {
   SceneAnnotation,
   SceneEdge,

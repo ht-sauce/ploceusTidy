@@ -1,3 +1,7 @@
+/**
+ * 系统风格图标：全部用 24×24 viewBox 内联 SVG，保持与资源管理器相近的配色。
+ * 不引入图标字体或远程资源，避免启动时额外请求。
+ */
 import type { SystemIconKind } from '@/types/scene'
 
 interface SystemIconProps {

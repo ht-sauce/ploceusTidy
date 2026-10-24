@@ -1,3 +1,4 @@
+/** 前端入口：挂载 Ant Design ConfigProvider 与全局提示容器。 */
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App as AntApp, ConfigProvider, theme } from 'antd'

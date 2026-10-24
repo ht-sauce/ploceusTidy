@@ -1,3 +1,7 @@
+/**
+ * 无边框窗口的标题栏：左侧 logo，搜索绝对居中，右侧操作与窗口按钮。
+ * 搜索的下拉面板依赖 `.search-area` 的 z-index 浮在画布之上。
+ */
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Button, Input, Tooltip } from 'antd'
@@ -107,6 +111,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
   }
 
   return (
+    // data-tauri-drag-region 只作用于标题栏本身，按钮与搜索框不会触发拖动。
     <header className="title-bar" data-tauri-drag-region>
       <div className="brand">
         <img className="brand-logo" src={logoUrl} alt="络雀" />

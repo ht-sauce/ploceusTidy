@@ -1,3 +1,7 @@
+/**
+ * 设置弹窗：展示工作空间路径与窗口/数据开关。
+ * 迁移与重建正式版才落地，当前只做信息展示与提示。
+ */
 import { useState } from 'react'
 import { App as AntApp, Button, Modal, Switch } from 'antd'
 import { FolderOpenOutlined } from '@ant-design/icons'

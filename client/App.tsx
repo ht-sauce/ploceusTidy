@@ -1,3 +1,11 @@
+/**
+ * 应用根组件：持有场景状态，串联画布、标题栏、详情面板与 Tauri 能力。
+ *
+ * 职责边界：
+ * - 场景数据与选中状态只在这里维护，子组件通过回调上报；
+ * - 文件系统、剪贴板、SQLite 一律走 `desktopApi`，前端不直接访问；
+ * - 浏览器模式下用模拟数据预览界面，桌面模式下从工作空间加载。
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App as AntApp, Button, Tooltip } from 'antd'
 import {
@@ -18,12 +26,14 @@ import TextEditorDialog from '@/components/TextEditorDialog'
 import ImagePreviewDialog from '@/components/ImagePreviewDialog'
 import { desktopApi, desktopWindow, isDesktopClient } from '@/lib/tauri-api'
 
+/** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
 interface SceneSnapshot {
   nodes: SceneNode[]
   edges: SceneEdge[]
   annotations: SceneAnnotation[]
 }
 
+/** 合并导入结果：已有节点按 id 覆盖，重复导入不会产生第二张卡片。 */
 function mergeNodes(current: SceneNode[], incoming: SceneNode[]) {
   const map = new Map(current.map((node) => [node.id, node]))
   incoming.forEach((node) => map.set(node.id, node))
@@ -39,10 +49,13 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+/** 快捷键必须避开输入框，否则会吞掉用户正在输入的内容。 */
 function isTypingTarget(target: EventTarget | null) {
   const element = target as HTMLElement | null
   return Boolean(element?.closest('input, textarea, [contenteditable="true"]'))
 }
+
+// ---------- 场景状态与派生数据 ----------
 
 export default function App() {
   const { message } = AntApp.useApp()
@@ -68,6 +81,7 @@ export default function App() {
   const canvasRef = useRef<CanvasBoardHandle>(null)
   const titleBarRef = useRef<TitleBarHandle>(null)
   const undoRef = useRef<SceneSnapshot | null>(null)
+  // 同一次粘贴可能同时触发 keydown 与 paste 事件，500ms 内只处理一次。
   const clipboardGuard = useRef(0)
 
   const groups = isDesktopClient ? [] : sceneGroups
@@ -168,6 +182,8 @@ export default function App() {
     window.setTimeout(() => canvasRef.current?.locateNode(node.id), 0)
   }, [])
 
+  // ---------- 节点创建 ----------
+
   const createTextNode = useCallback(
     (text: string) => {
       const center = canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 }
@@ -216,6 +232,8 @@ export default function App() {
     },
     [addNodeAtCenter],
   )
+
+  // ---------- 导入、打开与预览 ----------
 
   const handleImportPaths = useCallback(
     async (paths: string[]) => {
@@ -318,6 +336,8 @@ export default function App() {
     message.info(`演示：在资源管理器中定位 ${node.name}`)
   }
 
+  // ---------- 标注与文字编辑 ----------
+
   const handleAnnotation = (annotation: SceneAnnotation) => {
     setSelectedIds(annotation.nodeIds)
     setActiveAnnotationId(annotation.id)
@@ -407,6 +427,8 @@ export default function App() {
     void openNode(node)
   }
 
+  // ---------- 连线、删除与撤销 ----------
+
   const handleLinkSelected = useCallback(() => {
     if (selectedIds.length < 2) {
       message.info('先选中至少两个对象：Shift 点击或 Shift 框选，再按 L')
@@ -466,6 +488,8 @@ export default function App() {
     setDetailsMode('details')
     message.success('已撤销')
   }, [message])
+
+  // ---------- 剪贴板与截图 ----------
 
   const handlePasteText = useCallback(
     (text: string) => {
@@ -559,6 +583,8 @@ export default function App() {
     }
   }, [empty])
 
+  // ---------- 持久化与桌面事件 ----------
+
   useEffect(() => {
     if (!isDesktopClient) return
     let cancelled = false
@@ -587,6 +613,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isDesktopClient || !hydrated) return
+    // 350ms 防抖：拖动节点时避免每一帧都写库。
     const timer = window.setTimeout(() => {
       desktopApi
         .saveScene({ nodes, edges, annotations })
@@ -596,6 +623,7 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [annotations, edges, hydrated, message, nodes])
 
+  // Tauri 拖入事件直接给绝对路径，导入与去重统一交给 Rust 侧处理。
   useEffect(() => {
     if (!isDesktopClient) return
     let unlisten: (() => void) | undefined
@@ -615,6 +643,8 @@ export default function App() {
       unlisten?.()
     }
   }, [handleImportPaths, message])
+
+  // ---------- 快捷键 ----------
 
   useEffect(() => {
     const onKeyDown = async (event: KeyboardEvent) => {
@@ -739,6 +769,8 @@ export default function App() {
     selectedIds,
     settingsOpen,
   ])
+
+  // ---------- 渲染 ----------
 
   return (
     <div className="app-shell">

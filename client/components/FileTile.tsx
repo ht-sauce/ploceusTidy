@@ -1,3 +1,7 @@
+/**
+ * 高密度节点行：固定 176×28、16px 系统图标、单行文件名。
+ * 完整路径/内容放入 Tooltip，避免行内换行破坏密度。
+ */
 import { Tooltip } from 'antd'
 import type { SceneNode } from '@/types/scene'
 import SystemIcon from './SystemIcon'

@@ -1,3 +1,4 @@
+/** 文字节点编辑弹窗：双击文字行打开，首行作为行标题，完整内容存 `body`。 */
 import { useState } from 'react'
 import { Input, Modal } from 'antd'
 import type { SceneNode } from '@/types/scene'

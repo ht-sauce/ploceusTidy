@@ -1,3 +1,7 @@
+/**
+ * 右侧详情面板：展示选中节点的元数据、打开/定位动作，以及标注编辑。
+ * 面板占用 280px 固定宽度，画布随之收缩而不是被覆盖。
+ */
 import { useState } from 'react'
 import { Button, Input } from 'antd'
 import {
