@@ -101,7 +101,7 @@ ploceusTidy/
 | [docs/spec/INDEX.md](docs/spec/INDEX.md) | 文集地图、阅读顺序、维护契约、书写约定 |
 | [docs/spec/00-overview.md](docs/spec/00-overview.md) | 定位、架构分层、质量属性、v1 范围 |
 | [docs/spec/02-client-architecture.md](docs/spec/02-client-architecture.md) | Tauri/Rust/React/Ant Design/Konva 分层、IPC、性能 |
-| [docs/spec/03-ui-interaction.md](docs/spec/03-ui-interaction.md) | 无边框窗口、高密度系统图标行、搜索、画布交互 |
+| [docs/spec/03-ui-interaction.md](docs/spec/03-ui-interaction.md) | 无边框窗口、高密度桌面图标网格、分组布局、语义色主题、搜索、画布交互 |
 | [docs/spec/04-data-model.md](docs/spec/04-data-model.md) | dataWorkSpace、SQLite 表、ID、去重 |
 | [docs/spec/05-file-reference-contract.md](docs/spec/05-file-reference-contract.md) | 只读引用、打开/定位、缩略图、缺失 |
 | [docs/spec/06-import-pipeline.md](docs/spec/06-import-pipeline.md) | 拖入/粘贴、批量、去重、失败 |

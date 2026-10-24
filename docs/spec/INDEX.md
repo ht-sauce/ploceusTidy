@@ -10,7 +10,7 @@
 | 00 | [00-overview.md](00-overview.md) | 已建 | 定位、核心流程、架构分层、质量属性、v1 范围 |
 | 01 | [01-system-context.md](01-system-context.md) | 已建 | 用户、本机文件系统、Shell、剪贴板、dataWorkSpace、无云边界 |
 | 02 | [02-client-architecture.md](02-client-architecture.md) | 已建 | Tauri/Rust/TS/Konva 分层、IPC、性能预算、源码规划 |
-| 03 | [03-ui-interaction.md](03-ui-interaction.md) | 已建 | 窗口形态、顶栏搜索、卡片、画布交互、标注、设置 |
+| 03 | [03-ui-interaction.md](03-ui-interaction.md) | 已建 | 窗口形态、顶栏搜索、图标网格、分组布局、语义色主题、画布交互、设置 |
 | 04 | [04-data-model.md](04-data-model.md) | 已建 | dataWorkSpace、SQLite 表、ID、去重、搜索、恢复 |
 | 05 | [05-file-reference-contract.md](05-file-reference-contract.md) | 已建 | 只读引用、导入来源、路径规范化、打开/定位、缩略图、缺失 |
 | 06 | [06-import-pipeline.md](06-import-pipeline.md) | 已建 | 拖入/粘贴、批量、去重、剪贴板、失败语义、性能 |

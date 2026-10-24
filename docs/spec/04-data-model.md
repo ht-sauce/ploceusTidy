@@ -88,7 +88,8 @@ dataWorkSpace/
 
 ### `app_meta`
 
-- `key` / `value`：视口（`viewport`）、schema 版本、最近打开时间等。
+- `key` / `value`：视口（`viewport`）、界面主题（`ui_theme`）、schema 版本、最近打开时间等。
+- `ui_theme` 只存主题 ID，不存整套色值；缺省或无法识别时回退 `mist-purple`。
 - 工作空间路径不入库，放在应用配置层（HC-9）。
 
 ## 4. ID 规则
