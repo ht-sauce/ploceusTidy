@@ -163,6 +163,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const dragSession = useRef<DragSession | null>(null)
   const boxSession = useRef<BoxSession | null>(null)
   const panMoved = useRef(false)
+  const pressedOnNode = useRef(false)
   const pulseTimer = useRef<number | null>(null)
 
   viewportRef.current = viewport
@@ -342,6 +343,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
     panMoved.current = false
+    pressedOnNode.current = false
 
     if (event.shiftKey) {
       const start = toWorld(event.clientX, event.clientY)
@@ -426,6 +428,11 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       panMoved.current = false
       return
     }
+    if (pressedOnNode.current) {
+      // 指针捕获后 click 会落在画布上，不能用它判断是否点了空白处
+      pressedOnNode.current = false
+      return
+    }
     const target = event.target as HTMLElement
     if (target.closest('.file-tile, .lod-dot, .minimap')) return
     onClearSelection()
@@ -443,6 +450,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     const node = nodeById.get(id)
     if (!node) return
 
+    pressedOnNode.current = true
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
 
     const additive = event.shiftKey || event.ctrlKey || event.metaKey

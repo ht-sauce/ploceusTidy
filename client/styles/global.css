@@ -89,6 +89,7 @@ button {
 .search-area {
   position: absolute;
   left: 50%;
+  z-index: 300;
   transform: translateX(-50%);
   width: min(440px, 42vw);
 }
