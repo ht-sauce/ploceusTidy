@@ -50,6 +50,15 @@ dataWorkSpace/
 - 唯一索引为 `UNIQUE(kind, dedupe_key) WHERE dedupe_key IS NOT NULL`；只有文件/文件夹写入 `dedupe_key`，`link` 不参与去重。
 - 同一 `ref` 只允许一张卡片（见 `nodes.ref_id` 唯一约束）。
 
+### `groups`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | TEXT PK | UUID |
+| `title` | TEXT | 分组框标题 |
+| `x`,`y`,`w`,`h` | REAL | 世界坐标与尺寸（按内容收高） |
+| `created_at` / `updated_at` | INTEGER | epoch ms |
+
 ### `nodes`
 
 | 字段 | 类型 | 说明 |
@@ -61,23 +70,27 @@ dataWorkSpace/
 | `subtitle` | TEXT NOT NULL DEFAULT '' | 副标题：所在目录或来源 |
 | `body` | TEXT NULL | 文字卡内容 |
 | `ref_id` | TEXT NULL UNIQUE | 引用；文字卡为空 |
-| `group_id` | TEXT NOT NULL DEFAULT 'other' | 分组标识（当前未建分组框表，统一为 `other`） |
-| `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸 |
+| `group_id` | TEXT NOT NULL DEFAULT '' | 所属分组框 `groups.id`；空字符串表示未分组 |
+| `z` | INTEGER NOT NULL DEFAULT 0 | 叠放层级 |
+| `parent_node_id` | TEXT NULL | 规划字段：相对父节点挂载，当前未实现 |
+| `data_json` | TEXT NULL | 规划字段：扩展样式，当前未写入 |
+| `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸（默认 72×64 图标格） |
 | `created_at` | INTEGER | epoch ms |
 | `updated_at` | INTEGER | epoch ms |
 
 - `UNIQUE(ref_id)` 允许 NULL（SQLite 允许多个 NULL）。
-- 规划字段（未实现）：`type=frame` 分组框、`parent_node_id`、`z` 层级、`data_json` 扩展样式。
+- 删除分组框时 `group_id` 置空，不删内部节点；`scene_save` 末尾会把指向不存在分组的 `group_id` 归一为空。
 
 ### `edges`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `from_node` | TEXT | 起点节点 ID |
-| `to_node` | TEXT | 终点节点 ID |
-
-- 规划字段（未实现）：`source_handle` / `target_handle` 锚点、`label` 标签、`style_json` 线型与颜色、`created_at`。
+| `from_node` / `to_node` | TEXT | 起止节点 ID |
+| `from_handle` / `to_handle` | TEXT NULL | 规划字段：锚点，当前未实现 |
+| `label` | TEXT NULL | 连线标签 |
+| `style_json` | TEXT NULL | 规划字段：线型与颜色，当前未写入 |
+| `created_at` | INTEGER NOT NULL DEFAULT 0 | epoch ms |
 
 ### `annotations` 与 `annotation_targets`
 
@@ -85,9 +98,9 @@ dataWorkSpace/
 - `annotation_targets(annotation_id, node_id)`，复合主键，无自增。
 - 删除节点时删除对应 `annotation_targets`；无目标的标注一并删除。
 
-### `app_meta`（未创建）
+### `app_meta`
 
-- 规划表：`key` / `value`，用于视口（`viewport`）、界面主题（`ui_theme`）、schema 版本、最近打开时间等。
+- `key` / `value`，存视口类配置与界面主题（`ui_theme`）、桌面常驻（`desktop_pin`）、最小化暂停（`pause_when_minimized`）。
 - `ui_theme` 只存主题 ID，不存整套色值；缺省或无法识别时回退 `mist-purple`。
 - 工作空间路径不入库，放在应用配置层（HC-9）。
 

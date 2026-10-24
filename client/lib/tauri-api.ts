@@ -4,7 +4,7 @@
  */
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ImportResult, SceneData, WorkspaceInfo } from '@/types/scene'
+import type { ImportResult, RefStatus, RelinkResult, SceneData, WorkspaceInfo } from '@/types/scene'
 
 /** 浏览器调试模式下为 false，用于跳过桌面专属逻辑。 */
 export const isDesktopClient = isTauri()
@@ -27,6 +27,24 @@ export const desktopApi = {
   /** 返回图片 data URL；超过 24MB 由 Rust 侧拒绝。 */
   previewRef: (nodeId: string) => invoke<string>('preview_ref', { nodeId }),
   workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
+  /** 用 Windows Shell 生成缩略图；不可用时返回 null。 */
+  thumbGet: (nodeId: string, size = 96) => invoke<string | null>('thumb_get', { nodeId, size }),
+  /** 校验引用是否仍存在；传空数组表示全量。 */
+  refCheck: (nodeIds: string[] = []) => invoke<RefStatus[]>('ref_check', { nodeIds }),
+  /** 重新关联缺失引用到新路径。 */
+  refRelink: (nodeId: string, path: string) => invoke<RelinkResult>('ref_relink', { nodeId, path }),
+  /** 读取应用配置（主题、桌面常驻等）。 */
+  metaGet: (key: string) => invoke<string | null>('meta_get', { key }),
+  metaSet: (key: string, value: string) => invoke<void>('meta_set', { key, value }),
+  workspaceOpen: () => invoke<void>('workspace_open'),
+  workspaceRebuild: () => invoke<void>('workspace_rebuild'),
+  workspaceMigrate: (target: string) => invoke<WorkspaceInfo>('workspace_migrate', { target }),
+  /** 桌面常驻：把窗口压到普通窗口之下。 */
+  windowSetPin: (pinned: boolean) => invoke<void>('window_set_pin', { pinned }),
+  /** 选择一个文件用于重新关联；取消返回 null。 */
+  pickFile: () => invoke<string | null>('pick_file'),
+  /** 选择迁移目标目录；取消返回 null。 */
+  pickFolder: () => invoke<string | null>('pick_folder'),
   /** F12 调试；release 构建同样可用。 */
   openDevtools: () => invoke<void>('open_devtools'),
 }

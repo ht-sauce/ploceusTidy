@@ -1,18 +1,61 @@
 :root {
-  --bg: #ececea;
-  --paper: #fbfbfa;
-  --panel: #ffffff;
-  --line: #e3e3df;
-  --line-strong: #d6d6d1;
-  --text: #202020;
-  --muted: #6f6f6b;
-  --faint: #9a9a94;
-  --accent: #2f6b5b;
-  --accent-soft: #e7f0ec;
-  --danger: #b54b42;
-  --canvas: #f7f7f5;
-  --dot: #e1e1dc;
+  /* 语义令牌：四套主题只覆盖这一组变量，旧变量名保留为别名。 */
+  --primary: #756e87;
+  --primary-hover: #625b73;
+  --selected-bg: #eeeaf3;
+  --hover-bg: #f5f2f8;
+  --canvas-bg: #f8f7fa;
+  --surface: #fcfbfd;
+  --border: #e4e0e8;
+  --text: #30343a;
+  --text-secondary: #747a83;
+  --error: #c44b52;
+  --warning: #9a6b24;
+  --success: #4f7663;
+
+  --bg: #f1f0f3;
+  --paper: var(--surface);
+  --panel: var(--surface);
+  --line: var(--border);
+  --line-strong: color-mix(in srgb, var(--border) 70%, var(--text-secondary));
+  --muted: var(--text-secondary);
+  --faint: #9299a2;
+  --accent: var(--primary);
+  --accent-soft: var(--selected-bg);
+  --danger: var(--error);
+  --canvas: var(--canvas-bg);
+  --dot: color-mix(in srgb, var(--border) 62%, transparent);
   --radius: 6px;
+}
+
+:root[data-theme='slate-blue'] {
+  --primary: #536b82;
+  --primary-hover: #455d74;
+  --selected-bg: #e9eff4;
+  --hover-bg: #f1f5f8;
+  --canvas-bg: #f7f8fa;
+  --surface: #fcfdfe;
+  --border: #dde3e8;
+}
+
+:root[data-theme='reed-green'] {
+  --primary: #647a70;
+  --primary-hover: #52675f;
+  --selected-bg: #eaf0ec;
+  --hover-bg: #f2f6f3;
+  --canvas-bg: #f7f9f7;
+  --surface: #fcfdfc;
+  --border: #dfe6e1;
+}
+
+:root[data-theme='graphite'] {
+  --primary: #62666d;
+  --primary-hover: #50545b;
+  --selected-bg: #eceef1;
+  --hover-bg: #f3f4f6;
+  --canvas-bg: #f7f8f9;
+  --surface: #fcfcfd;
+  --border: #e1e4e7;
 }
 
 * {
@@ -276,183 +319,26 @@ button {
   cursor: grab;
 }
 
-.canvas-board.is-panning {
-  cursor: grabbing;
-}
-
-.canvas-world {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 4000px;
-  height: 2900px;
-  transform-origin: 0 0;
-  will-change: transform;
-}
-
-.groups-layer,
-.edge-layer,
-.nodes-layer {
-  position: absolute;
-  inset: 0;
-}
-
-.groups-layer {
-  z-index: 0;
-  pointer-events: none;
-}
-
-.group-frame {
-  position: absolute;
-  border: 1px dashed #dcdcd6;
-  border-radius: 8px;
-}
-
-.group-frame > span {
-  position: absolute;
-  left: 10px;
-  top: -8px;
-  padding: 0 5px;
-  background: var(--canvas);
-  color: #8f8f89;
-  font-size: 9px;
-  letter-spacing: 0.04em;
-}
-
-.edge-layer {
-  z-index: 1;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.edge-main {
-  fill: none;
-  stroke: #b8bcb6;
-  stroke-width: 1;
-  opacity: 0.8;
-}
-
-.nodes-layer {
-  z-index: 2;
-}
-
-.file-tile {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 6px;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.02);
-  cursor: default;
-}
-
-.file-tile:hover {
-  border-color: #c8d7d0;
-}
-
-.file-tile.is-text {
-  background: #fffdf6;
-  border-color: #e8e1cf;
-}
-
-.file-tile.is-selected {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--accent),
-    0 2px 8px rgba(47, 107, 91, 0.12);
-}
-
-.file-tile.is-pulse {
-  animation: tilePulse 1.4s ease-out 1;
-}
-
-@keyframes tilePulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(47, 107, 91, 0.26);
-  }
-  70% {
-    box-shadow: 0 0 0 9px rgba(47, 107, 91, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(47, 107, 91, 0);
-  }
-}
-
-.tile-icon {
-  flex: 0 0 auto;
-}
-
-.tile-name {
-  min-width: 0;
-  color: #2b2b2b;
-  font-size: 11.5px;
-  line-height: 26px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tile-tooltip {
-  max-width: 360px;
-  font-size: 11px;
-  line-height: 1.45;
-  word-break: break-all;
-}
-
 .tile-tooltip-detail {
   margin-top: 2px;
   color: #9a9a94;
   font-size: 10px;
 }
 
-.tile-annotation {
+/* Konva 画布的悬停提示：DOM 覆盖层跟随指针，不参与画布事件。 */
+.konva-tooltip {
   position: absolute;
-  top: 2px;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.tile-annotation.amber {
-  background: #b88734;
-}
-.tile-annotation.red {
-  background: #b35a51;
-}
-.tile-annotation.blue {
-  background: #4f7392;
-}
-.tile-annotation.teal {
-  background: #2f6b5b;
-}
-
-.lod-dot {
-  position: absolute;
-  width: 10px;
-  height: 6px;
-  border-radius: 2px;
-  opacity: 0.85;
-  cursor: pointer;
-}
-
-.lod-dot:hover {
-  outline: 1px solid var(--accent);
-}
-
-.selection-box {
-  position: absolute;
-  z-index: 3;
-  border: 1px solid var(--accent);
-  background: rgba(47, 107, 91, 0.08);
+  z-index: 20;
+  max-width: 360px;
+  padding: 5px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
   pointer-events: none;
 }
 
@@ -713,6 +599,45 @@ button {
 .settings-section {
   padding: 9px 0;
   border-bottom: 1px solid #efefeb;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.theme-swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.theme-swatch:hover {
+  background: var(--hover-bg);
+}
+
+.theme-swatch.is-active {
+  background: var(--selected-bg);
+  border-color: var(--primary);
+}
+
+.theme-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.theme-name {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .settings-section h3 {

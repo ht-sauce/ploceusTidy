@@ -44,6 +44,7 @@
 | HC-13 | **数据不出本机**：文件内容与元数据默认不外传；接入外部 API 必须由用户显式开启并说明发送范围 | 隐私泄漏，触碰个人数据红线 |
 | HC-14 | **文件操作异常必须上报**：失败须带「路径 + 操作 + 原因」，禁止静默跳过或只记日志不给用户看 | 用户以为导入/定位完成，实际文件状态不一致 |
 | HC-15 | **禁止自增 ID 作为关联键**【已生效】：表关联一律使用自定义 ID，主键与业务关联键均不依赖自增 | 迁移、合并、离线同步时 ID 冲突，关联结构不可重建 |
+| HC-16 | **长命令不得死等**【已生效】：单条命令阻塞超过 5 分钟或长时间无输出，必须中断，改用非阻塞执行、缩小范围或拆分验证；禁止连续重试同一条卡死命令 | 时间与上下文被单个命令吞掉，后续改动全部被阻塞 |
 
 **新增硬约束的条件**：出现过一次真实事故或经论证必然出问题；只写「约束 + 违反后果」，编号顺延。
 
@@ -69,9 +70,10 @@
 - 需求基线：[REQUIREMENTS.md](REQUIREMENTS.md)；系统总纲：[spec/00-overview.md](spec/00-overview.md)。
 - 前端工程位于 `client/`，桌面壳位于 `desktop/`（Tauri 2，纯桌面，无 iOS/Android）。
 - 浏览器调试：`pnpm install` → `pnpm dev`；桌面客户端：`pnpm tauri:dev`（release 模式）。
-- 已实现：拖入/粘贴文件、剪贴板文件、文字/URL/截图、SQLite 持久化、重复定位、搜索、多选/框选、批量标注、有向连线、删除/撤销、文字编辑、图片预览、打开/定位、设置。
+- 已实现：拖入/粘贴文件、剪贴板文件、文字/URL/截图、SQLite 持久化（增量保存 + `user_version` 迁移）、重复定位、搜索（归一化 + 分级排序）、多选/框选、批量标注、有向连线（标签/删除）、分组框（创建/移动/删除）、删除/撤销、文字编辑、图片预览、打开/定位、缺失校验与重新关联、Shell 缩略图、四套主题切换、工作空间打开/迁移/重建、桌面常驻。
+- 画布渲染层为 Konva 10 + react-konva + rbush（视口裁剪 + 三档 LOD）。
+- Rust 最小测试（`cargo test --manifest-path desktop/Cargo.toml --lib`）与 `pnpm check-spec` 已建立。
 - `pnpm tauri build --no-bundle` 已产出 release exe 并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551），`pnpm tauri:dev` 已固定使用 release 模式。`cargo check` 与前端构建已通过。
-- 待补：Shell 原生缩略图、分组框创建/移动、锚点连线/边标签、缺失文件重连、工作空间迁移、Konva 十万级渲染层。
-- 源码工程已建立；`HC-9`、`HC-15` 已生效。
-- `scripts/check-spec.mjs` 未建：可静态化的约束在源码建立后脚本化。
-- git hooks 不启用：提交前手动执行 `pnpm lint` / `pnpm format:check`。
+- 待补：视频封面、图片预览协议、1 万/10 万画布基准实测、NSIS 安装验收。
+- 源码工程已建立；`HC-9`、`HC-15`、`HC-16` 已生效。
+- git hooks 不启用：提交前手动执行 `pnpm lint` / `pnpm format:check` / `pnpm check-spec`。

@@ -4,7 +4,7 @@
 
 - Tauri 2 + Rust 核心 + Windows WebView2。
 - React 19.3.1 + TypeScript 6.0.3 + Ant Design 6.6.7 负责界面；Vite 8.3.5 构建。
-- 当前客户端用 React DOM 虚拟行实现高密度画布；M2 生产画布使用 Konva 虚拟化渲染。
+- 画布渲染层为 Konva 10 + react-konva 19.3.2，配 rbush 空间索引做视口裁剪与三档 LOD。
 - 单窗口、单进程模型；无本地 HTTP 服务，不建端口表。
 - SQLite 由 Rust 侧 `rusqlite` 持有，前端不直接执行 SQL。
 
@@ -80,8 +80,8 @@ sequenceDiagram
 
 | 命令 | 输入 | 输出 |
 | --- | --- | --- |
-| `workspace_get` | 无 | dataWorkSpace 路径、DB 路径、节点数 |
-| `scene_load` | 无 | 全部节点/边/标注 |
+| `workspace_get` | 无 | dataWorkSpace 路径、DB 路径、节点数、占用大小 |
+| `scene_load` | 无 | 全部节点/分组/边/标注 |
 | `scene_save` | `SceneData` | 成功/失败；按 ID 增量 upsert，事务内清理快照外的对象 |
 | `import_paths` | 路径数组、x/y | created / existing / errors |
 | `read_clipboard_files` | 无 | Windows CF_HDROP 文件路径数组 |
@@ -89,7 +89,17 @@ sequenceDiagram
 | `preview_ref` | nodeId | 图片 data URL（≤24MB） |
 | `open_ref` | nodeId | 打开原文件 / URL |
 | `reveal_ref` | nodeId | 在资源管理器中定位 |
-| `node_get` | nodeId | 单个节点（当前预留） |
+| `node_get` | nodeId | 单个节点（重复导入后定位刷新） |
+| `thumb_get` | nodeId、size | Shell 缩略图 data URL；不可用返回 `null` |
+| `ref_check` | nodeId 数组（空=全量） | 各引用的 `is_exists` / `size` / `mtime`，写回数据库 |
+| `ref_relink` | nodeId、新路径 | 更新后的节点与状态；命中去重索引时报错 |
+| `meta_get` / `meta_set` | key、value | `app_meta` 配置读写（主题、桌面常驻等） |
+| `workspace_open` | 无 | 在资源管理器中打开工作空间目录 |
+| `workspace_rebuild` | 无 | 清空业务数据，保留 `assets`/`thumbnails` |
+| `workspace_migrate` | 目标目录 | 复制-校验-切换后的工作空间信息；失败保留旧目录 |
+| `pick_file` / `pick_folder` | 无 | 系统文件/目录选择对话框；取消返回 `null` |
+| `window_set_pin` | pinned | 桌面常驻：窗口压到普通窗口之下 |
+| `open_devtools` | 无 | F12 打开开发者工具 |
 
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
 - `scene_save` 不暴露 SQL；前端只提交结构化场景。
@@ -117,18 +127,20 @@ ploceusTidy/
 │   ├── App.tsx
 │   ├── vite-env.d.ts
 │   ├── lib/tauri-api.ts
+│   ├── lib/theme.ts             # 四套主题语义令牌
+│   ├── lib/search.ts            # 搜索归一化与排序
 │   ├── types/scene.ts
 │   ├── data/mock-scene.ts
 │   ├── components/
 │   │   ├── TitleBar.tsx
-│   │   ├── CanvasBoard.tsx
-│   │   ├── FileTile.tsx
+│   │   ├── CanvasBoard.tsx      # Konva 渲染层
 │   │   ├── SystemIcon.tsx
 │   │   ├── DetailsPanel.tsx
+│   │   ├── TextEditorDialog.tsx
+│   │   ├── ImagePreviewDialog.tsx
 │   │   └── SettingsDialog.tsx
 │   ├── styles/global.css
 │   ├── domain/                 # 规划：纯 TS 实体、命令、撤销、定位
-│   ├── canvas/                 # 规划：Konva 生产渲染层
 │   └── shared/                 # 规划：Tauri IPC 契约
 ├── package.json
 ├── vite.config.ts
@@ -161,9 +173,12 @@ ploceusTidy/
 | clipboard-win（M1） | Windows 文件剪贴板 | CF_HDROP 文件列表 |
 | windows crate（M1） | Shell 缩略图/图标 | IShellItemImageFactory / SHGetFileInfoW |
 | tauri-plugin-opener（M1） | 打开/定位 | openPath / revealItemInDir |
-| tauri-plugin-dialog（M1） | 重新关联文件 | 原生文件选择器 |
+| tauri-plugin-dialog（M1） | 重新关联文件、工作空间迁移 | 原生文件/目录选择器 |
+| konva 10 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组/LOD 绘制 |
+| rbush 4 + @types/rbush | 视口空间索引 | 可见节点裁剪查询 |
+| windows 0.61 + image 0.25 | Shell 缩略图、窗口置底 | IShellItemImageFactory / SetWindowPos；image 仅用于 PNG 编码 |
 
-> 不引入 React Flow：DOM 节点在万级规模不可控。画布引擎见 ADR-005；当前客户端仅用 DOM 虚拟行实现交互与密度。
+> 不引入 React Flow：DOM 节点在万级规模不可控。画布引擎见 ADR-005，已用 Konva + rbush 落地。
 
 > 版本基线：React 19.3.1、React DOM 19.3.1、Ant Design 6.6.7、`@ant-design/icons` 6.3.4、Vite 8.3.5、`@vitejs/plugin-react` 6.1.2、TypeScript 6.0.3。TypeScript 7.0.2 与 `typescript-eslint` 8.72 的 peer 上限 `<6.1.0` 冲突，暂不使用。
 

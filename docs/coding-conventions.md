@@ -94,4 +94,4 @@
 | ESLint | `eslint.config.js` flat config：`@eslint/js`、`typescript-eslint`、`react-hooks`、`react-refresh`、`eslint-config-prettier` | 本文件 |
 | 编辑器基础 | `.editorconfig`：UTF-8、LF、2 空格、文件末尾换行 | 本文件 |
 | 依赖版本 | 精确锁定最新稳定版；不使用 `latest` 标签或测试版；TypeScript 使用 6.0.3（`typescript-eslint` 兼容上限 <6.1.0） | `package.json` + `pnpm-lock.yaml` |
-| lint / 构建 / 测试命令 | `pnpm lint` / `pnpm build`；测试 M1 补 | `AGENTS.md` §2 + 根 `README.md` |
+| lint / 构建 / 测试命令 | `pnpm lint` / `pnpm build` / `pnpm check-spec`；Rust `cargo test --manifest-path desktop/Cargo.toml --lib` | `AGENTS.md` §2 + 根 `README.md` |

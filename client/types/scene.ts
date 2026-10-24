@@ -23,14 +23,25 @@ export interface SceneNode {
   subtitle: string
   body?: string
   url?: string
+  /** 所属分组框 ID；空字符串表示未分组。 */
   groupId: string
+  /** 叠放层级，数值大的在上层。 */
+  z: number
+  /** 相对父节点的挂载点；为空表示使用世界坐标。 */
+  parentNodeId?: string
+  /** 扩展样式（JSON 字符串）。 */
+  dataJson?: string
   x: number
   y: number
   w: number
   h: number
+  /** 文件是否存在；文字与链接恒为 true，由校验结果维护。 */
+  isExists: boolean
+  /** 缩略图缓存键；为空表示尚未生成。 */
+  thumbKey?: string
 }
 
-/** 分组框；v1 仅作为画布上的视觉容器，子节点坐标暂不相对化。 */
+/** 分组框：独立存储，节点通过 `groupId` 归属，坐标始终为世界坐标。 */
 export interface SceneGroup {
   id: string
   title: string
@@ -40,11 +51,15 @@ export interface SceneGroup {
   h: number
 }
 
-/** 有向连线，`from` → `to` 为节点 ID。 */
+/** 有向连线，`from` → `to` 为节点 ID；锚点为空时按节点中心自动路由。 */
 export interface SceneEdge {
   id: string
   from: string
   to: string
+  fromHandle?: string
+  toHandle?: string
+  label?: string
+  styleJson?: string
 }
 
 /** 结构化标注：一条标注可覆盖多个节点。 */
@@ -72,6 +87,7 @@ export interface SearchEntry {
 /** `scene_load` / `scene_save` 的完整场景快照。 */
 export interface SceneData {
   nodes: SceneNode[]
+  groups: SceneGroup[]
   edges: SceneEdge[]
   annotations: SceneAnnotation[]
 }
@@ -99,4 +115,26 @@ export interface WorkspaceInfo {
   path: string
   dbPath: string
   nodeCount: number
+  sizeBytes: number
+  dbBytes: number
+  assetsBytes: number
+  thumbnailBytes: number
 }
+
+/** 单个引用的磁盘校验结果；缺失与恢复都通过 `isExists` 回传。 */
+export interface RefStatus {
+  nodeId: string
+  path?: string
+  isExists: boolean
+  size?: number
+  mtime?: number
+}
+
+/** 重新关联结果：返回更新后的节点，前端直接替换卡片。 */
+export interface RelinkResult {
+  node: SceneNode
+  status: RefStatus
+}
+
+/** 四套浅色主题 ID；缺省或非法值回退 `mist-purple`。 */
+export type ThemeId = 'mist-purple' | 'slate-blue' | 'reed-green' | 'graphite'

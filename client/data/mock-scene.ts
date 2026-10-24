@@ -11,10 +11,10 @@ import type {
   SystemIconKind,
 } from '@/types/scene'
 
-const TILE_W = 176
-const TILE_H = 28
+const TILE_W = 72
+const TILE_H = 64
 const GAP_X = 8
-const GAP_Y = 4
+const GAP_Y = 8
 
 interface GroupSpec extends SceneGroup {
   cols: number
@@ -22,48 +22,49 @@ interface GroupSpec extends SceneGroup {
   root: string
 }
 
+// 分组尺寸按 72×64 图标格收高：左右 16px 内边距、标题区 40px、底部 16px。
 const GROUP_SPECS: GroupSpec[] = [
   {
     id: 'bid',
     title: '投标 · 滨江项目',
     x: 40,
     y: 40,
-    w: 2120,
-    h: 1360,
-    cols: 10,
-    rows: 30,
+    w: 1656,
+    h: 1648,
+    cols: 20,
+    rows: 20,
     root: 'D:\\Projects\\滨江',
   },
   {
     id: 'home',
     title: '装修 · 新家',
-    x: 2200,
+    x: 1740,
     y: 40,
-    w: 1720,
-    h: 1360,
-    cols: 8,
-    rows: 30,
+    w: 1656,
+    h: 1648,
+    cols: 20,
+    rows: 20,
     root: 'D:\\Projects\\装修',
   },
   {
     id: 'samples',
     title: '材料 · 供应商',
     x: 40,
-    y: 1450,
-    w: 2120,
-    h: 1360,
-    cols: 10,
-    rows: 30,
+    y: 1728,
+    w: 1656,
+    h: 1648,
+    cols: 20,
+    rows: 20,
     root: 'D:\\Projects\\材料',
   },
   {
     id: 'other',
     title: '其他 · 待归档',
-    x: 2200,
-    y: 1450,
-    w: 1720,
-    h: 920,
-    cols: 8,
+    x: 1740,
+    y: 1728,
+    w: 1656,
+    h: 1648,
+    cols: 20,
     rows: 20,
     root: 'D:\\Projects\\待归档',
   },
@@ -129,6 +130,8 @@ function makeGeneratedNode(group: GroupSpec, index: number): SceneNode {
   const base = {
     id: `${group.id}-${index}`,
     groupId: group.id,
+    z: 0,
+    isExists: true,
     x: position.x,
     y: position.y,
     w: TILE_W,

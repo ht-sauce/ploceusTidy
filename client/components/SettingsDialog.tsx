@@ -1,50 +1,188 @@
 /**
- * 设置弹窗：展示工作空间路径与窗口/数据开关。
- * 迁移与重建正式版才落地，当前只做信息展示与提示。
+ * 设置弹窗：外观（四套主题）、本地工作空间、窗口行为与数据维护。
+ * 所有开关写入 `app_meta`；迁移与重建都带二次确认，失败保留旧状态。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { App as AntApp, Button, Modal, Switch } from 'antd'
 import { FolderOpenOutlined } from '@ant-design/icons'
+import type { ThemeId, WorkspaceInfo } from '@/types/scene'
+import { THEMES, normalizeTheme } from '@/lib/theme'
+import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
-  workspacePath: string
+  themeId: ThemeId
+  onThemeChange: (id: ThemeId) => void
+  workspace: WorkspaceInfo | null
+  onWorkspaceChanged: (info: WorkspaceInfo) => void
+  onSceneCleared: () => void
 }
 
-export default function SettingsDialog({ open, onClose, workspacePath }: SettingsDialogProps) {
-  const { message } = AntApp.useApp()
+/** 字节数转可读大小；只用于设置面板展示。 */
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+export default function SettingsDialog({
+  open,
+  onClose,
+  themeId,
+  onThemeChange,
+  workspace,
+  onWorkspaceChanged,
+  onSceneCleared,
+}: SettingsDialogProps) {
+  const { message, modal } = AntApp.useApp()
+  // 本地刷新结果优先（迁移/重建后立即更新），否则用父组件传入的信息。
+  const [fetched, setFetched] = useState<WorkspaceInfo | null>(null)
+  const info = fetched ?? workspace
   const [desktopPin, setDesktopPin] = useState(false)
   const [pauseWhenMinimized, setPauseWhenMinimized] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!open || !isDesktopClient) return
+    Promise.all([
+      desktopApi.metaGet('desktop_pin'),
+      desktopApi.metaGet('pause_when_minimized'),
+      desktopApi.workspaceGet(),
+    ])
+      .then(([pin, pause, next]) => {
+        setDesktopPin(pin === '1')
+        setPauseWhenMinimized(pause !== '0')
+        setFetched(next)
+      })
+      .catch(() => {
+        // 配置读取失败时保持默认值，不影响其他设置项。
+      })
+  }, [open])
+
+  const handlePinChange = async (checked: boolean) => {
+    setDesktopPin(checked)
+    try {
+      await desktopApi.windowSetPin(checked)
+      await desktopApi.metaSet('desktop_pin', checked ? '1' : '0')
+      message.success(checked ? '已置底常驻' : '已恢复普通窗口')
+    } catch (error) {
+      setDesktopPin(!checked)
+      message.error(`切换桌面常驻失败：${String(error)}`)
+    }
+  }
+
+  const handlePauseChange = async (checked: boolean) => {
+    setPauseWhenMinimized(checked)
+    try {
+      await desktopApi.metaSet('pause_when_minimized', checked ? '1' : '0')
+    } catch (error) {
+      message.error(`保存设置失败：${String(error)}`)
+    }
+  }
+
+  const handleOpenFolder = async () => {
+    try {
+      await desktopApi.workspaceOpen()
+    } catch (error) {
+      message.error(`打开目录失败：${String(error)}`)
+    }
+  }
+
+  const handleMigrate = async () => {
+    try {
+      const target = await desktopApi.pickFolder()
+      if (!target) return
+      setBusy(true)
+      const next = await desktopApi.workspaceMigrate(target)
+      setFetched(next)
+      onWorkspaceChanged(next)
+      message.success('工作空间已迁移')
+    } catch (error) {
+      message.error(`迁移失败：${String(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRebuild = () => {
+    modal.confirm({
+      title: '重建工作空间？',
+      content: '将清空画布索引，截图副本会保留；原文件永远不会被修改。',
+      okText: '确认重建',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          setBusy(true)
+          await desktopApi.workspaceRebuild()
+          onSceneCleared()
+          const next = await desktopApi.workspaceGet()
+          setFetched(next)
+          onWorkspaceChanged(next)
+          message.success('工作空间已重建')
+        } catch (error) {
+          message.error(`重建失败：${String(error)}`)
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }
 
   return (
     <Modal
       open={open}
       onCancel={onClose}
       footer={null}
-      width={480}
+      width={520}
       title="设置"
       className="settings-modal"
       mask={{ closable: true }}
       keyboard
     >
       <section className="settings-section">
+        <h3>外观</h3>
+        <div className="theme-grid">
+          {THEMES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`theme-swatch${item.id === themeId ? ' is-active' : ''}`}
+              onClick={() => onThemeChange(normalizeTheme(item.id))}
+              aria-pressed={item.id === themeId}
+            >
+              <span className="theme-dot" style={{ background: item.primary }} />
+              <span className="theme-name">{item.name}</span>
+            </button>
+          ))}
+        </div>
+        <p className="settings-note">主题只改变界面语义色，不改变文件图标、标注颜色与画布内容。</p>
+      </section>
+
+      <section className="settings-section">
         <h3>本地工作空间</h3>
         <div className="workspace-path">
-          <code>{workspacePath || '工作空间尚未初始化'}</code>
-          <span>SQLite · 截图资源 · 缩略图</span>
+          <code>{info?.path || '工作空间尚未初始化'}</code>
+          <span>
+            {info
+              ? `${info.nodeCount.toLocaleString()} 个引用 · 数据库 ${formatBytes(
+                  info.dbBytes,
+                )} · 截图 ${formatBytes(info.assetsBytes)} · 缩略图 ${formatBytes(
+                  info.thumbnailBytes,
+                )}`
+              : 'SQLite · 截图资源 · 缩略图'}
+          </span>
         </div>
         <div className="settings-actions">
-          <Button
-            size="small"
-            onClick={() => message.info('正式版会复制、校验后切换 dataWorkSpace')}
-          >
+          <Button size="small" loading={busy} onClick={() => void handleMigrate()}>
             更改位置
           </Button>
           <Button
             size="small"
             icon={<FolderOpenOutlined />}
-            onClick={() => message.info('正式版会在资源管理器中打开 dataWorkSpace')}
+            onClick={() => void handleOpenFolder()}
           >
             打开目录
           </Button>
@@ -56,27 +194,18 @@ export default function SettingsDialog({ open, onClose, workspacePath }: Setting
         <div className="settings-row">
           <div>
             <strong>桌面常驻</strong>
-            <span>像桌面工具一样置底显示，默认关闭</span>
+            <span>窗口压到普通窗口之下，像桌面工具一样常驻</span>
           </div>
-          <Switch
-            checked={desktopPin}
-            onChange={(checked) => {
-              setDesktopPin(checked)
-              message.info(checked ? '桌面常驻：开（演示）' : '桌面常驻：关')
-            }}
-          />
+          <Switch checked={desktopPin} onChange={(checked) => void handlePinChange(checked)} />
         </div>
         <div className="settings-row">
           <div>
             <strong>最小化时暂停渲染</strong>
-            <span>窗口不可见时停止画布与缩略图加载</span>
+            <span>窗口不可见时停止缩略图与画布绘制</span>
           </div>
           <Switch
             checked={pauseWhenMinimized}
-            onChange={(checked) => {
-              setPauseWhenMinimized(checked)
-              message.info(checked ? '最小化暂停渲染：开' : '最小化暂停渲染：关')
-            }}
+            onChange={(checked) => void handlePauseChange(checked)}
           />
         </div>
       </section>
@@ -86,22 +215,23 @@ export default function SettingsDialog({ open, onClose, workspacePath }: Setting
         <div className="settings-row settings-row-danger">
           <div>
             <strong>重建工作空间</strong>
-            <span>清空索引重新导入；原文件永远不动</span>
+            <span>清空索引重新导入；截图副本保留，原文件永远不动</span>
           </div>
-          <Button
-            danger
-            size="small"
-            onClick={() => message.warning('重建需要二次确认；原文件不会被动')}
-          >
+          <Button danger size="small" loading={busy} onClick={handleRebuild}>
             重建
           </Button>
         </div>
       </section>
 
-      <p className="settings-note">
-        络雀不连接云端，不上传文件内容或元数据。URL
-        只交给系统浏览器打开；SQLite、截图副本与缩略图都存放在 dataWorkSpace。
-      </p>
+      <section className="settings-section">
+        <h3>关于</h3>
+        <div className="settings-row">
+          <div>
+            <strong>络雀 0.1.0</strong>
+            <span>Tauri 2 · React 19 · 纯本地，无云端与遥测</span>
+          </div>
+        </div>
+      </section>
 
       <div className="settings-footer">
         <Button onClick={onClose}>关闭</Button>

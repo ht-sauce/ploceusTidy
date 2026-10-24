@@ -9,11 +9,11 @@
 | 产品名 | 络雀（仓库名 `ploceusTidy`） |
 | 定位 | 把文件、截图、文字、URL 放到无限画布，分组、连线、标注、搜索定位；只存引用 |
 | 形态 | A · 代码工程，Tauri 桌面客户端 |
-| 技术栈 | Tauri 2 + Rust；React 19.3.1 + TypeScript 6.0.3；Ant Design 6.6.7；Vite 8.3.5；Konva（M2 渲染层）；SQLite（rusqlite） |
+| 技术栈 | Tauri 2 + Rust；React 19.3.1 + TypeScript 6.0.3；Ant Design 6.6.7；Vite 8.3.5；Konva 10 + react-konva + rbush（画布渲染层）；SQLite（rusqlite） |
 | 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` + `logs/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
-| 当前阶段 | 前端 + Tauri 桌面壳 + SQLite 命令已建立，核心链路（拖入/粘贴/持久化/重复定位/搜索/标注/多选/连线/删除撤销/文字编辑/图片预览）已实现；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
+| 当前阶段 | Konva 画布（rbush 视口裁剪 + 三档 LOD）、四套主题、分组框、连线标签/删除、缺失校验/重连、Shell 缩略图、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
 
 ## 2. 命令
 
@@ -26,10 +26,10 @@
 | 开发启动（桌面客户端） | `pnpm tauri:dev`（release 模式） |
 | 构建前端 | `pnpm build` |
 | 构建桌面安装包 | `pnpm tauri:build` |
-| 测试 | 未建；M1 补 |
+| 测试 | Rust：`cargo test --manifest-path desktop/Cargo.toml --lib` |
 | 静态检查 | `pnpm lint` / `pnpm lint:fix` |
 | 格式化 | `pnpm format` / `pnpm format:check` |
-| 规范扫描（check-spec） | 未建；可静态化的约束在源码建立后脚本化 |
+| 规范扫描（check-spec） | `pnpm check-spec`（`scripts/check-spec.mjs`） |
 
 ## 3. 目录速览
 
@@ -44,13 +44,16 @@ ploceusTidy/
 ├── eslint.config.js           # ESLint flat config
 ├── prettier.config.cjs        # Prettier 配置
 ├── .editorconfig              # 编辑器基础约定
+├── scripts/                  # check-spec.mjs 规范扫描
 ├── assets/                    # 品牌图
 ├── client/                    # React 前端与高密度画布
 │   ├── main.tsx / App.tsx
 │   ├── types/scene.ts
 │   ├── data/mock-scene.ts
 │   ├── lib/tauri-api.ts       # Tauri invoke 封装
-│   ├── components/            # TitleBar / CanvasBoard / FileTile / SystemIcon / DetailsPanel / SettingsDialog
+│   ├── lib/theme.ts           # 四套主题语义令牌
+│   ├── lib/search.ts          # 搜索归一化与排序
+│   ├── components/            # TitleBar / CanvasBoard(Konva) / SystemIcon / DetailsPanel / SettingsDialog
 │   └── styles/global.css
 ├── desktop/                   # Tauri 2 桌面壳与 Rust 平台层（仅桌面，无 iOS/Android）
 │   ├── Cargo.toml / build.rs
@@ -88,6 +91,7 @@ ploceusTidy/
 - NEVER 生成或保留 iOS/Android 产物；这是纯桌面客户端。
 - NEVER M0 剪贴板/画布 spike 未过就写 Tauri 业务代码；前端 UX 原型与工具链可先行。
 - NEVER 边读边改、边对话边改；方案确认后一次性批量改动。
+- NEVER 单条命令阻塞超过 5 分钟仍死等；必须中断，改用非阻塞执行、缩小范围或拆分验证。
 - NEVER 未经明确要求执行 `git commit` / `git push`。
 
 ## 6. 文档索引

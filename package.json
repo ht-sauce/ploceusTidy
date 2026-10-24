@@ -11,6 +11,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "check-spec": "node scripts/check-spec.mjs",
     "tauri:dev": "tauri dev --config desktop/tauri.conf.json --release",
     "tauri:build": "tauri build --config desktop/tauri.conf.json"
   },
@@ -18,13 +19,17 @@
     "@ant-design/icons": "6.3.4",
     "@tauri-apps/api": "2.12.4",
     "antd": "6.6.7",
+    "konva": "^10.9.0",
+    "rbush": "^4.0.1",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "react-konva": "19.3.2"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@tauri-apps/cli": "2.12.4",
     "@types/node": "26.6.5",
+    "@types/rbush": "^4.0.0",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",

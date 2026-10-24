@@ -7,9 +7,18 @@
  * - 浏览器模式下用模拟数据预览界面，桌面模式下从工作空间加载。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App as AntApp, Button, Tooltip } from 'antd'
+import {
+  App as AntApp,
+  Button,
+  ConfigProvider,
+  Input,
+  Modal,
+  Tooltip,
+  theme as antdTheme,
+} from 'antd'
 import {
   ApartmentOutlined,
+  AppstoreAddOutlined,
   DeleteOutlined,
   FullscreenOutlined,
   MinusOutlined,
@@ -17,7 +26,15 @@ import {
 } from '@ant-design/icons'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { sceneAnnotations, sceneEdges, sceneGroups, sceneNodes } from '@/data/mock-scene'
-import type { SceneAnnotation, SceneEdge, SceneNode, SearchEntry } from '@/types/scene'
+import type {
+  SceneAnnotation,
+  SceneEdge,
+  SceneGroup,
+  SceneNode,
+  SearchEntry,
+  ThemeId,
+  WorkspaceInfo,
+} from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/components/CanvasBoard'
 import TitleBar, { type TitleBarHandle } from '@/components/TitleBar'
 import DetailsPanel from '@/components/DetailsPanel'
@@ -25,10 +42,13 @@ import SettingsDialog from '@/components/SettingsDialog'
 import TextEditorDialog from '@/components/TextEditorDialog'
 import ImagePreviewDialog from '@/components/ImagePreviewDialog'
 import { desktopApi, desktopWindow, isDesktopClient } from '@/lib/tauri-api'
+import { DEFAULT_THEME, applyTheme, normalizeTheme, themeById } from '@/lib/theme'
+import { normalizeSearch, searchRank } from '@/lib/search'
 
 /** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
 interface SceneSnapshot {
   nodes: SceneNode[]
+  groups: SceneGroup[]
   edges: SceneEdge[]
   annotations: SceneAnnotation[]
 }
@@ -57,16 +77,27 @@ function isTypingTarget(target: EventTarget | null) {
 
 // ---------- 场景状态与派生数据 ----------
 
-export default function App() {
+function Workspace({
+  themeId,
+  onThemeChange,
+}: {
+  themeId: ThemeId
+  onThemeChange: (id: ThemeId) => void
+}) {
   const { message } = AntApp.useApp()
   const [nodes, setNodes] = useState<SceneNode[]>(isDesktopClient ? [] : sceneNodes)
+  const [groups, setGroups] = useState<SceneGroup[]>(isDesktopClient ? [] : sceneGroups)
   const [edges, setEdges] = useState<SceneEdge[]>(isDesktopClient ? [] : sceneEdges)
   const [annotations, setAnnotations] = useState<SceneAnnotation[]>(
     isDesktopClient ? [] : sceneAnnotations,
   )
   const [hydrated, setHydrated] = useState(!isDesktopClient)
-  const [workspacePath, setWorkspacePath] = useState('')
+  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+  const [edgeLabelTarget, setEdgeLabelTarget] = useState<string | null>(null)
+  const [edgeLabelText, setEdgeLabelText] = useState('')
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null)
   const [detailsMode, setDetailsMode] = useState<'details' | 'annotation'>('details')
   const [query, setQuery] = useState('')
@@ -83,8 +114,12 @@ export default function App() {
   const undoRef = useRef<SceneSnapshot | null>(null)
   // 同一次粘贴可能同时触发 keydown 与 paste 事件，500ms 内只处理一次。
   const clipboardGuard = useRef(0)
+  // 校验任务在 effect 内读取最新节点，但不希望 nodes 变化触发重新校验。
+  const nodesRef = useRef(nodes)
+  useEffect(() => {
+    nodesRef.current = nodes
+  })
 
-  const groups = isDesktopClient ? [] : sceneGroups
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const selectedNode = selectedIds.length
     ? (nodeById.get(selectedIds[selectedIds.length - 1]) ?? null)
@@ -136,11 +171,14 @@ export default function App() {
   }, [annotations, nodeById, nodes])
 
   const results = useMemo(() => {
-    const normalized = query.trim().toLowerCase()
+    const normalized = normalizeSearch(query)
     if (!normalized) return searchEntries.slice(0, 6)
     return searchEntries
-      .filter((entry) => entry.searchText.toLowerCase().includes(normalized))
+      .map((entry) => ({ entry, rank: searchRank(entry, normalized) }))
+      .filter((item) => item.rank >= 0)
+      .sort((left, right) => left.rank - right.rank)
       .slice(0, 9)
+      .map((item) => item.entry)
   }, [query, searchEntries])
 
   const handleSelectNode = useCallback((id: string, additive: boolean) => {
@@ -148,21 +186,66 @@ export default function App() {
       if (!additive) return [id]
       return previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]
     })
+    setSelectedGroupId(null)
+    setSelectedEdgeId(null)
     setActiveAnnotationId(null)
     setDetailsMode('details')
   }, [])
 
   const handleBoxSelect = useCallback((ids: string[], additive: boolean) => {
     setSelectedIds((previous) => (additive ? Array.from(new Set([...previous, ...ids])) : ids))
+    setSelectedGroupId(null)
+    setSelectedEdgeId(null)
     setActiveAnnotationId(null)
     setDetailsMode('details')
   }, [])
 
   const handleClearSelection = useCallback(() => {
     setSelectedIds([])
+    setSelectedGroupId(null)
+    setSelectedEdgeId(null)
     setActiveAnnotationId(null)
     setDetailsMode('details')
   }, [])
+
+  const handleSelectGroup = useCallback((id: string) => {
+    setSelectedGroupId(id)
+    setSelectedIds([])
+    setSelectedEdgeId(null)
+    setActiveAnnotationId(null)
+    setDetailsMode('details')
+  }, [])
+
+  /** 选中连线：与节点/分组互斥；双击进入标签编辑。 */
+  const handleSelectEdge = useCallback((id: string) => {
+    setSelectedEdgeId(id)
+    setSelectedIds([])
+    setSelectedGroupId(null)
+    setActiveAnnotationId(null)
+    setDetailsMode('details')
+  }, [])
+
+  const handleEdgeLabelEdit = useCallback(
+    (id: string) => {
+      setSelectedEdgeId(id)
+      const edge = edges.find((item) => item.id === id)
+      setEdgeLabelText(edge?.label ?? '')
+      setEdgeLabelTarget(id)
+    },
+    [edges],
+  )
+
+  const handleSaveEdgeLabel = useCallback(() => {
+    if (!edgeLabelTarget) return
+    const label = edgeLabelText.trim()
+    setEdges((previous) =>
+      previous.map((edge) =>
+        edge.id === edgeLabelTarget ? { ...edge, label: label || undefined } : edge,
+      ),
+    )
+    setEdgeLabelTarget(null)
+    message.success(label ? '连线标签已保存' : '连线标签已清除')
+  }, [edgeLabelText, edgeLabelTarget, message])
 
   const handleMoveNodes = useCallback((moves: { id: string; x: number; y: number }[]) => {
     const byId = new Map(moves.map((move) => [move.id, move]))
@@ -173,6 +256,58 @@ export default function App() {
       }),
     )
   }, [])
+
+  /** 移动分组框时带动同组节点，保持相对位置不变。 */
+  const handleMoveGroup = useCallback((id: string, dx: number, dy: number) => {
+    setGroups((previous) =>
+      previous.map((group) =>
+        group.id === id
+          ? { ...group, x: Math.round(group.x + dx), y: Math.round(group.y + dy) }
+          : group,
+      ),
+    )
+    setNodes((previous) =>
+      previous.map((node) =>
+        node.groupId === id
+          ? { ...node, x: Math.round(node.x + dx), y: Math.round(node.y + dy) }
+          : node,
+      ),
+    )
+  }, [])
+
+  /** 用当前选中对象的包围盒创建分组框，并把对象归入该组。 */
+  const handleCreateGroup = useCallback(() => {
+    const targets = selectedIds
+      .map((id) => nodeById.get(id))
+      .filter((node): node is SceneNode => Boolean(node))
+    if (targets.length === 0) {
+      message.info('先选中要分组的对象')
+      return
+    }
+
+    const minX = Math.min(...targets.map((node) => node.x)) - 16
+    const minY = Math.min(...targets.map((node) => node.y)) - 32
+    const maxX = Math.max(...targets.map((node) => node.x + node.w)) + 16
+    const maxY = Math.max(...targets.map((node) => node.y + node.h)) + 16
+    const group: SceneGroup = {
+      id: `group-${crypto.randomUUID()}`,
+      title: '新分组',
+      x: minX,
+      y: minY,
+      w: maxX - minX,
+      h: maxY - minY,
+    }
+
+    setGroups((previous) => [...previous, group])
+    setNodes((previous) =>
+      previous.map((node) =>
+        selectedIds.includes(node.id) ? { ...node, groupId: group.id } : node,
+      ),
+    )
+    setSelectedGroupId(group.id)
+    setSelectedIds([])
+    message.success('已创建分组框')
+  }, [message, nodeById, selectedIds])
 
   const addNodeAtCenter = useCallback((node: SceneNode) => {
     setNodes((previous) => [...previous, node])
@@ -189,17 +324,19 @@ export default function App() {
       const center = canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 }
       const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
       const node: SceneNode = {
-        id: `text-${Date.now()}`,
+        id: `text-${crypto.randomUUID()}`,
         kind: 'text',
         icon: 'text',
         name: firstLine.slice(0, 28),
         subtitle: text,
         body: text,
-        groupId: 'other',
-        x: Math.round(center.x - 88),
-        y: Math.round(center.y - 14),
-        w: 176,
-        h: 28,
+        groupId: '',
+        z: 0,
+        isExists: true,
+        x: Math.round(center.x - 36),
+        y: Math.round(center.y - 32),
+        w: 72,
+        h: 64,
       }
       addNodeAtCenter(node)
     },
@@ -216,17 +353,19 @@ export default function App() {
         // 保留默认域名
       }
       const node: SceneNode = {
-        id: `link-${Date.now()}`,
+        id: `link-${crypto.randomUUID()}`,
         kind: 'link',
         icon: 'link',
         name: url.replace(/^https?:\/\//, '').slice(0, 48),
         subtitle: host,
         url,
-        groupId: 'other',
-        x: Math.round(center.x - 88),
-        y: Math.round(center.y - 14),
-        w: 176,
-        h: 28,
+        groupId: '',
+        z: 0,
+        isExists: true,
+        x: Math.round(center.x - 36),
+        y: Math.round(center.y - 32),
+        w: 72,
+        h: 64,
       }
       addNodeAtCenter(node)
     },
@@ -334,6 +473,25 @@ export default function App() {
     }
 
     message.info(`演示：在资源管理器中定位 ${node.name}`)
+  }
+
+  /** 缺失文件重新关联：只改引用路径，卡片位置与标注保持不变。 */
+  const handleRelink = async (node: SceneNode) => {
+    if (!isDesktopClient) {
+      message.info('演示：桌面客户端内选择新路径')
+      return
+    }
+    try {
+      const picked = await desktopApi.pickFile()
+      if (!picked) return
+      const result = await desktopApi.refRelink(node.id, picked)
+      setNodes((previous) =>
+        previous.map((item) => (item.id === result.node.id ? result.node : item)),
+      )
+      message.success('已重新关联')
+    } catch (error) {
+      message.error(`重新关联失败：${String(error)}`)
+    }
   }
 
   // ---------- 标注与文字编辑 ----------
@@ -454,8 +612,27 @@ export default function App() {
   }, [edges, message, selectedIds])
 
   const handleDeleteSelected = useCallback(() => {
+    if (selectedEdgeId) {
+      undoRef.current = { nodes, groups, edges, annotations }
+      setEdges((previous) => previous.filter((edge) => edge.id !== selectedEdgeId))
+      setSelectedEdgeId(null)
+      message.info('已删除连线；Ctrl+Z 可撤销')
+      return
+    }
+    if (selectedGroupId) {
+      undoRef.current = { nodes, groups, edges, annotations }
+      setGroups((previous) => previous.filter((group) => group.id !== selectedGroupId))
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.groupId === selectedGroupId ? { ...node, groupId: '' } : node,
+        ),
+      )
+      setSelectedGroupId(null)
+      message.info('已删除分组框，内部对象保留；Ctrl+Z 可撤销')
+      return
+    }
     if (selectedIds.length === 0) return
-    undoRef.current = { nodes, edges, annotations }
+    undoRef.current = { nodes, groups, edges, annotations }
     const ids = new Set(selectedIds)
     setNodes((previous) => previous.filter((node) => !ids.has(node.id)))
     setEdges((previous) => previous.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to)))
@@ -471,7 +648,7 @@ export default function App() {
     setActiveAnnotationId(null)
     setDetailsMode('details')
     message.info('已从画布删除；Ctrl+Z 可撤销')
-  }, [annotations, edges, message, nodes, selectedIds])
+  }, [annotations, edges, groups, message, nodes, selectedEdgeId, selectedGroupId, selectedIds])
 
   const handleUndo = useCallback(() => {
     const snapshot = undoRef.current
@@ -481,6 +658,7 @@ export default function App() {
     }
     undoRef.current = null
     setNodes(snapshot.nodes)
+    setGroups(snapshot.groups)
     setEdges(snapshot.edges)
     setAnnotations(snapshot.annotations)
     setSelectedIds([])
@@ -527,17 +705,19 @@ export default function App() {
         const path = await desktopApi.saveClipboardImage(base64, ext)
         const center = canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 }
         const node: SceneNode = {
-          id: `image-${Date.now()}`,
+          id: `image-${crypto.randomUUID()}`,
           kind: 'image',
           icon: 'image',
           name: `截图-${new Date().toLocaleTimeString('zh-CN', { hour12: false })}.${ext}`,
           path,
           subtitle: '剪贴板截图',
-          groupId: 'other',
-          x: Math.round(center.x - 88),
-          y: Math.round(center.y - 14),
-          w: 176,
-          h: 28,
+          groupId: '',
+          z: 0,
+          isExists: true,
+          x: Math.round(center.x - 36),
+          y: Math.round(center.y - 32),
+          w: 72,
+          h: 64,
         }
         addNodeAtCenter(node)
         message.success('截图已放入画布')
@@ -593,9 +773,10 @@ export default function App() {
       .then(([scene, info]) => {
         if (cancelled) return
         setNodes(scene.nodes)
+        setGroups(scene.groups)
         setEdges(scene.edges)
         setAnnotations(scene.annotations)
-        setWorkspacePath(info.path)
+        setWorkspace(info)
         setEmpty(scene.nodes.length === 0)
         setHydrated(true)
       })
@@ -616,12 +797,72 @@ export default function App() {
     // 350ms 防抖：拖动节点时避免每一帧都写库。
     const timer = window.setTimeout(() => {
       desktopApi
-        .saveScene({ nodes, edges, annotations })
+        .saveScene({ nodes, groups, edges, annotations })
         .catch((error) => message.error(`保存失败：${String(error)}`))
     }, 350)
 
     return () => window.clearTimeout(timer)
-  }, [annotations, edges, hydrated, message, nodes])
+  }, [annotations, edges, groups, hydrated, message, nodes])
+
+  // 启动后空闲分批校验引用：每批 400 个，批间让出主线程，避免一次性 stat 卡住界面。
+  useEffect(() => {
+    if (!isDesktopClient || !hydrated) return
+    let cancelled = false
+    const pathIds = nodesRef.current
+      .filter((node) => node.path && node.kind !== 'link')
+      .map((node) => node.id)
+    if (pathIds.length === 0) return
+
+    const run = async () => {
+      for (let index = 0; index < pathIds.length; index += 400) {
+        if (cancelled) return
+        const batch = pathIds.slice(index, index + 400)
+        try {
+          const statuses = await desktopApi.refCheck(batch)
+          if (cancelled) return
+          const statusMap = new Map(statuses.map((item) => [item.nodeId, item.isExists]))
+          setNodes((previous) =>
+            previous.map((node) =>
+              statusMap.has(node.id) ? { ...node, isExists: statusMap.get(node.id) ?? true } : node,
+            ),
+          )
+        } catch {
+          return
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 120))
+      }
+    }
+
+    const timer = window.setTimeout(() => void run(), 900)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [hydrated])
+
+  // 窗口重新聚焦时补查选中项，覆盖「离开期间文件被移动或删除」的情况。
+  useEffect(() => {
+    if (!isDesktopClient) return
+    const onFocus = () => {
+      if (selectedIds.length === 0) return
+      void desktopApi
+        .refCheck(selectedIds)
+        .then((statuses) => {
+          const statusMap = new Map(statuses.map((item) => [item.nodeId, item.isExists]))
+          setNodes((previous) =>
+            previous.map((node) =>
+              statusMap.has(node.id) ? { ...node, isExists: statusMap.get(node.id) ?? true } : node,
+            ),
+          )
+        })
+        .catch(() => {
+          // 聚焦校验失败不影响交互，下次启动会再次检查。
+        })
+    }
+
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [selectedIds])
 
   // Tauri 拖入事件直接给绝对路径，导入与去重统一交给 Rust 侧处理。
   useEffect(() => {
@@ -711,7 +952,7 @@ export default function App() {
       if (event.key === 'Escape') {
         if (settingsOpen) {
           setSettingsOpen(false)
-        } else if (selectedIds.length > 0) {
+        } else if (selectedIds.length > 0 || selectedGroupId || selectedEdgeId) {
           handleClearSelection()
         } else if (empty) {
           setEmpty(false)
@@ -743,6 +984,9 @@ export default function App() {
       if (key === 'l') {
         event.preventDefault()
         handleLinkSelected()
+      } else if (key === 'g') {
+        event.preventDefault()
+        handleCreateGroup()
       } else if (key === 'd') {
         event.preventDefault()
         handleDuplicate()
@@ -760,12 +1004,15 @@ export default function App() {
   }, [
     empty,
     handleClearSelection,
+    handleCreateGroup,
     handleDeleteSelected,
     handleDuplicate,
     handleLinkSelected,
     handleToggleEmpty,
     handleUndo,
     nodes,
+    selectedEdgeId,
+    selectedGroupId,
     selectedIds,
     settingsOpen,
   ])
@@ -796,11 +1043,17 @@ export default function App() {
           edges={edges}
           annotations={annotations}
           selectedIds={selectedIds}
+          selectedGroupId={selectedGroupId}
+          selectedEdgeId={selectedEdgeId}
           detailsOpen={Boolean(selectedNode)}
           onSelect={handleSelectNode}
           onBoxSelect={handleBoxSelect}
           onClearSelection={handleClearSelection}
+          onSelectGroup={handleSelectGroup}
+          onMoveGroup={handleMoveGroup}
           onMoveNodes={handleMoveNodes}
+          onSelectEdge={handleSelectEdge}
+          onEdgeLabelEdit={handleEdgeLabelEdit}
           onAnnotation={handleAnnotation}
           onActivate={handleActivate}
           onScaleChange={setScale}
@@ -820,6 +1073,7 @@ export default function App() {
             onClose={handleClearSelection}
             onOpen={(node) => void openNode(node)}
             onReveal={(node) => void handleReveal(node)}
+            onRelink={(node) => void handleRelink(node)}
             onPreview={(node) => void handlePreview(node)}
             onEditText={(node) => setEditingTextId(node.id)}
             onAddAnnotation={handleAddAnnotation}
@@ -861,7 +1115,7 @@ export default function App() {
               <span>已选 {selectedIds.length}</span>
             </>
           ) : null}
-          <span className="proto-hint">Shift 框选 · L 连线 · Del 删除 · Ctrl+Z 撤销</span>
+          <span className="proto-hint">Shift 框选 · L 连线 · G 分组 · Del 删除 · Ctrl+Z 撤销</span>
         </div>
         <div className="status-right">
           <Tooltip title="用选中对象建立有向连线（L）">
@@ -871,6 +1125,15 @@ export default function App() {
               icon={<ApartmentOutlined />}
               aria-label="连线"
               onClick={handleLinkSelected}
+            />
+          </Tooltip>
+          <Tooltip title="用选中对象创建分组框（G）">
+            <Button
+              type="text"
+              size="small"
+              icon={<AppstoreAddOutlined />}
+              aria-label="新建分组"
+              onClick={handleCreateGroup}
             />
           </Tooltip>
           <Tooltip title="删除选中对象（Del）">
@@ -911,7 +1174,18 @@ export default function App() {
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        workspacePath={workspacePath}
+        themeId={themeId}
+        onThemeChange={onThemeChange}
+        workspace={workspace}
+        onWorkspaceChanged={setWorkspace}
+        onSceneCleared={() => {
+          setNodes([])
+          setGroups([])
+          setEdges([])
+          setAnnotations([])
+          setSelectedIds([])
+          setEmpty(true)
+        }}
       />
       <TextEditorDialog
         key={editingText?.id ?? 'no-text'}
@@ -925,6 +1199,76 @@ export default function App() {
         title={previewTitle}
         onClose={() => setPreviewOpen(false)}
       />
+      <Modal
+        open={edgeLabelTarget !== null}
+        title="连线标签"
+        okText="保存"
+        cancelText="取消"
+        onOk={handleSaveEdgeLabel}
+        onCancel={() => setEdgeLabelTarget(null)}
+        keyboard
+      >
+        <Input
+          value={edgeLabelText}
+          onChange={(event) => setEdgeLabelText(event.target.value)}
+          placeholder="留空则清除标签"
+          maxLength={24}
+          onPressEnter={handleSaveEdgeLabel}
+        />
+      </Modal>
     </div>
+  )
+}
+
+/**
+ * 应用外壳：主题状态放在最外层，Ant Design 与画布共用同一套语义令牌。
+ * 主题 ID 从 `app_meta` 读取，切换时立即生效并回写，不触碰场景与交互状态。
+ */
+export default function App() {
+  const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME)
+
+  useEffect(() => {
+    applyTheme(themeId)
+  }, [themeId])
+
+  useEffect(() => {
+    if (!isDesktopClient) return
+    desktopApi
+      .metaGet('ui_theme')
+      .then((value) => setThemeId(normalizeTheme(value)))
+      .catch(() => {
+        // 读取失败时保持默认主题，不影响启动。
+      })
+  }, [])
+
+  const handleThemeChange = useCallback((id: ThemeId) => {
+    const next = normalizeTheme(id)
+    setThemeId(next)
+    applyTheme(next)
+    if (isDesktopClient) {
+      void desktopApi.metaSet('ui_theme', next).catch(() => {
+        // 持久化失败只在下次启动回退默认主题，不打断当前切换。
+      })
+    }
+  }, [])
+
+  const tokens = themeById(themeId)
+
+  return (
+    <ConfigProvider
+      componentSize="small"
+      theme={{
+        algorithm: antdTheme.compactAlgorithm,
+        token: {
+          colorPrimary: tokens.primary,
+          borderRadius: 6,
+          fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif',
+        },
+      }}
+    >
+      <AntApp>
+        <Workspace themeId={themeId} onThemeChange={handleThemeChange} />
+      </AntApp>
+    </ConfigProvider>
   )
 }

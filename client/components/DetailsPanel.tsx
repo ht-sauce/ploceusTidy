@@ -10,6 +10,7 @@ import {
   ExportOutlined,
   EyeOutlined,
   FolderOpenOutlined,
+  LinkOutlined,
 } from '@ant-design/icons'
 import type { SceneAnnotation, SceneNode } from '@/types/scene'
 import SystemIcon from './SystemIcon'
@@ -22,6 +23,7 @@ interface DetailsPanelProps {
   onClose: () => void
   onOpen: (node: SceneNode) => void
   onReveal: (node: SceneNode) => void
+  onRelink: (node: SceneNode) => void
   onPreview: (node: SceneNode) => void
   onEditText: (node: SceneNode) => void
   onAddAnnotation: () => void
@@ -46,6 +48,7 @@ export default function DetailsPanel({
   onClose,
   onOpen,
   onReveal,
+  onRelink,
   onPreview,
   onEditText,
   onAddAnnotation,
@@ -131,12 +134,16 @@ export default function DetailsPanel({
         </div>
         <div>
           <span>状态</span>
-          <strong>可用</strong>
+          <strong>{node.isExists ? '可用' : '缺失'}</strong>
         </div>
       </div>
 
       <div className="details-actions">
-        {node.kind === 'text' ? (
+        {!node.isExists && node.kind !== 'text' && node.kind !== 'link' ? (
+          <Button type="primary" block icon={<LinkOutlined />} onClick={() => onRelink(node)}>
+            重新关联文件
+          </Button>
+        ) : node.kind === 'text' ? (
           <Button type="primary" block icon={<EditOutlined />} onClick={() => onEditText(node)}>
             编辑文字
           </Button>

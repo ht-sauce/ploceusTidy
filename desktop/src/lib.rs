@@ -8,11 +8,15 @@ mod models;
 mod platform;
 
 use base64::Engine;
+use std::path::Path;
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use db::AppState;
-use models::{ImportRequest, ImportResult, SceneData, SceneNode, WorkspaceInfo};
+use models::{
+    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneNode, WorkspaceInfo,
+};
 
 /// 返回工作空间路径、数据库路径与节点数量，供设置面板展示。
 #[tauri::command]
@@ -26,7 +30,7 @@ fn scene_load(state: State<'_, AppState>) -> Result<SceneData, String> {
     db::scene_load(&state)
 }
 
-/// 覆盖保存完整场景；单事务内清空并重建，失败整体回滚。
+/// 增量保存完整场景：按 ID upsert，只清理本次快照之外的对象，失败整体回滚。
 #[tauri::command]
 fn scene_save(state: State<'_, AppState>, scene: SceneData) -> Result<(), String> {
     db::scene_save(&state, &scene)
@@ -141,6 +145,92 @@ fn node_get(state: State<'_, AppState>, node_id: String) -> Result<Option<SceneN
     db::node_by_id(&state, &node_id)
 }
 
+/// 按需生成缩略图并返回 data URL；无路径、缺失或非 Windows 平台返回 `None`。
+#[tauri::command]
+fn thumb_get(
+    state: State<'_, AppState>,
+    node_id: String,
+    size: Option<u32>,
+) -> Result<Option<String>, String> {
+    db::thumb_get(&state, &node_id, size.unwrap_or(96))
+}
+
+/// 桌面常驻：把窗口压到普通窗口之下；只影响层级，不改变窗口尺寸与焦点。
+#[tauri::command]
+fn window_set_pin(window: tauri::WebviewWindow, pinned: bool) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("获取窗口句柄失败：{error}"))?;
+    platform::set_window_bottom(hwnd.0 as isize, pinned)
+}
+
+/// 读取应用配置；主题、桌面常驻等开关都存 `app_meta`，不散落在前端存储。
+#[tauri::command]
+fn meta_get(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    db::meta_get(&state, &key)
+}
+
+/// 写入应用配置；值只能是字符串，复杂结构由调用方序列化。
+#[tauri::command]
+fn meta_set(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+    db::meta_set(&state, &key, &value)
+}
+
+/// 批量校验引用是否存在；`node_ids` 为空表示全量校验，结果同时写回数据库。
+#[tauri::command]
+fn ref_check(state: State<'_, AppState>, node_ids: Vec<String>) -> Result<Vec<RefStatus>, String> {
+    db::ref_check(&state, &node_ids)
+}
+
+/// 重新关联缺失引用到新路径；只接受绝对路径，符号链接拒绝。
+#[tauri::command]
+fn ref_relink(
+    state: State<'_, AppState>,
+    node_id: String,
+    path: String,
+) -> Result<RelinkResult, String> {
+    db::ref_relink(&state, &node_id, &path)
+}
+
+/// 在资源管理器中打开当前工作空间目录。
+#[tauri::command]
+fn workspace_open(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let path = state.workspace_path()?;
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| format!("打开工作空间失败：{error}"))
+}
+
+/// 重建工作空间：清空索引，保留截图副本；原文件永远不动。
+#[tauri::command]
+fn workspace_rebuild(state: State<'_, AppState>) -> Result<(), String> {
+    db::workspace_rebuild(&state)
+}
+
+/// 迁移工作空间到新目录；复制校验成功后切换，失败保留原目录。
+#[tauri::command]
+fn workspace_migrate(state: State<'_, AppState>, target: String) -> Result<WorkspaceInfo, String> {
+    db::workspace_migrate(&state, Path::new(&target))
+}
+
+/// 选择一个文件用于重新关联；取消时返回 `None`，不产生任何写入。
+#[tauri::command]
+async fn pick_file(app: AppHandle) -> Result<Option<String>, String> {
+    let picked = app.dialog().file().blocking_pick_file();
+    Ok(picked
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
+/// 选择一个空目录用于迁移工作空间；取消时返回 `None`。
+#[tauri::command]
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    let picked = app.dialog().file().blocking_pick_folder();
+    Ok(picked
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -152,6 +242,12 @@ pub fn run() {
                     error,
                 ))
             })?;
+            // 桌面常驻是持久配置：启动时先读，再交给 state 托管。
+            let pinned = db::meta_get(&state, "desktop_pin")
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some("1");
             app.manage(state);
 
             // 初始窗口按当前显示器收敛到 92% × 90%，避免小屏下超出可视区域。
@@ -163,6 +259,11 @@ pub fn run() {
                     let height = (size.height * 0.90).clamp(520.0, 880.0);
                     let _ = window.set_size(tauri::LogicalSize::new(width, height));
                     let _ = window.center();
+                }
+                if pinned {
+                    if let Ok(hwnd) = window.hwnd() {
+                        let _ = platform::set_window_bottom(hwnd.0 as isize, true);
+                    }
                 }
             }
 
@@ -180,6 +281,17 @@ pub fn run() {
             save_clipboard_image,
             preview_ref,
             node_get,
+            meta_get,
+            meta_set,
+            ref_check,
+            ref_relink,
+            workspace_open,
+            workspace_rebuild,
+            workspace_migrate,
+            thumb_get,
+            window_set_pin,
+            pick_file,
+            pick_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

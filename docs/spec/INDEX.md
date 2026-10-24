@@ -26,7 +26,7 @@
 | 改导入 / 文件引用 | 00 → 05 → 06 → 04 |
 | 改数据模型 / 存储 | 04 → 05 → 08 的 ADR-003/006/007 |
 | 改窗口 / 界面 | 03 → 02 §5 → 08 的 ADR-008/011 |
-| 改高密度 / 系统图标 | 03 §1/§3/§4 → 08 ADR-010 → `client/components/TitleBar.tsx` / `FileTile.tsx` / `SystemIcon.tsx` |
+| 改高密度 / 系统图标 | 03 §1/§3/§4 → 08 ADR-013 → `client/components/TitleBar.tsx` / `CanvasBoard.tsx` / `SystemIcon.tsx` |
 | 改打包 / 安装 | 07 → 04 §1 → 08 的 ADR-001/003 |
 | 查「为什么这么定」 | 08 的 ADR → 对应篇目的当前状态 |
 | 查「能不能这么做」 | `docs/README.md` §3 硬约束清单（优先级最高） |
