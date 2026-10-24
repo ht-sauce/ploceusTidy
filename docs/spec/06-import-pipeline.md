@@ -46,7 +46,7 @@ flowchart LR
 
 - 文件：Windows `clipboard-win::raw::get_file_list` 读取 `CF_HDROP`；macOS/Linux 后续按平台补。
 - 文字：粘贴事件读取 `text/plain`；URL 用简单规则识别 `http/https`。
-- 图片：Rust 读取剪贴板图片，写入 `dataWorkSpace/assets`，生成 `asset` 引用。
+- 图片：Rust 读取剪贴板图片，写入 `dataWorkSpace/assets`，生成 `file` 引用（`path` 为工作空间内绝对路径）。
 - 剪贴板格式不可识别时提示「不支持的内容类型」，不静默失败。
 
 ## 6. 失败语义

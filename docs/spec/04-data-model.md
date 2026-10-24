@@ -33,21 +33,21 @@ dataWorkSpace/
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `kind` | TEXT | `file` / `folder` / `link` / `asset` |
+| `kind` | TEXT | `file` / `folder` / `link`；截图与图片按 `file` 存工作空间路径 |
 | `dedupe_key` | TEXT NULL | 仅文件/文件夹使用：规范化真实路径；文字、URL、截图不填 |
-| `path` | TEXT NULL | 文件/文件夹绝对路径；asset 为工作空间相对路径 |
+| `path` | TEXT NULL | 文件/文件夹绝对路径；截图副本为工作空间内的绝对路径 |
 | `url` | TEXT NULL | 链接 |
 | `name` | TEXT | 展示名称 |
 | `ext` | TEXT NULL | 扩展名 |
 | `size` | INTEGER NULL | 字节数 |
 | `mtime` | INTEGER NULL | 修改时间（epoch ms） |
-| `exists` | INTEGER | 文件是否存在；link 恒为 1 |
+| `is_exists` | INTEGER NOT NULL DEFAULT 1 | 文件是否存在；`link` 恒为 1 |
 | `thumb_key` | TEXT NULL | 缩略图缓存键 |
-| `search_text` | TEXT | 归一化搜索文本 |
+| `search_text` | TEXT NOT NULL DEFAULT '' | 归一化搜索文本 |
 | `created_at` | INTEGER | epoch ms |
 | `updated_at` | INTEGER | epoch ms |
 
-- 文件/文件夹使用部分唯一索引 `UNIQUE(kind, dedupe_key) WHERE kind IN ('file','folder')`；`link`/`asset` 不参与去重。
+- 唯一索引为 `UNIQUE(kind, dedupe_key) WHERE dedupe_key IS NOT NULL`；只有文件/文件夹写入 `dedupe_key`，`link` 不参与去重。
 - 同一 `ref` 只允许一张卡片（见 `nodes.ref_id` 唯一约束）。
 
 ### `nodes`
@@ -55,41 +55,39 @@ dataWorkSpace/
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `type` | TEXT | `file` / `folder` / `image` / `video` / `link` / `text` / `frame` |
-| `ref_id` | TEXT NULL UNIQUE | 引用；文字/分组框为空 |
-| `text_content` | TEXT NULL | 文字卡内容；分组框标题 |
+| `type` | TEXT | `file` / `folder` / `image` / `video` / `text` / `link` |
+| `icon` | TEXT | 展示用系统图标种类，不参与业务判断 |
+| `name` | TEXT | 展示名称 |
+| `subtitle` | TEXT NOT NULL DEFAULT '' | 副标题：所在目录或来源 |
+| `body` | TEXT NULL | 文字卡内容 |
+| `ref_id` | TEXT NULL UNIQUE | 引用；文字卡为空 |
+| `group_id` | TEXT NOT NULL DEFAULT 'other' | 分组标识（当前未建分组框表，统一为 `other`） |
 | `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸 |
-| `z` | INTEGER | 层级 |
-| `parent_node_id` | TEXT NULL | 分组框父节点 |
-| `data_json` | TEXT | 卡片样式、标注颜色等扩展 |
 | `created_at` | INTEGER | epoch ms |
 | `updated_at` | INTEGER | epoch ms |
 
 - `UNIQUE(ref_id)` 允许 NULL（SQLite 允许多个 NULL）。
-- 分组框是 `type=frame` 的节点；子节点坐标相对父节点。
+- 规划字段（未实现）：`type=frame` 分组框、`parent_node_id`、`z` 层级、`data_json` 扩展样式。
 
 ### `edges`
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `source_node_id` | TEXT | 起点 |
-| `target_node_id` | TEXT | 终点 |
-| `source_handle` | TEXT | 起点锚点 |
-| `target_handle` | TEXT | 终点锚点 |
-| `label` | TEXT NULL | 可选标签 |
-| `style_json` | TEXT | 线型/颜色 |
-| `created_at` | INTEGER | epoch ms |
+| `from_node` | TEXT | 起点节点 ID |
+| `to_node` | TEXT | 终点节点 ID |
+
+- 规划字段（未实现）：`source_handle` / `target_handle` 锚点、`label` 标签、`style_json` 线型与颜色、`created_at`。
 
 ### `annotations` 与 `annotation_targets`
 
-- `annotations(id, content, color, created_at, updated_at)`。
+- `annotations(id, color, text, created_at, updated_at)`。
 - `annotation_targets(annotation_id, node_id)`，复合主键，无自增。
 - 删除节点时删除对应 `annotation_targets`；无目标的标注一并删除。
 
-### `app_meta`
+### `app_meta`（未创建）
 
-- `key` / `value`：视口（`viewport`）、界面主题（`ui_theme`）、schema 版本、最近打开时间等。
+- 规划表：`key` / `value`，用于视口（`viewport`）、界面主题（`ui_theme`）、schema 版本、最近打开时间等。
 - `ui_theme` 只存主题 ID，不存整套色值；缺省或无法识别时回退 `mist-purple`。
 - 工作空间路径不入库，放在应用配置层（HC-9）。
 
@@ -109,7 +107,7 @@ dataWorkSpace/
 ## 6. 搜索
 
 - `search_text` 在写入时归一化：NFKC、小写、`\`→`/`、去多余空白。
-- v1 用 `LIKE '%q%'` 查询 `refs.search_text`、`nodes.text_content`、`annotations.content`、`edges.label`。
+- v1 用 `LIKE '%q%'` 查询 `refs.search_text`、`nodes.body`、`annotations.text`；`edges.label` 待连线标签实现后再加入。
 - 5 万引用后评估 FTS5 trigram 或内存 n-gram 索引；拼音首字母作为可选增强。
 - 排序：名称精确 > 前缀 > 子串 > 路径 > 标注/文字。
 
