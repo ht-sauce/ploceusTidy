@@ -23,6 +23,7 @@ dataWorkSpace/
 - `PRAGMA journal_mode=WAL`；`foreign_keys=ON`；`busy_timeout=5000`。
 - 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行。
 - 每条命令一个事务；失败整体回滚。
+- `scene_save` 按 ID 增量 upsert，只清理本次快照之外的对象；`refs` 的 `size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验流程维护，保存流程不覆盖。
 - 不在数据库中存文件内容；只存路径、URL、文本、标注与画布坐标。
 
 ## 3. 表

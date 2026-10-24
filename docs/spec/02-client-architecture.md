@@ -82,7 +82,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `workspace_get` | 无 | dataWorkSpace 路径、DB 路径、节点数 |
 | `scene_load` | 无 | 全部节点/边/标注 |
-| `scene_save` | `SceneData` | 成功/失败；整场景事务替换 |
+| `scene_save` | `SceneData` | 成功/失败；按 ID 增量 upsert，事务内清理快照外的对象 |
 | `import_paths` | 路径数组、x/y | created / existing / errors |
 | `read_clipboard_files` | 无 | Windows CF_HDROP 文件路径数组 |
 | `save_clipboard_image` | base64、扩展名 | 本地 asset 路径 |

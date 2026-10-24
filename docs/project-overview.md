@@ -54,7 +54,7 @@ ploceusTidy/
 │   └── styles/global.css
 ├── desktop/                        # Tauri 2 桌面壳 / Rust 平台层（无移动端）
 │   ├── Cargo.toml / Cargo.lock / build.rs
-│   ├── tauri.conf.json             # 原生窗口边框、frontendDist ../client/dist、仅 nsis
+│   ├── tauri.conf.json             # decorations:false 无边框自定义标题栏、frontendDist ../client/dist、仅 nsis
 │   ├── capabilities/default.json   # core / opener / dialog 权限
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
