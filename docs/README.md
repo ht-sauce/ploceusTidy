@@ -70,7 +70,8 @@
 - 需求基线：[REQUIREMENTS.md](REQUIREMENTS.md)；系统总纲：[spec/00-overview.md](spec/00-overview.md)。
 - 前端工程位于 `client/`，桌面壳位于 `desktop/`（Tauri 2，纯桌面，无 iOS/Android）。
 - 浏览器调试：`pnpm install` → `pnpm dev`；桌面客户端：`pnpm tauri:dev`（release 模式）。
-- 已实现：拖入/粘贴文件、剪贴板文件、文字/URL/截图、SQLite 持久化（增量保存 + `user_version` 迁移）、重复定位、搜索（归一化 + 分级排序）、多选/框选、批量标注、有向连线（标签/删除）、分组框（创建/移动/删除）、删除/撤销、文字编辑、图片预览、打开/定位、缺失校验与重新关联、Shell 缩略图、四套主题切换、工作空间打开/迁移/重建、桌面常驻。
+- 已实现：拖入/粘贴文件、剪贴板文件、文字/URL/截图、SQLite 持久化（增量保存 + `user_version` 迁移）、重复定位、搜索（归一化 + 分级排序）、多选/框选、批量标注、有向连线（锚点拖拽 / `L` 批量 / 标签 / 删除）、分组框（创建/移动/删除）、删除/撤销、画布内联编辑文字、图片预览、打开/定位、缺失校验与重新关联、Shell 缩略图、四套主题切换、工作空间打开/迁移/重建、桌面常驻、可点击定位的迷你地图、顶部快捷键说明。
+- 画布交互对齐 PS：默认不可拖动，`空格 + 左键拖拽`平移，`Alt + 滚轮`缩放，左键拖空白框选。
 - 画布渲染层为 Konva 10 + react-konva + rbush（视口裁剪 + 三档 LOD）。
 - Rust 最小测试（`cargo test --manifest-path desktop/Cargo.toml --lib`）与 `pnpm check-spec` 已建立。
 - `pnpm tauri build --no-bundle` 已产出 release exe 并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551），`pnpm tauri:dev` 已固定使用 release 模式。`cargo check` 与前端构建已通过。

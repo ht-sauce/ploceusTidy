@@ -25,7 +25,6 @@ import {
   PlusOutlined,
 } from '@ant-design/icons'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { sceneAnnotations, sceneEdges, sceneGroups, sceneNodes } from '@/data/mock-scene'
 import type {
   SceneAnnotation,
   SceneEdge,
@@ -39,7 +38,6 @@ import CanvasBoard, { type CanvasBoardHandle } from '@/components/CanvasBoard'
 import TitleBar, { type TitleBarHandle } from '@/components/TitleBar'
 import DetailsPanel from '@/components/DetailsPanel'
 import SettingsDialog from '@/components/SettingsDialog'
-import TextEditorDialog from '@/components/TextEditorDialog'
 import ImagePreviewDialog from '@/components/ImagePreviewDialog'
 import { desktopApi, desktopWindow, isDesktopClient } from '@/lib/tauri-api'
 import { DEFAULT_THEME, applyTheme, normalizeTheme, themeById } from '@/lib/theme'
@@ -85,12 +83,11 @@ function Workspace({
   onThemeChange: (id: ThemeId) => void
 }) {
   const { message } = AntApp.useApp()
-  const [nodes, setNodes] = useState<SceneNode[]>(isDesktopClient ? [] : sceneNodes)
-  const [groups, setGroups] = useState<SceneGroup[]>(isDesktopClient ? [] : sceneGroups)
-  const [edges, setEdges] = useState<SceneEdge[]>(isDesktopClient ? [] : sceneEdges)
-  const [annotations, setAnnotations] = useState<SceneAnnotation[]>(
-    isDesktopClient ? [] : sceneAnnotations,
-  )
+  // 场景一律从空画布起步：源代码与安装包都不携带任何演示数据。
+  const [nodes, setNodes] = useState<SceneNode[]>([])
+  const [groups, setGroups] = useState<SceneGroup[]>([])
+  const [edges, setEdges] = useState<SceneEdge[]>([])
+  const [annotations, setAnnotations] = useState<SceneAnnotation[]>([])
   const [hydrated, setHydrated] = useState(!isDesktopClient)
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -102,9 +99,8 @@ function Workspace({
   const [detailsMode, setDetailsMode] = useState<'details' | 'annotation'>('details')
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [empty, setEmpty] = useState(false)
+  const [empty, setEmpty] = useState(true)
   const [scale, setScale] = useState(0.82)
-  const [editingTextId, setEditingTextId] = useState<string | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewSrc, setPreviewSrc] = useState('')
   const [previewTitle, setPreviewTitle] = useState('')
@@ -136,7 +132,6 @@ function Workspace({
         : [],
     [activeAnnotation, nodeById],
   )
-  const editingText = editingTextId ? (nodeById.get(editingTextId) ?? null) : null
 
   const searchEntries = useMemo(() => {
     const entries: SearchEntry[] = []
@@ -314,6 +309,7 @@ function Workspace({
     setSelectedIds([node.id])
     setActiveAnnotationId(null)
     setDetailsMode('details')
+    setEmpty(false)
     window.setTimeout(() => canvasRef.current?.locateNode(node.id), 0)
   }, [])
 
@@ -430,7 +426,7 @@ function Workspace({
 
   const openNode = async (node: SceneNode) => {
     if (node.kind === 'text') {
-      setEditingTextId(node.id)
+      canvasRef.current?.editText(node.id)
       return
     }
     if (node.kind === 'image') {
@@ -547,18 +543,37 @@ function Workspace({
     message.success('标注已删除')
   }
 
-  const handleSaveText = (nodeId: string, text: string) => {
-    const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
-    setNodes((previous) =>
-      previous.map((node) =>
-        node.id === nodeId
-          ? { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
-          : node,
-      ),
+  /**
+   * 文字卡片在画布上直接编辑：`live` 为真时只同步显示内容，收尾时才提示保存。
+   * 空内容视为放弃修改，保留原文，避免误删。
+   */
+  const handleTextCommit = useCallback(
+    (nodeId: string, text: string, live = false) => {
+      const node = nodeById.get(nodeId)
+      if (!node) return
+      if (!live && (text.trim() === '' || text.trim() === (node.body ?? ''))) return
+      const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
+      setNodes((previous) =>
+        previous.map((item) =>
+          item.id === nodeId
+            ? { ...item, name: firstLine.slice(0, 28), subtitle: text, body: text }
+            : item,
+        ),
+      )
+      if (!live) message.success('文字已保存')
+    },
+    [message, nodeById],
+  )
+
+  /** 四向锚点拖出的连线：同向重复时静默忽略。 */
+  const handleConnect = useCallback((from: string, to: string) => {
+    if (from === to) return
+    setEdges((previous) =>
+      previous.some((edge) => edge.from === from && edge.to === to)
+        ? previous
+        : [...previous, { id: `edge-${crypto.randomUUID()}`, from, to }],
     )
-    setEditingTextId(null)
-    message.success('文字已保存')
-  }
+  }, [])
 
   const handleSelectResult = (entry: SearchEntry) => {
     canvasRef.current?.locateNode(entry.nodeId)
@@ -589,7 +604,7 @@ function Workspace({
 
   const handleLinkSelected = useCallback(() => {
     if (selectedIds.length < 2) {
-      message.info('先选中至少两个对象：Shift 点击或 Shift 框选，再按 L')
+      message.info('先选中至少两个对象：Shift 点击或左键拖拽空白框选，再按 L')
       return
     }
     const [source, ...targets] = selectedIds
@@ -727,19 +742,6 @@ function Workspace({
     },
     [addNodeAtCenter, message],
   )
-
-  const handleDuplicate = useCallback(() => {
-    const node = nodeById.get('bid-0')
-    if (!node) {
-      message.info('重复文件会在拖入或粘贴时自动定位')
-      return
-    }
-    canvasRef.current?.locateNode('bid-0')
-    setSelectedIds(['bid-0'])
-    setActiveAnnotationId(null)
-    setDetailsMode('details')
-    message.info('已存在，已定位：滨江项目招标文件.pdf')
-  }, [message, nodeById])
 
   const handleMinimize = () => {
     void desktopWindow.minimize()
@@ -987,9 +989,6 @@ function Workspace({
       } else if (key === 'g') {
         event.preventDefault()
         handleCreateGroup()
-      } else if (key === 'd') {
-        event.preventDefault()
-        handleDuplicate()
       } else if (key === 'e') {
         event.preventDefault()
         handleToggleEmpty()
@@ -1006,7 +1005,6 @@ function Workspace({
     handleClearSelection,
     handleCreateGroup,
     handleDeleteSelected,
-    handleDuplicate,
     handleLinkSelected,
     handleToggleEmpty,
     handleUndo,
@@ -1054,8 +1052,10 @@ function Workspace({
           onMoveNodes={handleMoveNodes}
           onSelectEdge={handleSelectEdge}
           onEdgeLabelEdit={handleEdgeLabelEdit}
+          onConnect={handleConnect}
           onAnnotation={handleAnnotation}
           onActivate={handleActivate}
+          onTextCommit={handleTextCommit}
           onScaleChange={setScale}
         />
 
@@ -1075,7 +1075,7 @@ function Workspace({
             onReveal={(node) => void handleReveal(node)}
             onRelink={(node) => void handleRelink(node)}
             onPreview={(node) => void handlePreview(node)}
-            onEditText={(node) => setEditingTextId(node.id)}
+            onEditText={(node) => canvasRef.current?.editText(node.id)}
             onAddAnnotation={handleAddAnnotation}
             onSaveAnnotation={handleSaveAnnotation}
             onDeleteAnnotation={handleDeleteAnnotation}
@@ -1115,7 +1115,6 @@ function Workspace({
               <span>已选 {selectedIds.length}</span>
             </>
           ) : null}
-          <span className="proto-hint">Shift 框选 · L 连线 · G 分组 · Del 删除 · Ctrl+Z 撤销</span>
         </div>
         <div className="status-right">
           <Tooltip title="用选中对象建立有向连线（L）">
@@ -1186,12 +1185,6 @@ function Workspace({
           setSelectedIds([])
           setEmpty(true)
         }}
-      />
-      <TextEditorDialog
-        key={editingText?.id ?? 'no-text'}
-        node={editingText}
-        onClose={() => setEditingTextId(null)}
-        onSave={handleSaveText}
       />
       <ImagePreviewDialog
         open={previewOpen}

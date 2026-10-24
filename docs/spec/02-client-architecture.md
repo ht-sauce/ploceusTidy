@@ -130,13 +130,11 @@ ploceusTidy/
 │   ├── lib/theme.ts             # 四套主题语义令牌
 │   ├── lib/search.ts            # 搜索归一化与排序
 │   ├── types/scene.ts
-│   ├── data/mock-scene.ts
 │   ├── components/
 │   │   ├── TitleBar.tsx
 │   │   ├── CanvasBoard.tsx      # Konva 渲染层
 │   │   ├── SystemIcon.tsx
 │   │   ├── DetailsPanel.tsx
-│   │   ├── TextEditorDialog.tsx
 │   │   ├── ImagePreviewDialog.tsx
 │   │   └── SettingsDialog.tsx
 │   ├── styles/global.css

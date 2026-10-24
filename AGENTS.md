@@ -49,7 +49,6 @@ ploceusTidy/
 ├── client/                    # React 前端与高密度画布
 │   ├── main.tsx / App.tsx
 │   ├── types/scene.ts
-│   ├── data/mock-scene.ts
 │   ├── lib/tauri-api.ts       # Tauri invoke 封装
 │   ├── lib/theme.ts           # 四套主题语义令牌
 │   ├── lib/search.ts          # 搜索归一化与排序

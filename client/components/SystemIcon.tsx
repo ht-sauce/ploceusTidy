@@ -27,6 +27,8 @@ export default function SystemIcon({ kind, size = 22, className }: SystemIconPro
     width: size,
     height: size,
     viewBox: '0 0 24 24',
+    // 画布会把图标序列化成 data URL 交给 Image 解码，缺少 xmlns 时浏览器直接判为无效 SVG。
+    xmlns: 'http://www.w3.org/2000/svg',
     className,
     'aria-hidden': true,
     focusable: false,

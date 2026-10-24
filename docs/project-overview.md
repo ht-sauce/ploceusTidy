@@ -45,14 +45,11 @@ ploceusTidy/
 │   │   └── search.ts               # 搜索归一化与排序分级
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
-│   ├── data/
-│   │   └── mock-scene.ts           # 浏览器原型的 1600 条模拟引用（72×64 网格）
 │   ├── components/
-│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建文字、设置、窗口按钮
-│   │   ├── CanvasBoard.tsx         # Konva 画布：视口、rbush 裁剪、LOD、分组、连线、迷你地图
+│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建文字、设置、操作说明、窗口按钮
+│   │   ├── CanvasBoard.tsx         # Konva 画布：视口、rbush 裁剪、LOD、分组、连线、锚点连线、迷你地图
 │   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接
 │   │   ├── DetailsPanel.tsx        # 引用详情（含缺失徽标与重新关联）与标注编辑
-│   │   ├── TextEditorDialog.tsx    # 文字卡编辑弹窗
 │   │   ├── ImagePreviewDialog.tsx  # Ant Design 图片预览
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
 │   └── styles/global.css
@@ -92,13 +89,13 @@ client/
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
 | 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`CanvasBoard.tsx`、`SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
-| 画布平移缩放、Konva 渲染、LOD、迷你地图 | `client/components/CanvasBoard.tsx`、`docs/spec/02-client-architecture.md` §4 |
+| 画布平移缩放、Konva 渲染、LOD、锚点连线、迷你地图 | `client/components/CanvasBoard.tsx`、`docs/spec/02-client-architecture.md` §4 |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
 | 搜索归一化与排序 | `client/lib/search.ts`、`client/App.tsx` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/App.tsx`、`client/lib/tauri-api.ts` |
 | 搜索、标注、设置 | `client/App.tsx`、`TitleBar.tsx`、`DetailsPanel.tsx`、`SettingsDialog.tsx` |
-| 模拟数据与场景模型 | `client/data/mock-scene.ts`、`client/types/scene.ts` |
+| 场景模型与共享类型 | `client/types/scene.ts` |
 | 表结构、dataWorkSpace、ID | `docs/spec/04-data-model.md` |
 | 文件打开/定位、缩略图、缺失 | `docs/spec/05-file-reference-contract.md` |
 | 拖入/粘贴/去重/失败语义 | `docs/spec/06-import-pipeline.md` |

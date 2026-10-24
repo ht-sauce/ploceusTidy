@@ -250,13 +250,13 @@ pub fn run() {
                 == Some("1");
             app.manage(state);
 
-            // 初始窗口按当前显示器收敛到 92% × 90%，避免小屏下超出可视区域。
+            // 初始窗口按当前显示器收敛到 62% × 66%，并限制上限，避免大屏一启动就铺满。
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(Some(monitor)) = window.current_monitor() {
                     let scale = monitor.scale_factor();
                     let size = monitor.size().to_logical::<f64>(scale);
-                    let width = (size.width * 0.92).clamp(780.0, 1360.0);
-                    let height = (size.height * 0.90).clamp(520.0, 880.0);
+                    let width = (size.width * 0.62).clamp(720.0, 1040.0);
+                    let height = (size.height * 0.66).clamp(480.0, 720.0);
                     let _ = window.set_size(tauri::LogicalSize::new(width, height));
                     let _ = window.center();
                 }

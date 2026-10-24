@@ -3,6 +3,11 @@
  * 有向连线（含标签与选中）、标注点与迷你地图。组件接口与旧 DOM 版一致，
  * 场景数据与选中状态仍由 App 持有。
  *
+ * 交互模型对齐 PS：
+ * - 左键拖空白 = 框选；拖动卡片 = 移动；画布默认不随手拖走；
+ * - 空格 + 左键拖拽 = 平移画布；Alt/Ctrl + 滚轮 = 以指针为锚缩放；
+ * - 选中对象四向圆点拖出连线。
+ *
  * 坐标约定：
  * - world：场景节点坐标（px）；
  * - screen = world * scale + (x, y)，由 Stage 的 position/scale 实现。
@@ -42,9 +47,11 @@ import type {
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 import SystemIcon from './SystemIcon'
 
-// 迷你地图映射的世界尺寸；节点坐标可超出，迷你地图自行裁剪。
-const WORLD_W = 4000
-const WORLD_H = 2900
+// 迷你地图最小映射范围；内容超出时按实际包围盒扩展。
+const MINIMAP_MIN_W = 1200
+const MINIMAP_MIN_H = 900
+// 迷你地图最多绘制的节点点数，超大画布按步长抽样，避免 DOM 爆炸。
+const MINIMAP_MAX_DOTS = 400
 
 /** LOD 阈值：<50% 色点，50%–70% 简化行，≥70% 完整图标格。 */
 const LOD_DOT = 0.5
@@ -67,8 +74,10 @@ interface CanvasBoardProps {
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onSelectEdge: (id: string) => void
   onEdgeLabelEdit: (id: string) => void
+  onConnect: (from: string, to: string) => void
   onAnnotation: (annotation: SceneAnnotation) => void
   onActivate: (id: string) => void
+  onTextCommit: (id: string, text: string, live?: boolean) => void
   onScaleChange: (scale: number) => void
 }
 
@@ -77,6 +86,7 @@ export interface CanvasBoardHandle {
   fitView: () => void
   zoomBy: (factor: number) => void
   getCenterWorld: () => { x: number; y: number }
+  editText: (id: string) => void
 }
 
 /** 视口：屏幕坐标 = 世界坐标 * scale + (x, y)。 */
@@ -126,8 +136,12 @@ const THUMB_IMAGES = new Map<string, HTMLImageElement | null>()
 const ICON_IMAGES = new Map<SystemIconKind, HTMLImageElement>()
 let iconLoadStarted = false
 
-function startIconLoad() {
-  if (iconLoadStarted) return
+/** 图标解码完成前画布会画空白，解码结束后必须重渲染一次，否则首屏永远没有图标。 */
+function startIconLoad(onSettled: () => void) {
+  if (iconLoadStarted) {
+    onSettled()
+    return
+  }
   iconLoadStarted = true
   const kinds: SystemIconKind[] = [
     'folder',
@@ -142,14 +156,75 @@ function startIconLoad() {
     'link',
     'text',
   ]
+  let pending = kinds.length
+  const settle = () => {
+    pending -= 1
+    if (pending === 0) onSettled()
+  }
   kinds.forEach((kind) => {
     const svg = renderToStaticMarkup(<SystemIcon kind={kind} size={32} />)
+    // React 序列化可能省略 xmlns，浏览器会直接判为无效 SVG；缺了就补上。
+    const withNamespace = svg.includes('xmlns=')
+      ? svg
+      : svg.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"')
     const image = new window.Image()
     image.onload = () => {
       ICON_IMAGES.set(kind, image)
+      settle()
     }
-    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+    image.onerror = () => {
+      // 图标缺失会退化成纯文字，属于可见缺陷，必须留下可诊断的痕迹。
+      console.error(`[络雀] 系统图标加载失败：${kind}`)
+      settle()
+    }
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(withNamespace)}`
   })
+}
+
+/** 快捷键事件必须避开输入控件，否则会吞掉正在编辑的文字。 */
+function isTypingTarget(target: EventTarget | null) {
+  const element = target as Element | null
+  return typeof element?.closest === 'function'
+    ? Boolean(element.closest('input, textarea, [contenteditable="true"]'))
+    : false
+}
+
+/** 四向锚点：选中对象后用于拖出连线。 */
+type HandleSide = 'top' | 'right' | 'bottom' | 'left'
+const HANDLE_SIDES: HandleSide[] = ['top', 'right', 'bottom', 'left']
+
+function handlePoint(node: SceneNode, side: HandleSide) {
+  switch (side) {
+    case 'top':
+      return { x: node.x + node.w / 2, y: node.y }
+    case 'right':
+      return { x: node.x + node.w, y: node.y + node.h / 2 }
+    case 'bottom':
+      return { x: node.x + node.w / 2, y: node.y + node.h }
+    default:
+      return { x: node.x, y: node.y + node.h / 2 }
+  }
+}
+
+/**
+ * 展示名：图标格只有两行，后缀必须出现——同名不同后缀的文件功能完全不同。
+ * 带后缀且整体放不下时，主体截断放第一行，后缀单独占第二行。
+ * 72px 宽、11px 字号每行约 6 个中文字符。
+ */
+const NAME_LINE_BUDGET = 6
+
+function displayName(name: string) {
+  const dot = name.lastIndexOf('.')
+  const hasExt = dot > 0 && dot < name.length - 1
+  // 两行放得下就原样交给 Konva 换行，后缀自然落在第二行。
+  if (name.length <= NAME_LINE_BUDGET * 2) return name
+  if (!hasExt) return `${name.slice(0, NAME_LINE_BUDGET * 2 - 1)}…`
+  const base = name.slice(0, dot)
+  const ext = name.slice(dot)
+  // 后缀单独占第二行，保证一定可见；后缀过长时保留前几位以看出类型。
+  const extLine =
+    ext.length > NAME_LINE_BUDGET * 2 ? `${ext.slice(0, NAME_LINE_BUDGET * 2 - 1)}…` : ext
+  return `${base.slice(0, NAME_LINE_BUDGET - 1)}…\n${extLine}`
 }
 
 /** rbush 条目：节点包围盒，用于视口裁剪查询。 */
@@ -179,8 +254,10 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onMoveNodes,
     onSelectEdge,
     onEdgeLabelEdit,
+    onConnect,
     onAnnotation,
     onActivate,
+    onTextCommit,
     onScaleChange,
   },
   ref,
@@ -201,18 +278,48 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   } | null>(null)
   const [pulseId, setPulseId] = useState<string | null>(null)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node: SceneNode } | null>(null)
+  // 空格键按住时才允许拖动画布，避免左键拖空白被误当成平移。
+  const [spaceHeld, setSpaceHeld] = useState(false)
+  // 连线拖拽预览：起点锚点 + 当前指针世界坐标。
+  const [connectPreview, setConnectPreview] = useState<{
+    from: string
+    side: HandleSide
+    x: number
+    y: number
+  } | null>(null)
+  // 文字节点在画布上直接编辑，不使用弹窗。
+  const [editor, setEditor] = useState<string | null>(null)
+  // ICON_IMAGES 是模块级缓存，图标解码完成后靠这个版本号触发一次重渲染。
+  const [, setIconVersion] = useState(0)
 
   const viewportRef = useRef(viewport)
+  const spaceRef = useRef(false)
   const panStart = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null)
   const panMoved = useRef(false)
-  const boxSession = useRef<{ startX: number; startY: number; additive: boolean } | null>(null)
+  // 会话内记录指针位置：pointerup 时按会话值提交，不依赖 state 或指针是否还在画布内。
+  const boxSession = useRef<{
+    startX: number
+    startY: number
+    currentX: number
+    currentY: number
+    additive: boolean
+  } | null>(null)
   const dragSession = useRef<{
     items: { id: string; x: number; y: number }[]
     pointerX: number
     pointerY: number
+    lastX: number
+    lastY: number
     moving: boolean
   } | null>(null)
+  const connectSession = useRef<{
+    from: string
+    side: HandleSide
+    x: number
+    y: number
+  } | null>(null)
   const groupDrag = useRef<{ id: string; lastX: number; lastY: number } | null>(null)
+  const editorRef = useRef<HTMLTextAreaElement>(null)
   const hoverTimer = useRef<number | null>(null)
   const pulseTimer = useRef<number | null>(null)
   const frameRequest = useRef<number | null>(null)
@@ -248,8 +355,44 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   }, [nodes])
 
   useEffect(() => {
-    startIconLoad()
+    startIconLoad(() => setIconVersion((value) => value + 1))
   }, [])
+
+  // 空格是平移修饰键：按下时锁定光标为抓取态，并阻止页面滚动。
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' || isTypingTarget(event.target)) return
+      event.preventDefault()
+      spaceRef.current = true
+      setSpaceHeld(true)
+    }
+    const up = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return
+      spaceRef.current = false
+      setSpaceHeld(false)
+    }
+    const reset = () => {
+      spaceRef.current = false
+      setSpaceHeld(false)
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', reset)
+    }
+  }, [])
+
+  // 进入内联编辑后聚焦并全选，双击后可直接覆盖输入。
+  useEffect(() => {
+    if (!editor) return
+    const element = editorRef.current
+    if (!element) return
+    element.focus()
+    element.select()
+  }, [editor])
 
   useEffect(() => {
     const element = containerRef.current
@@ -372,7 +515,18 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     }
   }, [size.height, size.width])
 
-  useImperativeHandle(ref, () => ({ locateNode, fitView, zoomBy, getCenterWorld }), [
+  /** 进入文字节点的画布内联编辑；非文字节点忽略。 */
+  const editText = useCallback(
+    (id: string) => {
+      const node = nodeById.get(id)
+      if (!node || node.kind !== 'text') return
+      setEditor(id)
+    },
+    [nodeById],
+  )
+
+  useImperativeHandle(ref, () => ({ locateNode, fitView, zoomBy, getCenterWorld, editText }), [
+    editText,
     fitView,
     getCenterWorld,
     locateNode,
@@ -418,46 +572,61 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
   // ---------- 交互 ----------
 
+  const screenToWorld = (x: number, y: number) => {
+    const current = viewportRef.current
+    return { x: (x - current.x) / current.scale, y: (y - current.y) / current.scale }
+  }
+
+  /** Alt / Ctrl + 滚轮缩放；普通滚轮按 PS 习惯做纵向平移，避免误缩放。 */
   const handleWheel = (event: KonvaEventObject<WheelEvent>) => {
     event.evt.preventDefault()
     const stage = stageRef.current
     if (!stage) return
     const pointer = stage.getPointerPosition()
-    const factor = event.evt.deltaY > 0 ? 0.9 : 1.1
-    zoomAt(
-      viewportRef.current.scale * factor,
-      pointer?.x ?? size.width / 2,
-      pointer?.y ?? size.height / 2,
-    )
+    const raw = event.evt.deltaY !== 0 ? event.evt.deltaY : event.evt.deltaX
+    if (event.evt.altKey || event.evt.ctrlKey || event.evt.metaKey) {
+      const factor = raw > 0 ? 0.9 : 1.1
+      zoomAt(
+        viewportRef.current.scale * factor,
+        pointer?.x ?? size.width / 2,
+        pointer?.y ?? size.height / 2,
+      )
+      return
+    }
+    setViewport((previous) => ({ ...previous, y: previous.y - raw }))
   }
 
   const handleStagePointerDown = (event: KonvaEventObject<MouseEvent>) => {
+    // 只处理左键：右键/中键既不平移也不框选，避免右键菜单后残留会话导致跳位。
+    if (event.evt.button !== 0) return
     const stage = stageRef.current
     if (!stage) return
-    const targetIsStage = event.target === stage
     const pointer = stage.getPointerPosition()
     if (!pointer) return
+    panMoved.current = false
 
-    if (event.evt.shiftKey && targetIsStage) {
-      stage.draggable(false)
-      boxSession.current = {
-        startX: (pointer.x - viewportRef.current.x) / viewportRef.current.scale,
-        startY: (pointer.y - viewportRef.current.y) / viewportRef.current.scale,
-        additive: true,
-      }
-      setSelectionRect(null)
-      return
-    }
-
-    if (targetIsStage) {
+    if (spaceRef.current) {
       panStart.current = {
         pointerX: pointer.x,
         pointerY: pointer.y,
         x: viewportRef.current.x,
         y: viewportRef.current.y,
       }
-      panMoved.current = false
+      return
     }
+
+    if (event.target !== stage) return
+
+    // 左键拖空白即框选；按住 Shift 追加到当前选择。
+    const start = screenToWorld(pointer.x, pointer.y)
+    boxSession.current = {
+      startX: start.x,
+      startY: start.y,
+      currentX: start.x,
+      currentY: start.y,
+      additive: event.evt.shiftKey,
+    }
+    setSelectionRect(null)
   }
 
   const handleStagePointerMove = () => {
@@ -466,14 +635,30 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     const pointer = stage.getPointerPosition()
     if (!pointer) return
 
+    if (connectSession.current) {
+      const world = screenToWorld(pointer.x, pointer.y)
+      connectSession.current.x = world.x
+      connectSession.current.y = world.y
+      setConnectPreview({
+        from: connectSession.current.from,
+        side: connectSession.current.side,
+        x: world.x,
+        y: world.y,
+      })
+      return
+    }
+
     if (boxSession.current) {
+      const session = boxSession.current
       const currentX = (pointer.x - viewportRef.current.x) / viewportRef.current.scale
       const currentY = (pointer.y - viewportRef.current.y) / viewportRef.current.scale
+      session.currentX = currentX
+      session.currentY = currentY
       setSelectionRect({
-        x: Math.min(boxSession.current.startX, currentX),
-        y: Math.min(boxSession.current.startY, currentY),
-        w: Math.abs(currentX - boxSession.current.startX),
-        h: Math.abs(currentY - boxSession.current.startY),
+        x: Math.min(session.startX, currentX),
+        y: Math.min(session.startY, currentY),
+        w: Math.abs(currentX - session.startX),
+        h: Math.abs(currentY - session.startY),
       })
       return
     }
@@ -495,16 +680,18 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       const scale = viewportRef.current.scale
       const dx = (pointer.x - session.pointerX) / scale
       const dy = (pointer.y - session.pointerY) / scale
+      session.lastX = pointer.x
+      session.lastY = pointer.y
       if (Math.abs(dx) > 1 || Math.abs(dy) > 1) session.moving = true
       session.items.forEach((item) => {
         const group = nodeGroupRefs.current.get(item.id)
         if (!group) return
         group.position({ x: item.x + dx, y: item.y + dy })
       })
-      // 连线跟随拖动中的节点。
+      // 连线跟随拖动中的节点：Konva 的 className 不参与 find 选择器，按形状类型取。
       const stage2 = stageRef.current
       if (stage2) {
-        stage2.find('.edge-path').forEach((shape) => {
+        stage2.find('Arrow').forEach((shape) => {
           const edgeId = shape.getAttr('edgeId')
           const edge = edges.find((item) => item.id === edgeId)
           if (!edge) return
@@ -523,19 +710,54 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
   const handleStagePointerUp = () => {
     const stage = stageRef.current
+    const pointer = stage?.getPointerPosition()
 
-    if (boxSession.current && selectionRect) {
-      const ids = nodes
-        .filter(
+    if (connectSession.current) {
+      const session = connectSession.current
+      connectSession.current = null
+      setConnectPreview(null)
+      // 拖出连线后紧跟的 click 不能再清空选择。
+      panMoved.current = true
+      const world = pointer ? screenToWorld(pointer.x, pointer.y) : { x: session.x, y: session.y }
+      // 命中指针下方的卡片即建立连线；命中自身或空白处视为取消。
+      const target = [...nodes]
+        .reverse()
+        .find(
           (node) =>
-            node.x + node.w >= selectionRect.x &&
-            node.x <= selectionRect.x + selectionRect.w &&
-            node.y + node.h >= selectionRect.y &&
-            node.y <= selectionRect.y + selectionRect.h,
+            node.id !== session.from &&
+            world.x >= node.x &&
+            world.x <= node.x + node.w &&
+            world.y >= node.y &&
+            world.y <= node.y + node.h,
         )
-        .map((node) => node.id)
-      onBoxSelect(ids, boxSession.current.additive)
+      if (target) onConnect(session.from, target.id)
+      return
+    }
+
+    if (boxSession.current) {
+      const session = boxSession.current
       boxSession.current = null
+      const rect = {
+        x: Math.min(session.startX, session.currentX),
+        y: Math.min(session.startY, session.currentY),
+        w: Math.abs(session.currentX - session.startX),
+        h: Math.abs(session.currentY - session.startY),
+      }
+      const dragged = rect.w > 2 || rect.h > 2
+      // 只有真正拖出框选时才吞掉 click；空白单击仍要能清空选择。
+      if (dragged) panMoved.current = true
+      if (dragged) {
+        const ids = nodes
+          .filter(
+            (node) =>
+              node.x + node.w >= rect.x &&
+              node.x <= rect.x + rect.w &&
+              node.y + node.h >= rect.y &&
+              node.y <= rect.y + rect.h,
+          )
+          .map((node) => node.id)
+        onBoxSelect(ids, session.additive)
+      }
       setSelectionRect(null)
     }
 
@@ -543,9 +765,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       const session = dragSession.current
       if (session.moving) {
         const scale = viewportRef.current.scale
-        const pointer = stage?.getPointerPosition()
-        const dx = pointer ? (pointer.x - session.pointerX) / scale : 0
-        const dy = pointer ? (pointer.y - session.pointerY) / scale : 0
+        const dx = (session.lastX - session.pointerX) / scale
+        const dy = (session.lastY - session.pointerY) / scale
         onMoveNodes(
           session.items.map((item) => ({
             id: item.id,
@@ -562,10 +783,22 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     }
 
     panStart.current = null
-    stage?.draggable(true)
   }
 
-  /** 空白单击清空选中；拖动画布后的 click 不触发。 */
+  // 指针在画布外释放时 Stage 收不到 pointerup，会话会残留；这里做一次兜底收尾。
+  const pointerUpRef = useRef(handleStagePointerUp)
+  pointerUpRef.current = handleStagePointerUp
+  useEffect(() => {
+    const finish = () => {
+      if (boxSession.current || dragSession.current || connectSession.current || panStart.current) {
+        pointerUpRef.current()
+      }
+    }
+    window.addEventListener('pointerup', finish)
+    return () => window.removeEventListener('pointerup', finish)
+  }, [])
+
+  /** 空白单击清空选中；拖动画布或框选后的 click 不触发。 */
   const handleStageClick = (event: KonvaEventObject<MouseEvent>) => {
     const stage = stageRef.current
     if (!stage) return
@@ -577,6 +810,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   }
 
   const handleNodePointerDown = (event: KonvaEventObject<MouseEvent>, node: SceneNode) => {
+    // 空格按住时让事件冒泡给 Stage，画布平移优先于拖动卡片。
+    if (spaceRef.current || event.evt.button !== 0) return
     const stage = stageRef.current
     const pointer = stage?.getPointerPosition()
     if (!pointer) return
@@ -601,6 +836,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         .map((item) => ({ id: item.id, x: item.x, y: item.y })),
       pointerX: pointer.x,
       pointerY: pointer.y,
+      lastX: pointer.x,
+      lastY: pointer.y,
       moving: false,
     }
   }
@@ -694,7 +931,14 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     const image = node.thumbKey || node.kind === 'image' ? THUMB_IMAGES.get(node.id) : null
     const icon = ICON_IMAGES.get(node.icon)
     const iconSize = compact ? 24 : 32
-    const labelHeight = compact ? 14 : 30
+    // 72×64 的图标格里，两行名称必须收在框内，否则会压住选中框下沿。
+    const labelHeight = compact ? 14 : 28
+    const showIcon = Boolean(image || icon)
+    // 图标尚未就绪时不能留 38px 空洞，否则名称会跑到选中框外，看起来像选框错位。
+    const iconY = compact ? 2 : 3
+    const labelY = showIcon ? iconY + iconSize + 1 : compact ? 4 : 6
+    // 单点选中时显示四向锚点，拖拽即可拉出连线。
+    const showHandles = selected && selectedSet.size === 1 && !compact
 
     return (
       <Group
@@ -714,7 +958,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         }}
         onDblClick={(event) => {
           event.cancelBubble = true
-          onActivate(node.id)
+          if (node.kind === 'text') setEditor(node.id)
+          else onActivate(node.id)
         }}
         onMouseEnter={(event) => handleNodeMouseEnter(event, node)}
         onMouseLeave={handleNodeMouseLeave}
@@ -735,7 +980,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             width={iconSize}
             height={iconSize}
             x={(node.w - iconSize) / 2}
-            y={compact ? 2 : 4}
+            y={iconY}
           />
         ) : icon ? (
           <KonvaImage
@@ -743,21 +988,21 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             width={iconSize}
             height={iconSize}
             x={(node.w - iconSize) / 2}
-            y={compact ? 2 : 4}
+            y={iconY}
           />
         ) : null}
         <Text
           width={node.w}
           height={labelHeight}
-          y={compact ? iconSize + 4 : 4 + iconSize + 2}
-          text={node.name}
+          y={labelY}
+          text={displayName(node.name)}
           fontSize={compact ? 10.5 : 11}
           fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
           fill={text}
           align="center"
           wrap="word"
           ellipsis={!compact}
-          lineHeight={1.25}
+          lineHeight={1.2}
         />
         {!node.isExists ? (
           <Rect width={26} height={13} x={2} y={2} fill="#C44B52" cornerRadius={3} />
@@ -787,6 +1032,30 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             }}
           />
         ) : null}
+        {showHandles
+          ? HANDLE_SIDES.map((side) => {
+              const point = handlePoint({ ...node, x: 0, y: 0 }, side)
+              return (
+                <Circle
+                  key={`handle-${side}`}
+                  x={point.x}
+                  y={point.y}
+                  radius={3.5}
+                  fill="#fff"
+                  stroke={primary}
+                  strokeWidth={1.5}
+                  hitStrokeWidth={10}
+                  onMouseDown={(event) => {
+                    event.cancelBubble = true
+                    const pointer = stageRef.current?.getPointerPosition()
+                    const world = pointer ? screenToWorld(pointer.x, pointer.y) : { x: 0, y: 0 }
+                    connectSession.current = { from: node.id, side, x: world.x, y: world.y }
+                    setConnectPreview({ from: node.id, side, x: world.x, y: world.y })
+                  }}
+                />
+              )
+            })
+          : null}
       </Group>
     )
   }
@@ -808,13 +1077,68 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     return () => tween.destroy()
   }, [nodeById, pulseId])
 
-  const minimapLeft = clamp((-viewport.x / viewport.scale / WORLD_W) * 100, 0, 100)
-  const minimapTop = clamp((-viewport.y / viewport.scale / WORLD_H) * 100, 0, 100)
-  const minimapWidth = clamp((size.width / viewport.scale / WORLD_W) * 100, 2, 100 - minimapLeft)
-  const minimapHeight = clamp((size.height / viewport.scale / WORLD_H) * 100, 2, 100 - minimapTop)
+  /**
+   * 迷你地图映射范围：只取内容包围盒（无内容时取当前视口）。
+   * 若把视口并进来，平移会同时放大范围，视口框就会始终粘在原地。
+   */
+  const minimapBounds = useMemo(() => {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    const consider = (x: number, y: number, w: number, h: number) => {
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x + w)
+      maxY = Math.max(maxY, y + h)
+    }
+    nodes.forEach((node) => consider(node.x, node.y, node.w, node.h))
+    groups.forEach((group) => consider(group.x, group.y, group.w, group.h))
+    if (!Number.isFinite(minX)) {
+      const left = -viewport.x / viewport.scale
+      const top = -viewport.y / viewport.scale
+      consider(left, top, size.width / viewport.scale, size.height / viewport.scale)
+    }
+    const padX = Math.max(120, (maxX - minX) * 0.15)
+    const padY = Math.max(120, (maxY - minY) * 0.15)
+    minX -= padX
+    minY -= padY
+    maxX += padX
+    maxY += padY
+    return {
+      minX,
+      minY,
+      width: Math.max(MINIMAP_MIN_W, maxX - minX),
+      height: Math.max(MINIMAP_MIN_H, maxY - minY),
+    }
+  }, [groups, nodes, size.height, size.width, viewport])
+
+  const toMinimap = (x: number, y: number) => ({
+    left: `${((x - minimapBounds.minX) / minimapBounds.width) * 100}%`,
+    top: `${((y - minimapBounds.minY) / minimapBounds.height) * 100}%`,
+  })
+
+  /** 迷你地图点击/拖拽：把点击处对应的世界坐标移到视口中心。 */
+  const moveViewportTo = useCallback(
+    (clientX: number, clientY: number, element: HTMLElement) => {
+      const rect = element.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+      const worldX = minimapBounds.minX + ((clientX - rect.left) / rect.width) * minimapBounds.width
+      const worldY =
+        minimapBounds.minY + ((clientY - rect.top) / rect.height) * minimapBounds.height
+      setViewport((previous) => ({
+        ...previous,
+        x: size.width / 2 - worldX * previous.scale,
+        y: size.height / 2 - worldY * previous.scale,
+      }))
+    },
+    [minimapBounds, size.height, size.width],
+  )
+
+  const minimapDrag = useRef(false)
 
   return (
-    <div ref={containerRef} className="canvas-board">
+    <div ref={containerRef} className={`canvas-board${spaceHeld ? ' is-panning' : ''}`}>
       <Stage
         ref={stageRef}
         width={size.width}
@@ -845,8 +1169,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           ))}
         </Layer>
 
-        <Layer listening={false}>
-          <defs />
+        {/* 连线层必须接收事件，否则边无法选中、也无法双击编辑标签。 */}
+        <Layer>
           {visibleEdges.map((edge) => {
             const fromNode = nodeById.get(edge.from)
             const toNode = nodeById.get(edge.to)
@@ -869,7 +1193,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             const midX = (points[0] + points[6]) / 2
             const midY = (points[1] + points[7]) / 2
             return (
-              <Group key={edge.id} listening={false}>
+              <Group key={edge.id}>
                 <Arrow
                   className="edge-path"
                   edgeId={edge.id}
@@ -964,8 +1288,62 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
               listening={false}
             />
           ) : null}
+          {connectPreview
+            ? (() => {
+                const source = nodeById.get(connectPreview.from)
+                if (!source) return null
+                const start = handlePoint(source, connectPreview.side)
+                return (
+                  <Arrow
+                    points={[start.x, start.y, connectPreview.x, connectPreview.y]}
+                    stroke={primary}
+                    fill={primary}
+                    strokeWidth={1.5}
+                    dash={[5, 4]}
+                    listening={false}
+                  />
+                )
+              })()
+            : null}
         </Layer>
       </Stage>
+
+      {(() => {
+        const node = editor ? nodeById.get(editor) : null
+        if (!node) return null
+        return (
+          <textarea
+            ref={editorRef}
+            className="canvas-text-editor"
+            defaultValue={node.body ?? node.subtitle ?? node.name}
+            style={{
+              left: node.x * viewport.scale + viewport.x,
+              top: node.y * viewport.scale + viewport.y,
+              width: Math.max(200, node.w * viewport.scale),
+              minHeight: Math.max(72, node.h * viewport.scale),
+            }}
+            onChange={(event) => {
+              // 边输入边更新画布名称，编辑区外也能看到实时结果。
+              onTextCommit(node.id, event.target.value, true)
+            }}
+            onBlur={() => {
+              onTextCommit(node.id, editorRef.current?.value ?? '')
+              setEditor(null)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.currentTarget.blur()
+              } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault()
+                event.currentTarget.blur()
+              }
+              event.stopPropagation()
+            }}
+            placeholder="直接输入文字，Esc 或点击空白处结束"
+            aria-label="编辑文字"
+          />
+        )
+      })()}
 
       {tooltip ? (
         <div className="konva-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
@@ -976,29 +1354,58 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         </div>
       ) : null}
 
-      <div className="minimap" aria-hidden="true">
-        {groups.map((group) => (
+      {nodes.length > 0 || groups.length > 0 ? (
+        <div
+          className="minimap"
+          title="点击或拖动定位视口"
+          onPointerDown={(event) => {
+            event.currentTarget.setPointerCapture(event.pointerId)
+            minimapDrag.current = true
+            moveViewportTo(event.clientX, event.clientY, event.currentTarget)
+          }}
+          onPointerMove={(event) => {
+            if (!minimapDrag.current) return
+            moveViewportTo(event.clientX, event.clientY, event.currentTarget)
+          }}
+          onPointerUp={(event) => {
+            minimapDrag.current = false
+            event.currentTarget.releasePointerCapture(event.pointerId)
+          }}
+        >
+          {groups.map((group) => (
+            <span
+              key={group.id}
+              className="minimap-group"
+              style={{
+                ...toMinimap(group.x, group.y),
+                width: `${(group.w / minimapBounds.width) * 100}%`,
+                height: `${(group.h / minimapBounds.height) * 100}%`,
+              }}
+            />
+          ))}
+          {nodes
+            .filter((_node, index) => index % Math.ceil(nodes.length / MINIMAP_MAX_DOTS) === 0)
+            .map((node) => (
+              <span
+                key={`dot-${node.id}`}
+                className="minimap-dot"
+                style={{
+                  ...toMinimap(node.x, node.y),
+                  width: `${Math.max(0.6, (node.w / minimapBounds.width) * 100)}%`,
+                  height: `${Math.max(0.6, (node.h / minimapBounds.height) * 100)}%`,
+                }}
+              />
+            ))}
           <span
-            key={group.id}
-            className="minimap-group"
+            className="minimap-viewport"
             style={{
-              left: `${(group.x / WORLD_W) * 100}%`,
-              top: `${(group.y / WORLD_H) * 100}%`,
-              width: `${(group.w / WORLD_W) * 100}%`,
-              height: `${(group.h / WORLD_H) * 100}%`,
+              ...toMinimap(-viewport.x / viewport.scale, -viewport.y / viewport.scale),
+              width: `${clamp((size.width / viewport.scale / minimapBounds.width) * 100, 2, 100)}%`,
+              height: `${clamp((size.height / viewport.scale / minimapBounds.height) * 100, 2, 100)}%`,
             }}
           />
-        ))}
-        <span
-          className="minimap-viewport"
-          style={{
-            left: `${minimapLeft}%`,
-            top: `${minimapTop}%`,
-            width: `${minimapWidth}%`,
-            height: `${minimapHeight}%`,
-          }}
-        />
-      </div>
+        </div>
+      ) : null}
     </div>
   )
 })

@@ -316,7 +316,33 @@ button {
   background-color: var(--canvas);
   background-image: radial-gradient(circle, var(--dot) 1px, transparent 1px);
   background-size: 16px 16px;
+  cursor: default;
+}
+
+/* 空格按住时才是抓手：画布默认不随手拖走，避免误平移。 */
+.canvas-board.is-panning {
   cursor: grab;
+}
+
+.canvas-board.is-panning:active {
+  cursor: grabbing;
+}
+
+/* 文字卡片在画布上原地编辑，位置与缩放随视口走。 */
+.canvas-text-editor {
+  position: absolute;
+  z-index: 25;
+  padding: 5px 6px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+  color: var(--text);
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
 }
 
 .tile-tooltip-detail {
@@ -354,7 +380,8 @@ button {
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
-  pointer-events: none;
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .minimap-group {
@@ -364,16 +391,60 @@ button {
   background: #f1f1ed;
 }
 
+.minimap-dot {
+  position: absolute;
+  border-radius: 1px;
+  background: #b9b6ae;
+}
+
 .minimap-viewport {
   position: absolute;
   border: 1px solid var(--accent);
   border-radius: 1px;
   background: rgba(47, 107, 91, 0.08);
+  pointer-events: none;
+}
+
+/* 顶部问号的快捷键说明。 */
+.shortcut-panel {
+  width: 268px;
+}
+
+.shortcut-caption {
+  margin-bottom: 6px;
+  color: var(--faint);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+
+.shortcut-row kbd {
+  flex: 0 0 118px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.shortcut-row span {
+  color: var(--text-secondary);
 }
 
 .details-panel {
   position: relative;
-  flex: 0 0 280px;
+  flex: 0 0 min(280px, 46vw);
   height: calc(100% - 16px);
   margin: 8px;
   display: flex;
@@ -575,11 +646,6 @@ button {
   color: #d3d3ce;
 }
 
-.proto-hint {
-  margin-left: 8px;
-  color: #b0b0aa;
-}
-
 .zoom-label {
   min-width: 34px;
   text-align: right;
@@ -733,10 +799,6 @@ button {
   .search-area {
     width: min(340px, 44vw);
   }
-
-  .proto-hint {
-    display: none;
-  }
 }
 
 @media (max-width: 720px) {
@@ -748,8 +810,36 @@ button {
   .search-area {
     width: min(260px, 56vw);
   }
+}
 
-  .status-left .proto-hint {
+/* 350px 最小窗口：搜索框改为左对齐弹性宽度，避免与窗口按钮重叠。 */
+@media (max-width: 520px) {
+  .title-bar {
+    gap: 4px;
+    padding: 0 4px 0 8px;
+  }
+
+  .brand {
     display: none;
+  }
+
+  .search-area {
+    left: 8px;
+    right: 118px;
+    width: auto;
+    transform: none;
+  }
+
+  .search-panel {
+    width: min(320px, 92vw);
+  }
+
+  .status-left {
+    display: none;
+  }
+
+  .minimap {
+    width: 112px;
+    height: 66px;
   }
 }

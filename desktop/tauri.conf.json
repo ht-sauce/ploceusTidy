@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "络雀",
-        "width": 1280,
-        "height": 820,
-        "minWidth": 780,
-        "minHeight": 520,
+        "width": 1000,
+        "height": 700,
+        "minWidth": 350,
+        "minHeight": 450,
         "resizable": true,
         "center": true,
         "decorations": false

@@ -4,13 +4,14 @@
  */
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Button, Input, Tooltip } from 'antd'
+import { Button, Input, Popover, Tooltip } from 'antd'
 import type { InputRef } from 'antd'
 import {
   BorderOutlined,
   CloseOutlined,
   MinusOutlined,
   PlusOutlined,
+  QuestionCircleOutlined,
   SearchOutlined,
   SettingOutlined,
 } from '@ant-design/icons'
@@ -44,6 +45,32 @@ const TYPE_LABEL: Record<string, string> = {
   text: '文字',
   annotation: '标注',
 }
+
+/** 快捷键说明：鼠标悬停问号即可查看，不占用画布空间。 */
+const SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: '空格 + 左键拖拽', label: '平移画布' },
+  { keys: 'Alt + 滚轮', label: '以指针为中心缩放' },
+  { keys: '左键拖拽空白', label: '框选多个对象' },
+  { keys: 'Shift + 点击', label: '追加或取消选中' },
+  { keys: '拖拽四向圆点', label: '连线到另一个对象' },
+  { keys: '双击文字', label: '直接在画布上编辑' },
+  { keys: '双击文件', label: '打开原文件' },
+  { keys: 'G / L', label: '用选中对象分组 / 连线' },
+  { keys: 'Delete / Ctrl+Z', label: '删除 / 撤销删除' },
+  { keys: 'Ctrl+A / Ctrl+K', label: '全选 / 聚焦搜索' },
+]
+
+const HELP_PANEL = (
+  <div className="shortcut-panel">
+    <div className="shortcut-caption">画布操作</div>
+    {SHORTCUTS.map((item) => (
+      <div key={item.keys} className="shortcut-row">
+        <kbd>{item.keys}</kbd>
+        <span>{item.label}</span>
+      </div>
+    ))}
+  </div>
+)
 
 const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
   {
@@ -195,6 +222,19 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
             onClick={onSettings}
           />
         </Tooltip>
+        <Popover
+          content={HELP_PANEL}
+          placement="bottomRight"
+          trigger="hover"
+          mouseEnterDelay={0.15}
+        >
+          <Button
+            className="title-icon-btn"
+            type="text"
+            icon={<QuestionCircleOutlined />}
+            aria-label="操作说明"
+          />
+        </Popover>
         <span className="window-divider" />
         <Tooltip title="最小化">
           <Button
