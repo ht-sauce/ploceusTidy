@@ -1,0 +1,11 @@
+node_modules/
+dist/
+client/dist/
+desktop/target/
+desktop/gen/
+dataWorkSpace/
+.screenshots/
+.trae-html-share-packages/
+*.local
+.DS_Store
+Thumbs.db

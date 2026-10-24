@@ -1,0 +1,9 @@
+node_modules/
+dist/
+client/dist/
+desktop/target/
+desktop/gen/
+dataWorkSpace/
+prototypes/archive/
+pnpm-lock.yaml
+*.md
