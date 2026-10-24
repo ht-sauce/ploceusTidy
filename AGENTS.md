@@ -13,7 +13,7 @@
 | 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` + `logs/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
-| 当前阶段 | 前端 + Tauri 桌面壳 + SQLite 命令已建立，核心链路（拖入/粘贴/持久化/重复定位/搜索/标注/多选/连线/删除撤销/文字编辑/图片预览）已实现；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），可用 `pnpm tauri:dev:release` |
+| 当前阶段 | 前端 + Tauri 桌面壳 + SQLite 命令已建立，核心链路（拖入/粘贴/持久化/重复定位/搜索/标注/多选/连线/删除撤销/文字编辑/图片预览）已实现；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
 
 ## 2. 命令
 
@@ -23,11 +23,9 @@
 | --- | --- |
 | 安装依赖 | `pnpm install` |
 | 开发启动（浏览器原型） | `pnpm dev` |
-| 开发启动（桌面客户端） | `pnpm tauri:dev`；若本机策略拦截 debug exe，用 `pnpm tauri:dev:release` |
+| 开发启动（桌面客户端） | `pnpm tauri:dev`（release 模式） |
 | 构建前端 | `pnpm build` |
 | 构建桌面安装包 | `pnpm tauri:build` |
-| 生成应用图标 | `pnpm tauri:icon` |
-| 预览构建产物 | `pnpm preview` |
 | 测试 | 未建；M1 补 |
 | 静态检查 | `pnpm lint` / `pnpm lint:fix` |
 | 格式化 | `pnpm format` / `pnpm format:check` |
@@ -46,15 +44,12 @@ ploceusTidy/
 ├── eslint.config.js           # ESLint flat config
 ├── prettier.config.cjs        # Prettier 配置
 ├── .editorconfig              # 编辑器基础约定
-├── assets/                    # 品牌图（窗口 logo 使用 ploceusTidy.jpg）
-├── prototypes/
-│   ├── README.md              # 原型规则与当前入口
-│   └── archive/               # 已归档的旧 HTML 原型
+├── assets/                    # 品牌图
 ├── client/                    # React 前端与高密度画布
 │   ├── main.tsx / App.tsx
 │   ├── types/scene.ts
 │   ├── data/mock-scene.ts
-│   ├── lib/tauri-api.ts       # Tauri invoke / 窗口控制封装
+│   ├── lib/tauri-api.ts       # Tauri invoke 封装
 │   ├── components/            # TitleBar / CanvasBoard / FileTile / SystemIcon / DetailsPanel / SettingsDialog
 │   └── styles/global.css
 ├── desktop/                   # Tauri 2 桌面壳与 Rust 平台层（仅桌面，无 iOS/Android）
@@ -112,7 +107,6 @@ ploceusTidy/
 | [docs/spec/06-import-pipeline.md](docs/spec/06-import-pipeline.md) | 拖入/粘贴、批量、去重、失败 |
 | [docs/spec/07-packaging.md](docs/spec/07-packaging.md) | Tauri 打包、WebView2、安装与数据路径 |
 | [docs/spec/08-adr.md](docs/spec/08-adr.md) | 架构决策记录与待复核事项 |
-| [prototypes/README.md](prototypes/README.md) | 原型目录规则与当前原型入口 |
 
 ## 7. 待复核事项（不得擅自拍板）
 

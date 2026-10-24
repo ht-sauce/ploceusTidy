@@ -5,7 +5,6 @@ import type { InputRef } from 'antd'
 import {
   BorderOutlined,
   CloseOutlined,
-  CompressOutlined,
   MinusOutlined,
   PlusOutlined,
   SearchOutlined,
@@ -18,13 +17,11 @@ import SystemIcon from './SystemIcon'
 interface TitleBarProps {
   query: string
   results: SearchEntry[]
-  compact: boolean
   onQueryChange: (value: string) => void
   onSelectResult: (entry: SearchEntry) => void
   onOpenResult: (entry: SearchEntry) => void
   onNewText: () => void
   onSettings: () => void
-  onToggleCompact: () => void
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
@@ -48,13 +45,11 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
   {
     query,
     results,
-    compact,
     onQueryChange,
     onSelectResult,
     onOpenResult,
     onNewText,
     onSettings,
-    onToggleCompact,
     onMinimize,
     onMaximize,
     onClose,
@@ -195,15 +190,6 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
             onClick={onSettings}
           />
         </Tooltip>
-        <Tooltip title="紧凑模式 (C)">
-          <Button
-            className={`title-icon-btn${compact ? ' is-on' : ''}`}
-            type="text"
-            icon={<CompressOutlined />}
-            aria-label="紧凑模式"
-            onClick={onToggleCompact}
-          />
-        </Tooltip>
         <span className="window-divider" />
         <Tooltip title="最小化">
           <Button
@@ -223,7 +209,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
             onClick={onMaximize}
           />
         </Tooltip>
-        <Tooltip title="关闭即退出">
+        <Tooltip title="关闭">
           <Button
             className="title-icon-btn window-btn close-btn"
             type="text"

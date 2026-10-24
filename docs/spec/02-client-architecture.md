@@ -65,8 +65,10 @@ sequenceDiagram
 
 ## 5. 窗口生命周期
 
-- 标准窗口：`decorations: false` 无边框；自定义标题栏 + 项目 logo + 顶部搜索；窗口控制按钮。
-- 紧凑模式：降低高度/宽度，保留顶栏搜索与结果；画布暂停或简化。
+- 标准窗口：`decorations: false` 无边框；48px 自定义标题栏承载 logo、居中搜索、新建文字、设置与最小化/最大化/关闭。
+- 标题栏空白区域标记 `data-tauri-drag-region`，由 Tauri 原生拖动窗口；按钮与输入区域不触发拖动（`core:window:allow-start-dragging`）。
+- 窗口按钮调用 Tauri 窗口 API，权限在 `capabilities/default.json` 显式声明。
+- F12 通过 Rust 命令 `open_devtools` 打开 WebView 开发者工具；`tauri` 启用 `devtools` feature，release 构建同样可用。
 - 桌面常驻（可选，默认关闭）：窗口置底/桌面层，适合当作桌面工具。
 - 最小化/隐藏：暂停渲染、动画、缩略图请求；不退出进程。
 - 关闭：退出进程；默认不做托盘常驻。
@@ -134,7 +136,6 @@ ploceusTidy/
 ├── .editorconfig
 ├── dataWorkSpace/              # 运行时生成，不入库
 ├── docs/
-├── prototypes/
 └── assets/
 ```
 

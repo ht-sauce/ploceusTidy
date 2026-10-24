@@ -38,6 +38,11 @@ fn read_clipboard_files() -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
+#[tauri::command]
 fn open_ref(app: AppHandle, state: State<'_, AppState>, node_id: String) -> Result<(), String> {
     let (path, url) = db::node_target(&state, &node_id)?;
 
@@ -151,6 +156,7 @@ pub fn run() {
             scene_save,
             import_paths,
             read_clipboard_files,
+            open_devtools,
             open_ref,
             reveal_ref,
             save_clipboard_image,

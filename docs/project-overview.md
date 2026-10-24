@@ -14,8 +14,8 @@
 | 画布 | 当前：React DOM 虚拟行；生产：Konva 虚拟化 + rbush | 见 ADR-005、02 §4 |
 | 数据存储 | SQLite（rusqlite）+ `dataWorkSpace` | 见 ADR-003 与 [04-data-model.md](spec/04-data-model.md) |
 | 外部数据源 | 纯本地，无云端、无遥测 | 见 ADR-004 |
-| 构建 / 测试命令 | `pnpm build` / `pnpm lint`；桌面端 `pnpm tauri:dev` / `pnpm tauri:dev:release` / `pnpm tauri:build` | 测试 M1 补 |
-| 当前运行状态 | release exe 已构建并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551） | 开发改用 `pnpm tauri:dev:release` |
+| 构建 / 测试命令 | `pnpm build` / `pnpm lint`；桌面端 `pnpm tauri:dev`（release）/ `pnpm tauri:build` | 测试 M1 补 |
+| 当前运行状态 | release exe 已构建并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551） | `pnpm tauri:dev` 固定 release 模式 |
 
 ## 2. 文件级目录地图
 
@@ -30,23 +30,20 @@ ploceusTidy/
 ├── eslint.config.js / prettier.config.cjs / .editorconfig
 ├── .prettierignore / .gitignore
 ├── assets/
-│   └── ploceusTidy.jpg             # 品牌图；窗口 logo 直接使用
-├── prototypes/
-│   ├── README.md
-│   └── archive/20261024-canvas-workspace-v0/index.html
+│   └── ploceusTidy.jpg             # 品牌图
 ├── client/                         # React 前端
 │   ├── index.html                  # Vite 入口
 │   ├── main.tsx                    # React 入口、Ant Design ConfigProvider / App
 │   ├── App.tsx                     # 场景状态、Tauri 加载/保存、拖入/粘贴、搜索、标注
 │   ├── vite-env.d.ts
 │   ├── lib/
-│   │   └── tauri-api.ts            # invoke 封装、窗口控制、isTauri
+│   │   └── tauri-api.ts            # invoke 封装、isTauri
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneEdge / 标注 / ImportResult
 │   ├── data/
 │   │   └── mock-scene.ts           # 浏览器原型的 1000 条模拟引用
 │   ├── components/
-│   │   ├── TitleBar.tsx            # 无边框标题栏、logo、搜索、窗口按钮
+│   │   ├── TitleBar.tsx            # 内容区工具栏：顶部搜索、新建文字、设置
 │   │   ├── CanvasBoard.tsx         # 视口、平移缩放、虚拟行、LOD、边、迷你地图
 │   │   ├── FileTile.tsx            # 176×28 紧凑行、16px 系统图标、Tooltip
 │   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接
@@ -57,7 +54,7 @@ ploceusTidy/
 │   └── styles/global.css
 ├── desktop/                        # Tauri 2 桌面壳 / Rust 平台层（无移动端）
 │   ├── Cargo.toml / Cargo.lock / build.rs
-│   ├── tauri.conf.json             # decorations:false、frontendDist ../client/dist、仅 nsis
+│   ├── tauri.conf.json             # 原生窗口边框、frontendDist ../client/dist、仅 nsis
 │   ├── capabilities/default.json   # core / opener / dialog 权限
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
@@ -91,7 +88,7 @@ client/
 | v1 做什么 / 验收 | `docs/REQUIREMENTS.md` |
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
-| 无边框窗口、高密度 UI、系统图标 | `client/components/TitleBar.tsx`、`FileTile.tsx`、`SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
+| 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`FileTile.tsx`、`SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
 | 画布平移缩放、虚拟行、LOD、迷你地图 | `client/components/CanvasBoard.tsx`、`docs/spec/02-client-architecture.md` §4 |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/App.tsx`、`client/lib/tauri-api.ts` |
@@ -101,7 +98,6 @@ client/
 | 文件打开/定位、缩略图、缺失 | `docs/spec/05-file-reference-contract.md` |
 | 拖入/粘贴/去重/失败语义 | `docs/spec/06-import-pipeline.md` |
 | 安装包、WebView2、数据路径 | `docs/spec/07-packaging.md` |
-| 原型规则与归档 | `prototypes/README.md` |
 | 命名、注释、错误处理、工具链 | `docs/coding-conventions.md` |
 
 ## 5. 待补地图项

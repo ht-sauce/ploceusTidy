@@ -4,7 +4,7 @@
 
 - Windows 10/11 x64 首发；Tauri 2 + WebView2。
 - 安装包轻量、启动快；默认按用户安装，避免管理员权限。
-- 主窗口 `decorations: false` 无边框；自定义 48px 标题栏、项目 logo、窗口控制按钮与拖拽区。
+- 主窗口 `decorations: false` 无边框；48px 自定义标题栏：logo、居中搜索、窗口控制按钮与拖拽区。
 - 数据与安装目录策略见 `04-data-model.md`。
 
 ## 2. 安装形态

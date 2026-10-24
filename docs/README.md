@@ -68,11 +68,10 @@
 - 技术选型已定并在实现中：Tauri 2 + React 19.3.1 + TypeScript 6.0.3 + Ant Design 6.6.7 + Vite 8.3.5，见 [spec/08-adr.md](spec/08-adr.md) ADR-001。
 - 需求基线：[REQUIREMENTS.md](REQUIREMENTS.md)；系统总纲：[spec/00-overview.md](spec/00-overview.md)。
 - 前端工程位于 `client/`，桌面壳位于 `desktop/`（Tauri 2，纯桌面，无 iOS/Android）。
-- 前端原型：`pnpm install` → `pnpm dev`；桌面客户端：`pnpm tauri:dev`；若 debug exe 被本机策略拦截，用 `pnpm tauri:dev:release`。
+- 浏览器调试：`pnpm install` → `pnpm dev`；桌面客户端：`pnpm tauri:dev`（release 模式）。
 - 已实现：拖入/粘贴文件、剪贴板文件、文字/URL/截图、SQLite 持久化、重复定位、搜索、多选/框选、批量标注、有向连线、删除/撤销、文字编辑、图片预览、打开/定位、设置。
-- `pnpm tauri build --no-bundle` 已产出 release exe 并可启动；`pnpm tauri:dev` 的 debug exe 被 Windows 应用控制策略阻止（os error 4551）。`cargo check` 与前端构建已通过。
+- `pnpm tauri build --no-bundle` 已产出 release exe 并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551），`pnpm tauri:dev` 已固定使用 release 模式。`cargo check` 与前端构建已通过。
 - 待补：Shell 原生缩略图、分组框创建/移动、锚点连线/边标签、缺失文件重连、工作空间迁移、Konva 十万级渲染层。
-- 旧 HTML 原型已归档到 `prototypes/archive/`，仅作参考。
 - 源码工程已建立；`HC-9`、`HC-15` 已生效。
 - `scripts/check-spec.mjs` 未建：可静态化的约束在源码建立后脚本化。
 - git hooks 不启用：提交前手动执行 `pnpm lint` / `pnpm format:check`。

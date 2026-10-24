@@ -57,8 +57,6 @@ export default function App() {
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null)
   const [detailsMode, setDetailsMode] = useState<'details' | 'annotation'>('details')
   const [query, setQuery] = useState('')
-  const [compact, setCompact] = useState(false)
-  const [maximized, setMaximized] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [empty, setEmpty] = useState(false)
   const [scale, setScale] = useState(0.82)
@@ -539,15 +537,17 @@ export default function App() {
     message.info('已存在，已定位：滨江项目招标文件.pdf')
   }, [message, nodeById])
 
-  const handleToggleCompact = useCallback(() => {
-    const next = !compact
-    setCompact(next)
-    if (next) {
-      setSelectedIds([])
-      setActiveAnnotationId(null)
-      setDetailsMode('details')
-    }
-  }, [compact])
+  const handleMinimize = () => {
+    void desktopWindow.minimize()
+  }
+
+  const handleMaximize = () => {
+    void desktopWindow.toggleMaximize()
+  }
+
+  const handleClose = () => {
+    void desktopWindow.close()
+  }
 
   const handleToggleEmpty = useCallback(() => {
     const next = !empty
@@ -558,30 +558,6 @@ export default function App() {
       setDetailsMode('details')
     }
   }, [empty])
-
-  const handleMinimize = () => {
-    if (isDesktopClient) {
-      void desktopWindow.minimize()
-    } else {
-      handleToggleCompact()
-    }
-  }
-
-  const handleMaximize = () => {
-    if (isDesktopClient) {
-      void desktopWindow.toggleMaximize()
-    } else {
-      setMaximized((previous) => !previous)
-    }
-  }
-
-  const handleClose = () => {
-    if (isDesktopClient) {
-      void desktopWindow.close()
-    } else {
-      message.info('关闭即退出，不做后台常驻进程')
-    }
-  }
 
   useEffect(() => {
     if (!isDesktopClient) return
@@ -690,6 +666,12 @@ export default function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       const typing = isTypingTarget(event.target)
 
+      if (event.key === 'F12') {
+        event.preventDefault()
+        if (isDesktopClient) void desktopApi.openDevtools()
+        return
+      }
+
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         titleBarRef.current?.focusSearch()
@@ -740,9 +722,6 @@ export default function App() {
       } else if (key === 's') {
         event.preventDefault()
         setSettingsOpen(true)
-      } else if (key === 'c') {
-        event.preventDefault()
-        handleToggleCompact()
       }
     }
 
@@ -754,7 +733,6 @@ export default function App() {
     handleDeleteSelected,
     handleDuplicate,
     handleLinkSelected,
-    handleToggleCompact,
     handleToggleEmpty,
     handleUndo,
     nodes,
@@ -763,166 +741,158 @@ export default function App() {
   ])
 
   return (
-    <div className="desktop">
-      <div
-        className={['app-shell', compact ? 'is-compact' : '', maximized ? 'is-maximized' : '']
-          .filter(Boolean)
-          .join(' ')}
-      >
-        <TitleBar
-          ref={titleBarRef}
-          query={query}
-          results={results}
-          compact={compact}
-          onQueryChange={setQuery}
-          onSelectResult={handleSelectResult}
-          onOpenResult={handleOpenResult}
-          onNewText={() => createTextNode('双击编辑文字；适合记录结论、待办或项目说明。')}
-          onSettings={() => setSettingsOpen(true)}
-          onToggleCompact={handleToggleCompact}
-          onMinimize={handleMinimize}
-          onMaximize={handleMaximize}
-          onClose={handleClose}
+    <div className="app-shell">
+      <TitleBar
+        ref={titleBarRef}
+        query={query}
+        results={results}
+        onQueryChange={setQuery}
+        onSelectResult={handleSelectResult}
+        onOpenResult={handleOpenResult}
+        onNewText={() => createTextNode('双击编辑文字；适合记录结论、待办或项目说明。')}
+        onSettings={() => setSettingsOpen(true)}
+        onMinimize={handleMinimize}
+        onMaximize={handleMaximize}
+        onClose={handleClose}
+      />
+
+      <div className="workspace">
+        <CanvasBoard
+          ref={canvasRef}
+          nodes={nodes}
+          groups={groups}
+          edges={edges}
+          annotations={annotations}
+          selectedIds={selectedIds}
+          detailsOpen={Boolean(selectedNode)}
+          onSelect={handleSelectNode}
+          onBoxSelect={handleBoxSelect}
+          onClearSelection={handleClearSelection}
+          onMoveNodes={handleMoveNodes}
+          onAnnotation={handleAnnotation}
+          onActivate={handleActivate}
+          onScaleChange={setScale}
         />
 
-        <div className="workspace">
-          <CanvasBoard
-            ref={canvasRef}
-            nodes={nodes}
-            groups={groups}
-            edges={edges}
-            annotations={annotations}
-            selectedIds={selectedIds}
-            detailsOpen={Boolean(selectedNode)}
-            onSelect={handleSelectNode}
-            onBoxSelect={handleBoxSelect}
-            onClearSelection={handleClearSelection}
-            onMoveNodes={handleMoveNodes}
-            onAnnotation={handleAnnotation}
-            onActivate={handleActivate}
-            onScaleChange={setScale}
+        {selectedNode ? (
+          <DetailsPanel
+            key={
+              detailsMode === 'annotation' && activeAnnotation
+                ? activeAnnotation.id
+                : `details-${selectedNode.id}`
+            }
+            node={selectedNode}
+            annotation={activeAnnotation}
+            annotationTargets={annotationTargets}
+            mode={detailsMode}
+            onClose={handleClearSelection}
+            onOpen={(node) => void openNode(node)}
+            onReveal={(node) => void handleReveal(node)}
+            onPreview={(node) => void handlePreview(node)}
+            onEditText={(node) => setEditingTextId(node.id)}
+            onAddAnnotation={handleAddAnnotation}
+            onSaveAnnotation={handleSaveAnnotation}
+            onDeleteAnnotation={handleDeleteAnnotation}
           />
+        ) : null}
 
-          {selectedNode ? (
-            <DetailsPanel
-              key={
-                detailsMode === 'annotation' && activeAnnotation
-                  ? activeAnnotation.id
-                  : `details-${selectedNode.id}`
-              }
-              node={selectedNode}
-              annotation={activeAnnotation}
-              annotationTargets={annotationTargets}
-              mode={detailsMode}
-              onClose={handleClearSelection}
-              onOpen={(node) => void openNode(node)}
-              onReveal={(node) => void handleReveal(node)}
-              onPreview={(node) => void handlePreview(node)}
-              onEditText={(node) => setEditingTextId(node.id)}
-              onAddAnnotation={handleAddAnnotation}
-              onSaveAnnotation={handleSaveAnnotation}
-              onDeleteAnnotation={handleDeleteAnnotation}
-            />
-          ) : null}
-
-          {empty ? (
-            <div className="empty-overlay">
-              <div className="empty-card">
-                <strong>把项目材料放到一张画布上</strong>
-                <p>
-                  拖入文件，或直接粘贴文字、截图、URL。络雀只记录地址，不移动原文件；重复文件会自动定位。
-                </p>
-                <div className="empty-hints">
-                  <span>拖入文件</span>
-                  <span>粘贴文字</span>
-                  <span>粘贴截图</span>
-                  <span>粘贴 URL</span>
-                </div>
-                <Button type="primary" onClick={() => setEmpty(false)}>
-                  返回画布
-                </Button>
+        {empty ? (
+          <div className="empty-overlay">
+            <div className="empty-card">
+              <strong>把项目材料放到一张画布上</strong>
+              <p>
+                拖入文件，或直接粘贴文字、截图、URL。络雀只记录地址，不移动原文件；重复文件会自动定位。
+              </p>
+              <div className="empty-hints">
+                <span>拖入文件</span>
+                <span>粘贴文字</span>
+                <span>粘贴截图</span>
+                <span>粘贴 URL</span>
               </div>
+              <Button type="primary" onClick={() => setEmpty(false)}>
+                返回画布
+              </Button>
             </div>
-          ) : null}
-        </div>
-
-        <footer className="status-bar">
-          <div className="status-left">
-            <span className="save-dot" />
-            <span>已保存</span>
-            <span className="status-separator">·</span>
-            <span>{nodes.length.toLocaleString()} 个引用</span>
-            {selectedIds.length > 1 ? (
-              <>
-                <span className="status-separator">·</span>
-                <span>已选 {selectedIds.length}</span>
-              </>
-            ) : null}
-            <span className="proto-hint">Shift 框选 · L 连线 · Del 删除 · Ctrl+Z 撤销</span>
           </div>
-          <div className="status-right">
-            <Tooltip title="用选中对象建立有向连线（L）">
-              <Button
-                type="text"
-                size="small"
-                icon={<ApartmentOutlined />}
-                aria-label="连线"
-                onClick={handleLinkSelected}
-              />
-            </Tooltip>
-            <Tooltip title="删除选中对象（Del）">
-              <Button
-                type="text"
-                size="small"
-                icon={<DeleteOutlined />}
-                aria-label="删除"
-                onClick={handleDeleteSelected}
-              />
-            </Tooltip>
-            <span className="status-separator">·</span>
-            <span className="zoom-label">{Math.round(scale * 100)}%</span>
-            <Button
-              type="text"
-              size="small"
-              icon={<MinusOutlined />}
-              aria-label="缩小"
-              onClick={() => canvasRef.current?.zoomBy(0.85)}
-            />
-            <Button
-              type="text"
-              size="small"
-              icon={<PlusOutlined />}
-              aria-label="放大"
-              onClick={() => canvasRef.current?.zoomBy(1.15)}
-            />
-            <Button
-              type="text"
-              size="small"
-              icon={<FullscreenOutlined />}
-              aria-label="适配画布"
-              onClick={() => canvasRef.current?.fitView()}
-            />
-          </div>
-        </footer>
-
-        <SettingsDialog
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          workspacePath={workspacePath}
-        />
-        <TextEditorDialog
-          key={editingText?.id ?? 'no-text'}
-          node={editingText}
-          onClose={() => setEditingTextId(null)}
-          onSave={handleSaveText}
-        />
-        <ImagePreviewDialog
-          open={previewOpen}
-          src={previewSrc}
-          title={previewTitle}
-          onClose={() => setPreviewOpen(false)}
-        />
+        ) : null}
       </div>
+
+      <footer className="status-bar">
+        <div className="status-left">
+          <span className="save-dot" />
+          <span>已保存</span>
+          <span className="status-separator">·</span>
+          <span>{nodes.length.toLocaleString()} 个引用</span>
+          {selectedIds.length > 1 ? (
+            <>
+              <span className="status-separator">·</span>
+              <span>已选 {selectedIds.length}</span>
+            </>
+          ) : null}
+          <span className="proto-hint">Shift 框选 · L 连线 · Del 删除 · Ctrl+Z 撤销</span>
+        </div>
+        <div className="status-right">
+          <Tooltip title="用选中对象建立有向连线（L）">
+            <Button
+              type="text"
+              size="small"
+              icon={<ApartmentOutlined />}
+              aria-label="连线"
+              onClick={handleLinkSelected}
+            />
+          </Tooltip>
+          <Tooltip title="删除选中对象（Del）">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              aria-label="删除"
+              onClick={handleDeleteSelected}
+            />
+          </Tooltip>
+          <span className="status-separator">·</span>
+          <span className="zoom-label">{Math.round(scale * 100)}%</span>
+          <Button
+            type="text"
+            size="small"
+            icon={<MinusOutlined />}
+            aria-label="缩小"
+            onClick={() => canvasRef.current?.zoomBy(0.85)}
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<PlusOutlined />}
+            aria-label="放大"
+            onClick={() => canvasRef.current?.zoomBy(1.15)}
+          />
+          <Button
+            type="text"
+            size="small"
+            icon={<FullscreenOutlined />}
+            aria-label="适配画布"
+            onClick={() => canvasRef.current?.fitView()}
+          />
+        </div>
+      </footer>
+
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        workspacePath={workspacePath}
+      />
+      <TextEditorDialog
+        key={editingText?.id ?? 'no-text'}
+        node={editingText}
+        onClose={() => setEditingTextId(null)}
+        onSave={handleSaveText}
+      />
+      <ImagePreviewDialog
+        open={previewOpen}
+        src={previewSrc}
+        title={previewTitle}
+        onClose={() => setPreviewOpen(false)}
+      />
     </div>
   )
 }

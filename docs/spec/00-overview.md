@@ -35,7 +35,7 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    UI[界面层<br/>React 19 + Ant Design 6<br/>无边框顶栏 / 搜索 / 面板 / 设置] --> CANVAS[画布层<br/>Konva 虚拟化渲染<br/>视口裁剪 / LOD / 空间索引]
+    UI[界面层<br/>React 19 + Ant Design 6<br/>无边框标题栏 / 搜索 / 面板 / 设置] --> CANVAS[画布层<br/>Konva 虚拟化渲染<br/>视口裁剪 / LOD / 空间索引]
     CANVAS --> DOMAIN[领域层<br/>纯 TS：refs / nodes / edges / 标注 / 命令 / 撤销]
     DOMAIN --> IPC[Tauri invoke<br/>结构化命令]
     IPC --> CORE[Rust 核心<br/>导入 / SQLite / 剪贴板 / Shell 缩略图 / opener]
@@ -68,11 +68,11 @@ flowchart TB
 **v1 做**：
 
 - 无限画布、文件/文件夹/文字/截图/URL 导入、文件路径去重、重复定位。
-- 系统图标 + 高密度紧凑行；无边框自定义标题栏与项目 logo；顶部搜索常驻。
+- 系统图标 + 高密度紧凑行；无边框自定义标题栏（logo、居中搜索、窗口按钮）；顶部搜索常驻。
 - 文件/图片/链接/文字/分组框卡片；有向连线；结构化标注。
 - 顶部模糊搜索、定位高亮、打开原文件/URL/图片查看器、资源管理器定位。
 - `dataWorkSpace` 本地存储与设置迁移；系统缩略图/图标。
-- 紧凑模式、不可见暂停渲染、十万级容量架构。
+- 不可见暂停渲染、十万级容量架构。
 
 **v1 不做**：
 

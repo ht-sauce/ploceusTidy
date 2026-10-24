@@ -16,6 +16,7 @@ export const desktopApi = {
     invoke<string>('save_clipboard_image', { data, ext }),
   previewRef: (nodeId: string) => invoke<string>('preview_ref', { nodeId }),
   workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
+  openDevtools: () => invoke<void>('open_devtools'),
 }
 
 export const desktopWindow = {

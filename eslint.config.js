@@ -14,7 +14,6 @@ export default tseslint.config(
       'dataWorkSpace',
       'desktop/target',
       'desktop/gen',
-      'prototypes/archive',
       'client/vite-env.d.ts',
       'prettier.config.cjs',
     ],

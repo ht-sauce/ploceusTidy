@@ -43,43 +43,17 @@ button {
   height: 100%;
 }
 
-.desktop {
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  background: var(--bg);
-}
-
 .app-shell {
-  width: min(1440px, 96vw);
-  height: min(900px, 92vh);
-  min-height: 520px;
+  width: 100vw;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--paper);
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.16);
-}
-
-.app-shell.is-maximized {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  border: 0;
-  border-radius: 0;
-}
-
-.app-shell.is-compact {
-  width: min(780px, 96vw);
-  height: min(520px, 92vh);
 }
 
 .title-bar {
+  position: relative;
   flex: 0 0 48px;
   height: 48px;
   display: flex;
@@ -113,10 +87,10 @@ button {
 }
 
 .search-area {
-  position: relative;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   width: min(440px, 42vw);
-  flex: 0 1 440px;
-  margin-left: 8px;
 }
 
 .search-input.ant-input-affix-wrapper {
@@ -265,11 +239,6 @@ button {
 .title-icon-btn.ant-btn:hover {
   background: #f1f1ee;
   color: var(--text);
-}
-
-.title-icon-btn.is-on {
-  color: var(--accent);
-  background: var(--accent-soft);
 }
 
 .window-divider {
@@ -814,20 +783,6 @@ button {
   margin-top: 12px;
 }
 
-.app-shell.is-compact .minimap,
-.app-shell.is-compact .details-panel,
-.app-shell.is-compact .proto-hint {
-  display: none;
-}
-
-.app-shell.is-compact .search-area {
-  width: min(360px, 55vw);
-}
-
-.app-shell.is-compact .brand-name {
-  display: none;
-}
-
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -859,17 +814,6 @@ button {
 }
 
 @media (max-width: 720px) {
-  .desktop {
-    padding: 0;
-  }
-
-  .app-shell {
-    width: 100vw;
-    height: 100vh;
-    border: 0;
-    border-radius: 0;
-  }
-
   .brand-name,
   .window-divider {
     display: none;
