@@ -36,6 +36,8 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
   const { addNode, setNodes, setSelectedIds } = store
   // 同一次粘贴可能同时触发 keydown 与 paste 事件，500ms 内只处理一次。
   const clipboardGuard = useRef(0)
+  // 同一次拖入可能被重复派发 drop；相同路径在短窗口内只导入一次，避免「已存在」刷屏。
+  const importGuard = useRef<{ key: string; at: number }>({ key: '', at: 0 })
 
   const focusNewNode = useCallback(
     (node: SceneNode) => {
@@ -107,9 +109,14 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
   const importPaths = useCallback(
     async (paths: string[]) => {
       if (!isDesktopClient || paths.length === 0) return
+      const unique = Array.from(new Set(paths))
+      const signature = unique.join('|')
+      const now = Date.now()
+      if (importGuard.current.key === signature && now - importGuard.current.at < 1200) return
+      importGuard.current = { key: signature, at: now }
       const center = getCenterWorld()
       try {
-        const result = await desktopApi.importPaths(paths, center.x, center.y)
+        const result = await desktopApi.importPaths(unique, center.x, center.y)
         if (result.created.length || result.existing.length) {
           setNodes((previous) => mergeNodes(previous, [...result.created, ...result.existing]))
           const target = result.created[0] ?? result.existing[0]

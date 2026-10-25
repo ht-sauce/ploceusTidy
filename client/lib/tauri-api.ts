@@ -41,6 +41,9 @@ export const desktopApi = {
   workspaceMigrate: (target: string) => invoke<WorkspaceInfo>('workspace_migrate', { target }),
   /** 桌面常驻：把窗口压到普通窗口之下。 */
   windowSetPin: (pinned: boolean) => invoke<void>('window_set_pin', { pinned }),
+  /** 在指定屏幕坐标弹出 Windows 原生文件右键菜单（含 Shell 扩展）。 */
+  showSystemMenu: (nodeId: string, x: number, y: number) =>
+    invoke<void>('show_system_menu', { nodeId, x: Math.round(x), y: Math.round(y) }),
   /** 选择一个文件用于重新关联；取消返回 null。 */
   pickFile: () => invoke<string | null>('pick_file'),
   /** 选择迁移目标目录；取消返回 null。 */

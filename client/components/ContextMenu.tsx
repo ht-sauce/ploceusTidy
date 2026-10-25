@@ -11,8 +11,13 @@ interface ContextMenuProps {
 }
 
 export default function ContextMenu({ x, y, entries, onAction }: ContextMenuProps) {
+  // 菜单最多占 70% 视口；同时不超过窗口底部，超出部分在容器内滚动。
+  const maxHeight = Math.max(
+    160,
+    Math.min(window.innerHeight * 0.7, 520, window.innerHeight - y - 8),
+  )
   return (
-    <div className="context-menu" style={{ left: x, top: y }} role="menu">
+    <div className="context-menu" style={{ left: x, top: y, maxHeight }} role="menu">
       {entries.map((entry) =>
         entry.divider ? (
           <div key={entry.key} className="context-divider" />

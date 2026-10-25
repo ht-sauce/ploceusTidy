@@ -51,7 +51,7 @@ ploceusTidy/
 │   │   ├── useScenePersistence.ts  # 加载/保存/缺失校验/拖入监听
 │   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴
 │   │   ├── useNodeActions.ts       # 打开、定位、预览、重连、双击激活
-│   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作
+│   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作（含系统菜单入口）
 │   │   ├── useShortcuts.ts         # 全局快捷键映射
 │   │   └── useSearch.ts            # 搜索条目与排序
 │   ├── canvas/                     # 画布域（Konva 渲染与交互）
@@ -59,7 +59,7 @@ ploceusTidy/
 │   │   ├── useCanvasViewport.ts    # 视口缩放、定位、适配、缩放回调
 │   │   ├── useVisibleScene.ts      # rbush 视口裁剪、连线筛选
 │   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线/悬停会话
-│   │   ├── useVisibleThumbnails.ts # 可见图片缩略图延迟加载
+│   │   ├── useVisibleThumbnails.ts # 可见图片 / 可执行对象的缩略图与图标延迟加载
 │   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条、四向锚点
 │   │   ├── GroupShape.tsx          # 空间实线框与命中区域
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
@@ -89,9 +89,9 @@ ploceusTidy/
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
 │       ├── main.rs / lib.rs        # Tauri 启动、命令注册
-│       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重、校验/重连、缩略图、app_meta
+│       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重与图标刷新、校验/重连、缩略图、app_meta
 │       ├── models.rs               # IPC DTO
-│       └── platform.rs             # 路径规范化、文件类型、剪贴板文件、Shell 缩略图、窗口置底
+│       └── platform.rs             # 路径规范化、文件类型、剪贴板文件、Shell 缩略图、原生右键菜单、窗口置底
 ├── docs/
 │   ├── README.md / REQUIREMENTS.md / project-overview.md / coding-conventions.md
 │   └── spec/                       # 00–08

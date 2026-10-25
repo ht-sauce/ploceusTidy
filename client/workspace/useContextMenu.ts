@@ -24,6 +24,8 @@ interface ContextMenuOptions {
   pickEdgeColor: (id: string) => void
   /** 跳转到当前对象/空间的关联对象；一对多时由调用方弹出选择。 */
   locateNeighbor: (targetId: string) => void
+  /** 调起 Windows 原生文件右键菜单（含系统与第三方 Shell 扩展）。 */
+  openSystemMenu: (nodeId: string, x: number, y: number) => void
 }
 
 export function useContextMenu({
@@ -36,11 +38,14 @@ export function useContextMenu({
   pickGroupColor,
   pickEdgeColor,
   locateNeighbor,
+  openSystemMenu,
 }: ContextMenuOptions) {
   const [menu, setMenu] = useState<{
     target: CanvasContextTarget
     x: number
     y: number
+    anchorX: number
+    anchorY: number
   } | null>(null)
 
   const {
@@ -62,11 +67,13 @@ export function useContextMenu({
       if (target.kind === 'node') selectNode(target.id, false)
       else if (target.kind === 'group') selectGroup(target.id)
       else selectEdge(target.id)
-      // 菜单不能超出窗口。
+      // 菜单不能超出窗口；高度上限由 ContextMenu 按剩余空间计算，超出时内部滚动。
       setMenu({
         target,
         x: Math.min(clientX, window.innerWidth - 190),
         y: Math.min(clientY, window.innerHeight - 240),
+        anchorX: clientX,
+        anchorY: clientY,
       })
     },
     [selectEdge, selectGroup, selectNode],
@@ -93,7 +100,9 @@ export function useContextMenu({
       else if (key === 'edge-color') pickEdgeColor(target.id)
       else if (key === 'group-rename') renameGroup(target.id)
       else if (key === 'group-color') pickGroupColor(target.id)
-      else if (key === 'delete') deleteTarget(target)
+      else if (key === 'system-menu' && node) {
+        openSystemMenu(node.id, current.anchorX, current.anchorY)
+      } else if (key === 'delete') deleteTarget(target)
     },
     [
       addAnnotation,
@@ -105,6 +114,7 @@ export function useContextMenu({
       nodeById,
       openDetails,
       openNode,
+      openSystemMenu,
       pickEdgeColor,
       pickGroupColor,
       renameGroup,
@@ -141,6 +151,10 @@ export function useContextMenu({
       items.push({ key: 'annotate', label: '添加标注' })
       items.push({ key: 'details', label: '属性' })
       items.push({ key: 'divider-1', label: '', divider: true })
+      if (node.kind !== 'text' && node.kind !== 'link') {
+        items.push({ key: 'system-menu', label: '系统右键菜单…' })
+        items.push({ key: 'divider-2', label: '', divider: true })
+      }
       items.push({ key: 'delete', label: '从画布删除', danger: true })
       return items
     }

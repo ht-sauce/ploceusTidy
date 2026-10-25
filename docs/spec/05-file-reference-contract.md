@@ -44,9 +44,10 @@
 ## 5. 缩略图与图标
 
 - Windows 使用系统 Shell：
-  - `IShellItemImageFactory::GetImage` 获取与资源管理器一致的缩略图。
-  - 失败时回退 `SHGetFileInfoW` 图标。
+  - `IShellItemImageFactory::GetImage` 获取与资源管理器一致的缩略图与图标。
+  - 失败时返回空，由前端回退内置类型图标；不静默显示错误。
   - EXE、文件夹、图片、视频、Office/PDF 等由系统提供者决定；不自建图标集。
+- 快捷方式（`.lnk`）：按可执行对象入库（`kind=file`、`icon=exe`），通过 Shell 取目标程序图标；旧节点在再次导入时刷新类型与图标。
 - 剪贴板图片按扩展名保存到 `assets/`，需要时由 Shell 生成缩略图。
 - 图片预览当前由 `preview_ref` 返回 data URL（≤24MB）；后续可改为自定义协议按 `refId` 查库，避免大图 base64 传输。
 - 仅对可见卡片请求缩略图；同屏并发受限。

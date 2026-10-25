@@ -13,7 +13,11 @@ export function useVisibleThumbnails(visibleNodes: SceneNode[]) {
   useEffect(() => {
     if (!isDesktopClient) return
     const pending = visibleNodes.filter(
-      (node) => node.kind === 'image' && node.isExists && !THUMB_IMAGES.has(node.id),
+      (node) =>
+        node.isExists &&
+        !THUMB_IMAGES.has(node.id) &&
+        // 图片取缩略图；exe / 快捷方式取 Windows Shell 图标，避免显示成通用文本图标。
+        (node.kind === 'image' || node.icon === 'exe'),
     )
     if (pending.length === 0) return
     const timer = window.setTimeout(() => {

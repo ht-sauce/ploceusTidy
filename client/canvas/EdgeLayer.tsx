@@ -59,6 +59,10 @@ export default function EdgeLayer({
               fill={color}
               strokeWidth={active ? 3 : 2.2}
               dash={[8, 5]}
+              // 选中时用主题色/自定义色的边缘发光提示，比单纯加粗更醒目。
+              shadowColor={color}
+              shadowBlur={active ? 14 : 0}
+              shadowOpacity={active ? 0.65 : 0}
               hitStrokeWidth={16}
               onClick={(event) => {
                 event.cancelBubble = true

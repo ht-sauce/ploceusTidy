@@ -768,7 +768,18 @@ pub fn import_paths(state: &AppState, request: &ImportRequest) -> Result<ImportR
             .optional()
             .map_err(|error| format!("查询重复文件失败：{error}"))?;
 
-        if let Some(node) = existing_node {
+        if let Some(mut node) = existing_node {
+            // 旧版本可能把快捷方式记成文本文档；导入时刷新类型与图标，避免继续显示通用图标。
+            if node.kind != kind || node.icon != icon {
+                transaction
+                    .execute(
+                        "UPDATE nodes SET type = ?2, icon = ?3, updated_at = ?4 WHERE id = ?1",
+                        params![&node.id, kind, icon, timestamp],
+                    )
+                    .map_err(|error| format!("刷新节点图标失败：{error}"))?;
+                node.kind = kind.to_string();
+                node.icon = icon.to_string();
+            }
             existing.push(node);
             continue;
         }

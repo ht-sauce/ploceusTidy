@@ -447,6 +447,8 @@ button {
   position: fixed;
   z-index: 400;
   min-width: 176px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
   padding: 4px;
   background: var(--surface);
   border: 1px solid var(--line-strong);

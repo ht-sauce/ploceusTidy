@@ -99,6 +99,7 @@ sequenceDiagram
 | `workspace_migrate` | 目标目录 | 复制-校验-切换后的工作空间信息；失败保留旧目录 |
 | `pick_file` / `pick_folder` | 无 | 系统文件/目录选择对话框；取消返回 `null` |
 | `window_set_pin` | pinned | 桌面常驻：窗口压到普通窗口之下 |
+| `show_system_menu` | nodeId、x、y | 在主线程弹出 Windows 原生 Shell 右键菜单（IContextMenu + TrackPopupMenuEx），含第三方扩展 |
 | `open_devtools` | 无 | F12 打开开发者工具 |
 
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
@@ -198,7 +199,7 @@ ploceusTidy/
 | uuid 1.29 | 自定义 ID | 主键与关联键统一 UUID TEXT |
 | base64 0.22 / serde 1 / serde_json 1 | IPC 编码与序列化 | 图片 data URL、场景快照传输 |
 | clipboard-win 5.4 | Windows 文件剪贴板 | CF_HDROP 文件列表 |
-| windows 0.61 + image 0.25 | Shell 缩略图、窗口置底 | IShellItemImageFactory / SetWindowPos；image 仅用于 PNG 编码 |
+| windows 0.61 + image 0.25 | Shell 缩略图、窗口置底、原生右键菜单 | IShellItemImageFactory / SetWindowPos / IContextMenu + TrackPopupMenuEx；image 仅用于 PNG 编码 |
 | tauri-plugin-opener 2 / tauri-plugin-dialog 2 | 打开/定位、重新关联与迁移 | openPath / revealItemInDir、原生选择器 |
 
 > 不引入 React Flow：DOM 节点在万级规模不可控。画布引擎见 ADR-005，已用 Konva + rbush 落地。

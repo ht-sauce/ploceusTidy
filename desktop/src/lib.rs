@@ -164,6 +164,31 @@ fn window_set_pin(window: tauri::WebviewWindow, pinned: bool) -> Result<(), Stri
     platform::set_window_bottom(hwnd.0 as isize, pinned)
 }
 
+/// 在指定屏幕坐标弹出 Windows 原生文件右键菜单；只接受 nodeId，路径由数据库解析。
+#[tauri::command]
+fn show_system_menu(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    node_id: String,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    let (path, _url) = db::node_target(&state, &node_id)?;
+    let path = path.ok_or_else(|| "该对象没有对应的系统文件".to_string())?;
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("获取窗口句柄失败：{error}"))?;
+    let raw_hwnd = hwnd.0 as isize;
+    // Shell 菜单需要在自己的模态消息循环中运行，放主线程执行，命令本身立即返回。
+    window
+        .run_on_main_thread(move || {
+            if let Err(error) = platform::show_system_context_menu(raw_hwnd, &path, x, y) {
+                eprintln!("系统右键菜单失败：{error}");
+            }
+        })
+        .map_err(|error| format!("调度系统菜单失败：{error}"))
+}
+
 /// 读取应用配置；主题、桌面常驻等开关都存 `app_meta`，不散落在前端存储。
 #[tauri::command]
 fn meta_get(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
@@ -290,6 +315,7 @@ pub fn run() {
             workspace_migrate,
             thumb_get,
             window_set_pin,
+            show_system_menu,
             pick_file,
             pick_folder,
         ])

@@ -246,6 +246,17 @@
   - 只在创建时分组：无法表达后续整理；否决。
 - 后果：`groups` 增加 `color` 列，`SCHEMA_VERSION` 升到 2；拖动结束需要额外计算空间归属；取色器使用 Ant Design `ColorPicker`，初始包体增大。
 
+### ADR-018 自定义右键菜单追加 Windows 原生 Shell 菜单
+
+- 状态：accepted
+- 日期：2026-10-25
+- 背景：项目自身的右键菜单只覆盖打开、定位、标注、属性、删除等操作；用户在资源管理器里常用的 WinRAR、Git、电脑管家等 Shell 扩展无法从画布触发。
+- 决策：文件/文件夹/快捷方式的右键菜单底部追加「系统右键菜单…」；点击后由 Rust 在主线程用 `IContextMenu` + `TrackPopupMenuEx` 弹出 Windows 原生菜单，保留第三方扩展；菜单坐标由 `ClientToScreen` 从窗口内坐标换算。自定义菜单过长时在容器内滚动，不把系统菜单项硬塞进 HTML 菜单。
+- 备选方案：
+  - 在 HTML 菜单里复刻系统菜单项：无法覆盖未知第三方扩展，且需要维护命令映射；否决。
+  - 直接把原生菜单当作唯一右键菜单：失去项目自身操作与统一主题外观；否决。
+- 后果：`TrackPopupMenuEx` 会运行模态消息循环，必须放到窗口所属主线程（`run_on_main_thread`）；新增 `show_system_menu` IPC 与 `Win32_UI_Shell` / `Win32_UI_Shell_Common` feature。
+
 ## 5. 待复核
 
 | 事项 | 触发时机 | 说明 |

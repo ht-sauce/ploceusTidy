@@ -411,7 +411,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
               height={nodeDisplayHeight(node, annotationByNode.has(node.id))}
               annotation={annotationByNode.get(node.id)}
               icon={ICON_IMAGES.get(node.icon)}
-              thumb={node.thumbKey || node.kind === 'image' ? THUMB_IMAGES.get(node.id) : null}
+              thumb={THUMB_IMAGES.get(node.id) ?? null}
               selected={selectedSet.has(node.id)}
               singleSelected={selectedSet.size === 1}
               tokens={tokens}

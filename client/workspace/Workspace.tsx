@@ -66,28 +66,39 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   // ---------- 桌面动作 ----------
 
+  // 这些回调会进入拖入/导入 hook 的依赖链，保持稳定，避免重复订阅拖放事件。
+  const locateById = useCallback((id: string) => canvasRef.current?.locateTarget(id), [])
+  const editTextById = useCallback((id: string) => canvasRef.current?.editText(id), [])
+  const selectNode = store.selectNode
+  const selectById = useCallback((id: string) => selectNode(id, false), [selectNode])
+  const getCenterWorld = useCallback(
+    () => canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 },
+    [],
+  )
+
   const actions = useNodeActions({
     message,
     onNodePatched: (node: SceneNode) =>
       store.setNodes((previous) => previous.map((item) => (item.id === node.id ? node : item))),
-    locate: (id) => canvasRef.current?.locateNode(id),
-    editText: (id) => canvasRef.current?.editText(id),
-    select: (id) => store.selectNode(id, false),
+    locate: locateById,
+    editText: editTextById,
+    select: selectById,
   })
 
   const importers = useImportClipboard({
     store,
     message,
-    getCenterWorld: () => canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 },
-    locate: (id) => canvasRef.current?.locateNode(id),
+    getCenterWorld,
+    locate: locateById,
   })
+  const { importPaths } = importers
 
   const onHydrated = useCallback((isEmpty: boolean) => setEmptyDismissed(!isEmpty), [])
   const onImportPaths = useCallback(
     (paths: string[]) => {
-      void importers.importPaths(paths)
+      void importPaths(paths)
     },
-    [importers],
+    [importPaths],
   )
 
   const { workspace, setWorkspace } = useScenePersistence({
@@ -188,6 +199,15 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     pickGroupColor: openGroupColor,
     pickEdgeColor: openEdgeColor,
     locateNeighbor,
+    openSystemMenu: (nodeId, x, y) => {
+      if (!isDesktopClient) {
+        message.info('系统右键菜单仅在桌面客户端可用')
+        return
+      }
+      void desktopApi
+        .showSystemMenu(nodeId, x, y)
+        .catch((error) => message.error(`打开系统菜单失败：${String(error)}`))
+    },
   })
 
   // ---------- 场景命令（带提示） ----------

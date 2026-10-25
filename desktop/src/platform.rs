@@ -53,6 +53,8 @@ pub fn file_icon_and_kind(path: &Path) -> (&'static str, &'static str) {
         "xls" | "xlsx" | "csv" => ("file", "xlsx"),
         "dwg" | "dxf" => ("file", "dwg"),
         "exe" | "msi" => ("file", "exe"),
+        // 快捷方式按可执行程序展示，前端再叠加 Shell 图标，避免显示成普通文本文件。
+        "lnk" => ("file", "exe"),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" => ("image", "image"),
         "mp4" | "mkv" | "avi" | "mov" | "webm" => ("video", "video"),
         "txt" | "md" | "log" | "json" | "yaml" | "yml" => ("file", "txt"),
@@ -119,6 +121,10 @@ mod tests {
         assert_eq!(
             file_icon_and_kind(Path::new(r"C:\a\b.mp4")),
             ("video", "video")
+        );
+        assert_eq!(
+            file_icon_and_kind(Path::new(r"C:\a\b.lnk")),
+            ("file", "exe")
         );
         assert_eq!(
             file_icon_and_kind(Path::new(r"C:\a\b.xyz")),
@@ -284,4 +290,142 @@ pub fn set_window_bottom(hwnd: isize, pinned: bool) -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn set_window_bottom(_hwnd: isize, _pinned: bool) -> Result<(), String> {
     Err("当前版本仅支持 Windows 桌面常驻".to_string())
+}
+
+/// 在指定屏幕坐标同步弹出 Windows 原生文件右键菜单（含第三方 Shell 扩展）。
+/// 调用方应放到主线程执行：`TrackPopupMenuEx` 会运行自己的模态消息循环。
+#[cfg(windows)]
+pub fn show_system_context_menu(hwnd: isize, path: &str, x: i32, y: i32) -> Result<(), String> {
+    if !Path::new(path).exists() {
+        return Err("文件不存在，无法打开系统菜单".to_string());
+    }
+    unsafe { show_system_context_menu_blocking(hwnd, path, x, y) }
+}
+
+#[cfg(windows)]
+unsafe fn show_system_context_menu_blocking(
+    hwnd: isize,
+    path: &str,
+    x: i32,
+    y: i32,
+) -> Result<(), String> {
+    use std::mem::size_of;
+    use windows::core::{HSTRING, PCSTR};
+    use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        IContextMenu, IShellFolder, SHBindToParent, SHParseDisplayName, CMINVOKECOMMANDINFO,
+        CMINVOKECOMMANDINFOEX, CMF_EXTENDEDVERBS, CMF_NORMAL,
+    };
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreatePopupMenu, DestroyMenu, PostMessageW, SetForegroundWindow, TrackPopupMenuEx,
+        TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN, WM_NULL,
+    };
+
+    let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+    let result = (|| -> Result<(), String> {
+        let window = HWND(hwnd as *mut core::ffi::c_void);
+        let mut pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST = std::ptr::null_mut();
+        SHParseDisplayName(&HSTRING::from(path), None, &mut pidl, 0, None)
+            .map_err(|error| format!("解析路径失败：{error}"))?;
+        if pidl.is_null() {
+            return Err("解析路径失败：空 PIDL".to_string());
+        }
+
+        let cleanup = |pidl: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST| {
+            CoTaskMemFree(Some(pidl as *const core::ffi::c_void));
+        };
+        let mut child: *mut windows::Win32::UI::Shell::Common::ITEMIDLIST = std::ptr::null_mut();
+        let folder: IShellFolder = match SHBindToParent(pidl as *const _, Some(&mut child)) {
+            Ok(folder) => folder,
+            Err(error) => {
+                cleanup(pidl);
+                return Err(format!("绑定父目录失败：{error}"));
+            }
+        };
+        let menu: IContextMenu = match folder.GetUIObjectOf(window, &[child as *const _], None) {
+            Ok(menu) => menu,
+            Err(error) => {
+                cleanup(pidl);
+                return Err(format!("获取系统菜单失败：{error}"));
+            }
+        };
+        let hmenu = CreatePopupMenu().map_err(|error| format!("创建菜单失败：{error}"))?;
+
+        let query = menu.QueryContextMenu(
+            hmenu,
+            0,
+            1,
+            0x7FFF,
+            CMF_NORMAL | CMF_EXTENDEDVERBS,
+        );
+        if query.is_err() {
+            let _ = DestroyMenu(hmenu);
+            cleanup(pidl);
+            return Err(format!("构建系统菜单失败：{query:?}"));
+        }
+
+        let _ = SetForegroundWindow(window);
+        // 前端给的是窗口内坐标，Shell 菜单需要屏幕坐标。
+        let mut anchor = POINT { x, y };
+        let _ = ClientToScreen(window, &mut anchor);
+        // 等当前鼠标事件序列结束后再弹菜单，否则会被同一次 mouseup 立刻取消。
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let command = TrackPopupMenuEx(
+            hmenu,
+            (TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN).0,
+            anchor.x,
+            anchor.y,
+            window,
+            None,
+        )
+        .0;
+        // 菜单关闭后补一条空消息，避免窗口停留在菜单模式。
+        let _ = PostMessageW(Some(window), WM_NULL, Default::default(), Default::default());
+
+        if command != 0 {
+            // 菜单命令 ID 从 1 开始，转换回 Shell 约定的 0 起偏移。
+            let info = CMINVOKECOMMANDINFOEX {
+                cbSize: size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+                fMask: 0,
+                hwnd: window,
+                lpVerb: PCSTR((command - 1) as usize as *const u8),
+                lpParameters: PCSTR::null(),
+                lpDirectory: PCSTR::null(),
+                nShow: 1,
+                dwHotKey: 0,
+                hIcon: HANDLE::default(),
+                lpTitle: PCSTR::null(),
+                lpVerbW: windows::core::PCWSTR::null(),
+                lpParametersW: windows::core::PCWSTR::null(),
+                lpDirectoryW: windows::core::PCWSTR::null(),
+                lpTitleW: windows::core::PCWSTR::null(),
+                ptInvoke: anchor,
+            };
+            menu.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO)
+                .map_err(|error| format!("执行系统菜单命令失败：{error}"))?;
+        }
+
+        let _ = DestroyMenu(hmenu);
+        cleanup(pidl);
+        Ok(())
+    })();
+
+    if initialized {
+        CoUninitialize();
+    }
+    result
+}
+
+#[cfg(not(windows))]
+pub fn show_system_context_menu(
+    _hwnd: isize,
+    _path: &str,
+    _x: i32,
+    _y: i32,
+) -> Result<(), String> {
+    Err("当前版本仅支持 Windows 系统右键菜单".to_string())
 }
