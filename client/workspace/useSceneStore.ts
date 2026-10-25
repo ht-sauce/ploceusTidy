@@ -70,6 +70,8 @@ export interface SceneStore {
 
   nodeById: Map<string, SceneNode>
   groupById: Map<string, SceneGroup>
+  /** 每个空间的成员数（随 nodes 变化重算一次）。 */
+  groupCounts: Map<string, number>
   activeAnnotation: SceneAnnotation | null
   annotationTargets: SceneNode[]
   detailsNode: SceneNode | null
@@ -128,6 +130,14 @@ export function useSceneStore(): SceneStore {
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
+  /** 每个空间的成员数：右键菜单等处按 id 读取，避免每次全量 filter。 */
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    nodes.forEach((node) => {
+      if (node.groupId) counts.set(node.groupId, (counts.get(node.groupId) ?? 0) + 1)
+    })
+    return counts
+  }, [nodes])
   /** 标注会让图标格多出 12px，布局碰撞按展示高度计算。 */
   const annotatedIds = useMemo(
     () => new Set(annotations.flatMap((annotation) => annotation.nodeIds)),
@@ -784,6 +794,7 @@ export function useSceneStore(): SceneStore {
     detailsMode,
     nodeById,
     groupById,
+    groupCounts,
     activeAnnotation,
     annotationTargets,
     detailsNode,

@@ -54,7 +54,7 @@ export function useContextMenu({
   const {
     nodeById,
     groupById,
-    nodes,
+    groupCounts,
     edges,
     selectNode,
     selectGroup,
@@ -140,7 +140,7 @@ export function useContextMenu({
       const items: ContextMenuEntry[] = []
       const hasNeighbor = edges.some((edge) => edge.from === node.id || edge.to === node.id)
       if (node.kind === 'text') items.push({ key: 'edit-text', label: '编辑文字' })
-      else if (node.kind === 'image') items.push({ key: 'open', label: '预览图片' })
+      else if (node.kind === 'image') items.push({ key: 'open', label: '打开图片' })
       else {
         items.push({
           key: 'open',
@@ -177,7 +177,8 @@ export function useContextMenu({
       ]
     }
     const group = groupById.get(target.id)
-    const count = group ? nodes.filter((item) => item.groupId === group.id).length : 0
+    // 成员数来自 store 的计数 Map：菜单打开时不再对全量节点做 filter。
+    const count = group ? (groupCounts.get(group.id) ?? 0) : 0
     const hasNeighbor = edges.some((edge) => edge.from === target.id || edge.to === target.id)
     return [
       { key: 'group-rename', label: '重命名空间' },

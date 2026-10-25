@@ -295,7 +295,7 @@
 - 状态：accepted
 - 日期：2026-10-25
 - 背景：10 万对象下拖动明显卡顿、空间「拖不动」、选中响应慢。确诊的根因都在 JS 侧而非渲染侧：① 空间拖动每帧把位移提交回 React 状态（全量 `setNodes` 映射 + 重渲染），每帧 O(N)；② 节点拖动每帧 `stage.find('Arrow')` 遍历全部图形并对每条箭头做 `edges.find`，万级连线时是每帧百万次比较；③ 每次状态变化（含选中）重建 10 万条搜索条目（含拼音转换）并对全量节点做迷你地图抽样 filter；④ 可见节点裁剪每帧对全量数组 filter；⑤ `Math.min(...nodes.map())` 在 10 万参数下超出调用栈。Konva 的 Canvas2D 绘制本身由 WebView2/Skia 走 GPU 合成，且只渲染视口内的对象，瓶颈不在显卡。
-- 决策：拖动一律「视觉直驱 + 松手一次性提交」——拖动期直接驱动 Konva 图形位置（节点/空间框/空间标题/受影响箭头），不触碰 React 状态；松手时统一做落点判定并一次性提交。连线跟随用「节点 → 连线」倒排索引，每帧只更新受影响的箭头几何，不再 `stage.find` 全量遍历。图元组件（`NodeShape` / `GroupShape` / `EdgeLayer`）用 `React.memo` 包装，配合稳定的 tokens 与经 ref 转发的事件处理器，选中/平移等无关重渲染只影响真正变化的图形。搜索条目懒构建（空查询不构建全量条目）+ 预归一化（每键只做字符串比较）+ 拼音缓存空闲分批预热。可见节点直接映射 rbush 命中项（O(命中数)），连线同样按视口裁剪（端点包络盒判定，缩小画布时视口覆盖全部、关系网仍完整）。迷你地图包围盒与抽样点各自记忆化，不再随平移每帧全量扫描。大数组的 `Math.min(...map)` 展开全部改为单次循环。
+- 决策：拖动一律「视觉直驱 + 松手一次性提交」——拖动期直接驱动 Konva 图形位置（节点/空间框/空间标题/受影响箭头），不触碰 React 状态；松手时统一做落点判定并一次性提交。连线跟随用「节点 → 连线」倒排索引，每帧只更新受影响的箭头几何，不再 `stage.find` 全量遍历。图元组件（`NodeShape` / `GroupShape` / `EdgeLayer`）用 `React.memo` 包装，配合稳定的 tokens 与经 ref 转发的事件处理器，选中/平移等无关重渲染只影响真正变化的图形。搜索条目懒构建（空查询不构建全量条目）+ 预归一化（每键只做字符串比较）+ 拼音缓存空闲分批预热 + top-9 线性选择（省掉全量排序）。可见节点直接映射 rbush 命中项（O(命中数)），连线同样按视口裁剪（端点包络盒判定，缩小画布时视口覆盖全部、关系网仍完整）。迷你地图分布图改为单 canvas 绘制（对象点/空间框只在场景变化时重绘，平移只更新视口框 DOM）。大数组的 `Math.min(...map)` 展开全部改为单次循环。**超大选择集（>2000）拖动降级**：不逐个驱动图形与连线，只移动一个包围盒 ghost（视觉直驱），松手按整体包围盒做一次落点判定后一次提交。构建期手动分包：antd / pinyin-pro / konva+rbush 拆独立 chunk，首屏主脚本从 1.7MB 降到约 310KB。
 - 备选方案：
   - WebGL 渲染器（PixiJS 等）替换 Konva：视口裁剪后同屏绘制量与总数量无关，Canvas2D 不是瓶颈；整层重写收益不成比例；否决。
   - 拖动期暂停 React 提交但保留逐帧全量计算：计算本身仍是 O(N)；否决。
@@ -307,7 +307,7 @@
 - 状态：accepted
 - 日期：2026-10-25
 - 背景：10 万画布下卡顿的一部分不在视图层而在 SQLite：单连接被 `Mutex` 串行化，`scene_save` 每次全量 upsert 约 20 万行（refs + nodes）并持有写锁数秒，期间任何读取（缩略图、配置、单节点）都在排队，表现为「操作撞在一起锁事务」；启动全量引用校验（250 批 × 每批一个事务）与初始交互竞争；每张可见缩略图都为读 path/thumb_key 锁一次库；`synchronous=FULL` 每次提交 fsync；edges 与 annotation_targets 缺少清理语句需要的索引。
-- 决策：① 读写分离——写连接保持 `Mutex` 串行，新增同一 WAL 文件的独立只读连接，场景加载/配置/单节点/缩略图元信息读走读连接，读不等待写事务提交；场景数据一次性拿完，操作过程中不按需查库。② 增量保存——`scene_save` 先读现有 `nodes` / `refs` 可变字段指纹（HashMap 对比），只 upsert 真正变化的行，10 万画布的常规保存从约 20 万次 upsert 降到个位数；groups/edges/annotations 数量级小，保持全量 upsert。③ 写只发生在操作结束之后——前端 350ms 防抖保存；启动引用校验按 `requestIdleCallback` 空闲分批（每批 400 个短事务，批间等待空闲帧），不与拖动/平移等视图操作同时进行。④ 缩略图元信息进程内缓存（path/is_exists/thumb_key，含「无缩略图」结论），每节点只查一次库，缓存文件命中完全不碰数据库；重关联/引用校验/迁移/重建后按 id 或整体失效。⑤ 连接调优：`synchronous=NORMAL`（WAL 下安全）、`temp_store=MEMORY`、`cache_size=-8000`、`mmap_size=256MB`。⑥ 索引：`edges(from_node)`、`edges(to_node)`、`annotation_targets(node_id)`（schema v3），支撑保存时的悬空边/标注目标清理。
+- 决策：① 读写分离——写连接保持 `Mutex` 串行，新增同一 WAL 文件的独立只读连接，场景加载/配置/单节点/缩略图元信息读走读连接，读不等待写事务提交；场景数据一次性拿完，操作过程中不按需查库。② 增量保存——`scene_save` 先读现有 `nodes` / `refs` 可变字段指纹（HashMap 对比），只 upsert 真正变化的行，10 万画布的常规保存从约 20 万次 upsert 降到个位数；groups/edges/annotations 数量级小，保持全量 upsert。③ 写只发生在操作结束之后——前端 350ms 防抖保存；启动引用校验按 `requestIdleCallback` 空闲分批（每批 400 个短事务，批间等待空闲帧），不与拖动/平移等视图操作同时进行。④ 缩略图元信息进程内缓存（path/is_exists/thumb_key，含「无缩略图」结论），每节点只查一次库，缓存文件命中完全不碰数据库；重关联/引用校验/迁移/重建后按 id 或整体失效。⑤ 连接调优：`synchronous=NORMAL`（WAL 下安全）、`temp_store=MEMORY`、`cache_size=-8000`、`mmap_size=256MB`。⑥ 索引：`edges(from_node)`、`edges(to_node)`、`annotation_targets(node_id)`（schema v3），支撑保存时的悬空边/标注目标清理。⑦ 序列化出主线程——保存时场景先在前端 Web Worker 里 `JSON.stringify`（`sceneSerialize.worker.ts`，不可用时回退主线程），Rust 侧 `scene_save` 接收 JSON 字符串并解析。⑧ 重命令异步化——`scene_load` / `scene_save` / `import_paths` / `ref_check` / `thumb_get` 改为 async 命令并在 `spawn_blocking` 线程池里查询/解析/写库/做文件 IO，主线程（UI 与窗口消息循环）永不被数据库与大 JSON 阻塞。
 - 备选方案：
   - 多写连接连接池：SQLite 单写者模型下只会互相 `busy`；否决。
   - 每次修改发差异集（增量事件持久化）：所有命令都要维护差异语义，遗漏即数据漂移；指纹对比在 Rust 侧集中处理，风险更低；选后者。
@@ -319,9 +319,10 @@
 
 | 事项 | 触发时机 | 说明 |
 | --- | --- | --- |
-| Tauri 剪贴板文件路径 spike | M0 | `clipboard-win::raw::get_file_list` 在目标 Windows 上验证；失败则用 `windows` crate 直读 `CF_HDROP` |
-| 画布 1 万/10 万基准 | M2/M4 | 验证视口裁剪、空间索引、缩略图节流与高清倍率的显存开销 |
+| Tauri 剪贴板文件路径 | 已完成 | Windows `CF_HDROP` 可用；macOS NSPasteboard、Linux wl-paste/xclip 已有实现 |
+| 画布 1 万/10 万基准 | 已完成 | 已实测（数字为性能优化前测得）；需要新数字时用 `PLOCEUS_BENCH_SEED` 重测 |
 | 搜索索引升级 | 5 万引用后 | 当前为内存子串匹配 + 拼音首字母缓存；届时评估 FTS5 trigram / 内存 n-gram 索引 |
 | 百万级画布 | 有真实需求时 | 渲染已按视口裁剪与总量无关；剩余一次性 O(N) 成本（rbush 重建、数组映射、整场景持久化）需改增量索引与增量写库 |
 | 多画布 | v2 评估 | 当前单画布 + 空间（分组框） |
-| macOS/Linux | 后续 | 剪贴板、Shell 缩略图、打包分别补平台实现 |
+| macOS/Linux | 后续 | 剪贴板已有；Shell 缩略图降级；打包（dmg/AppImage/deb）与真机验证未做 |
+| 代码签名 | 发布前 | NSIS 已验收；签名未做，不影响功能验证 |

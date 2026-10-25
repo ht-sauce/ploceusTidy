@@ -9,6 +9,12 @@ export const MINIMAP_MIN_H = 900
 /** 迷你地图最多绘制的对象点数，超大画布按步长抽样，避免 DOM 爆炸。 */
 export const MINIMAP_MAX_DOTS = 400
 
+/**
+ * 超大选择集拖动降级阈值：选中数量超过它时，拖动只移动一个包围盒 ghost，
+ * 不逐个驱动 Konva 图形（10 万次 position 调用每帧必然卡死），松手一次提交。
+ */
+export const GHOST_DRAG_LIMIT = 2000
+
 /** 图标格两行约能放下 12 个中文字符，超出就压缩主体、保留后缀。 */
 export const NAME_LINE_BUDGET = 6
 

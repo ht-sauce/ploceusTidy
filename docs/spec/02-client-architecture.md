@@ -81,13 +81,12 @@ sequenceDiagram
 | 命令 | 输入 | 输出 |
 | --- | --- | --- |
 | `workspace_get` | 无 | dataWorkSpace 路径、DB 路径、节点数、占用大小 |
-| `scene_load` | 无 | 全部节点/分组/边/标注 |
-| `scene_save` | `SceneData` | 成功/失败；按 ID 增量 upsert，事务内清理快照外的对象 |
+| `scene_load` | 无 | 全部节点/分组/边/标注（异步命令，运行时线程查询与序列化） |
+| `scene_save` | 场景 JSON 字符串（前端 Worker 序列化） | 成功/失败；按 ID 增量 upsert，事务内清理快照外的对象（异步命令，运行时线程解析与写库） |
 | `import_paths` | 路径数组、x/y | created / existing / errors |
 | `read_clipboard_files` | 无 | Windows CF_HDROP 文件路径数组 |
 | `save_clipboard_image` | base64、扩展名 | 本地 asset 路径 |
-| `preview_ref` | nodeId | 图片 data URL（≤24MB） |
-| `open_ref` | nodeId | 打开原文件 / URL |
+| `open_ref` | nodeId | 打开原文件 / URL（图片、视频同样走系统默认程序） |
 | `reveal_ref` | nodeId | 在资源管理器中定位 |
 | `node_get` | nodeId | 单个节点（重复导入后定位刷新） |
 | `thumb_get` | nodeId、size | Shell 缩略图 data URL；不可用返回 `null` |
@@ -104,7 +103,8 @@ sequenceDiagram
 
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
 - `scene_save` 不暴露 SQL；前端只提交结构化场景。
-- 缩略图与预览已实现（`thumb_get` / `preview_ref`）；图片预览保持 data URL 方案，不新增自定义协议；搜索索引在 5 万引用后再评估。
+- 重命令（`scene_load` / `scene_save` / `import_paths` / `ref_check` / `thumb_get`）为异步命令：查询、JSON 解析、文件 IO 与 base64 都在 `spawn_blocking` 线程池执行，主线程（UI）永不等待数据库；场景序列化在前端 Web Worker 完成（`client/lib/sceneSerialize.worker.ts`），不可用时回退主线程。
+- 缩略图已实现（`thumb_get`）；图片与视频一律用系统默认程序打开，无内置预览对话框与视频封面（`preview_ref` 已移除），也不新增自定义协议；搜索索引在 5 万引用后再评估。
 
 ## 7. 源码分层（已建）
 
@@ -167,11 +167,10 @@ ploceusTidy/
 │   │   ├── TextPromptDialog.tsx
 │   │   ├── ColorPickerDialog.tsx
 │   │   ├── NeighborPickerDialog.tsx
-│   │   ├── ImagePreviewDialog.tsx
 │   │   └── SettingsDialog.tsx
 │   ├── styles/global.css
-│   ├── domain/                 # 规划：纯 TS 实体、命令、撤销、定位
-│   └── shared/                 # 规划：Tauri IPC 契约
+│   ├── domain/                 # 已建：布局与搜索的领域纯函数（layout.ts / search.ts）
+│   └── shared/                 # 规划：Tauri IPC 契约（暂未需要）
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
@@ -192,7 +191,7 @@ ploceusTidy/
 | --- | --- | --- |
 | Tauri 2.12.4 | 桌面壳 | 轻量、安装小、Rust 平台能力 |
 | React 19.3.1 + React DOM 19.3.1 + TypeScript 6.0.3 | 界面与编排 | 用户选定；类型安全、组件生态 |
-| Ant Design 6.6.7（含 ColorPicker） | 顶栏、弹窗、图片预览、表单、取色器 | 统一交互与可访问性 |
+| Ant Design 6.6.7（含 ColorPicker） | 顶栏、弹窗、表单、取色器 | 统一交互与可访问性 |
 | @ant-design/icons 6.3.4 | 界面图标 | 与 Ant Design 一致 |
 | Vite 8.3.5 + @vitejs/plugin-react 6.1.2 | 开发与构建 | 最新稳定版，开发反馈快 |
 | konva 10.9 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组绘制；视口裁剪 + 高清倍率 |

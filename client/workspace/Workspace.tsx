@@ -12,7 +12,6 @@ import { themeById } from '@/lib/theme'
 import TitleBar, { type TitleBarHandle } from '@/components/TitleBar'
 import DetailsPanel from '@/components/DetailsPanel'
 import SettingsDialog from '@/components/SettingsDialog'
-import ImagePreviewDialog from '@/components/ImagePreviewDialog'
 import TextPromptDialog from '@/components/TextPromptDialog'
 import ColorPickerDialog from '@/components/ColorPickerDialog'
 import NeighborPickerDialog from '@/components/NeighborPickerDialog'
@@ -556,12 +555,6 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           store.clearSelection()
           setEmptyDismissed(false)
         }}
-      />
-      <ImagePreviewDialog
-        open={actions.previewState.open}
-        src={actions.previewState.src}
-        title={actions.previewState.title}
-        onClose={actions.closePreview}
       />
       <TextPromptDialog
         key={prompt ? `${prompt.kind}-${prompt.id}` : 'no-prompt'}

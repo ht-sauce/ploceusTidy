@@ -11,7 +11,7 @@ import type { KonvaEventObject } from 'konva/lib/Node'
 import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import type { Rect } from '@/domain/layout'
-import type { HandleSide } from './constants'
+import { GHOST_DRAG_LIMIT, type HandleSide } from './constants'
 import { asHandleSide, edgePoints } from './geometry'
 import {
   LAYOUT_GAP,
@@ -37,6 +37,8 @@ interface UseCanvasInteractionsOptions {
   groupBoxRefs: RefObject<Map<string, Konva.Rect>>
   groupTitleRefs: RefObject<Map<string, Konva.Label>>
   edgeRefs: RefObject<Map<string, Konva.Arrow>>
+  /** 超大选择集拖动时的包围盒 ghost 图形（默认隐藏）。 */
+  ghostRef: RefObject<Konva.Rect | null>
   viewportRef: RefObject<CanvasViewport>
   setViewport: Dispatch<SetStateAction<CanvasViewport>>
   zoomAt: (scale: number, anchorX: number, anchorY: number) => void
@@ -79,6 +81,7 @@ export function useCanvasInteractions({
   groupBoxRefs,
   groupTitleRefs,
   edgeRefs,
+  ghostRef,
   viewportRef,
   setViewport,
   zoomAt,
@@ -124,6 +127,8 @@ export function useCanvasInteractions({
     items: { id: string; x: number; y: number; rect: Rect }[]
     /** 拖动集合 id：用于落点判定与受影响连线的快速筛选。 */
     idSet: Set<string>
+    /** 超大选择集降级：只拖包围盒 ghost，不逐个驱动图形。 */
+    ghost: boolean
     pointerX: number
     pointerY: number
     offsetX: number
@@ -497,6 +502,20 @@ export function useCanvasInteractions({
           }),
           { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
         )
+        if (session.ghost) {
+          // 超大选择集降级：不吸附、不逐个驱动图形与连线，只移动包围盒 ghost，
+          // 偏移就是裸偏移；落点判定与提交统一在松手时处理。
+          session.offsetX = desiredX
+          session.offsetY = desiredY
+          ghostRef.current?.setAttrs({
+            visible: true,
+            x: bounds.minX + desiredX,
+            y: bounds.minY + desiredY,
+            width: bounds.maxX - bounds.minX,
+            height: bounds.maxY - bounds.minY,
+          })
+          return
+        }
         const movingIds = new Set(session.items.map((item) => item.id))
         const neighbors = nearbyRects(
           {
@@ -615,26 +634,56 @@ export function useCanvasInteractions({
 
     if (dragSession.current) {
       const session = dragSession.current
+      // ghost 图形只在超大选择集拖动期可见，收尾一律隐藏。
+      ghostRef.current?.setAttrs({ visible: false })
       if (session.moving) {
         // 松手时统一做一次落点判定（rbush 对数级）：吸附落点被压住时先退回裸偏移，
         // 裸偏移也不行才整体回到拖动前的位置，避免压在别的对象上。
         const movingIds = new Set(session.items.map((item) => item.id))
-        const isBlocked = (offsetX: number, offsetY: number) =>
-          session.items.some((item) =>
+        // ghost 模式按整体包围盒判定一次；逐项判定在上万对象时是上万次查询。
+        const union = session.items.reduce(
+          (acc, item) => ({
+            minX: Math.min(acc.minX, item.rect.x),
+            minY: Math.min(acc.minY, item.rect.y),
+            maxX: Math.max(acc.maxX, item.rect.x + item.rect.w),
+            maxY: Math.max(acc.maxY, item.rect.y + item.rect.h),
+          }),
+          { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+        )
+        const isBlocked = (offsetX: number, offsetY: number) => {
+          if (session.ghost) {
+            return landingBlocked(
+              {
+                x: union.minX + offsetX,
+                y: union.minY + offsetY,
+                w: union.maxX - union.minX,
+                h: union.maxY - union.minY,
+              },
+              movingIds,
+            )
+          }
+          return session.items.some((item) =>
             landingBlocked({ ...item.rect, x: item.x + offsetX, y: item.y + offsetY }, movingIds),
           )
+        }
         const accepted = isBlocked(session.offsetX, session.offsetY)
           ? isBlocked(session.rawOffsetX, session.rawOffsetY)
             ? { x: 0, y: 0 }
             : { x: session.rawOffsetX, y: session.rawOffsetY }
           : { x: session.offsetX, y: session.offsetY }
-        // 拖动中是直接改 Konva 位置；回退或退回裸偏移时库内坐标不变、不会触发重渲染，
-        // 这里把图形同步到最终接受的落点，避免残留在被拒绝的位置上。
-        session.items.forEach((item) => {
-          const group = nodeGroupRefs.current.get(item.id)
-          if (!group) return
-          group.position({ x: Math.round(item.x + accepted.x), y: Math.round(item.y + accepted.y) })
-        })
+        // 普通模式拖动中是直接改 Konva 位置；回退或退回裸偏移时库内坐标不变、
+        // 不会触发重渲染，这里把图形同步到最终接受的落点。ghost 模式拖动期
+        // 没动过节点图形，直接交给提交后的重渲染。
+        if (!session.ghost) {
+          session.items.forEach((item) => {
+            const group = nodeGroupRefs.current.get(item.id)
+            if (!group) return
+            group.position({
+              x: Math.round(item.x + accepted.x),
+              y: Math.round(item.y + accepted.y),
+            })
+          })
+        }
         onMoveNodes(
           session.items.map((item) => ({
             id: item.id,
@@ -697,13 +746,16 @@ export function useCanvasInteractions({
     }
 
     const dragIds = selectedSet.has(node.id) ? selectedIds : [node.id]
+    const items = dragIds.flatMap((id) => {
+      const rect = nodeRectOf(id)
+      const item = nodeById.get(id)
+      return rect && item ? [{ id, x: item.x, y: item.y, rect }] : []
+    })
     dragSession.current = {
-      items: dragIds.flatMap((id) => {
-        const rect = nodeRectOf(id)
-        const item = nodeById.get(id)
-        return rect && item ? [{ id, x: item.x, y: item.y, rect }] : []
-      }),
+      items,
       idSet: new Set(dragIds),
+      // 超大选择集降级：逐个驱动图形每帧要上万次 position 调用，改为拖包围盒 ghost。
+      ghost: items.length > GHOST_DRAG_LIMIT,
       pointerX: pointer.x,
       pointerY: pointer.y,
       offsetX: 0,

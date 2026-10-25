@@ -98,12 +98,22 @@ export function useSearch(
         pinyin: '',
       }))
     }
-    return prepared
-      .map((item) => ({ item, rank: preparedRank(item, normalized) }))
-      .filter((hit) => hit.rank >= 0)
-      .sort((left, right) => left.rank - right.rank)
-      .slice(0, 9)
-      .map((hit) => hit.item.entry)
+    // top-9 线性选择：万级条目下省掉全量排序（O(N log N) → O(N)）；
+    // 排序键只有名次，同名次保持输入顺序（与稳定排序的结果一致）。
+    const top: { entry: SearchEntry; rank: number }[] = []
+    prepared.forEach((item) => {
+      const rank = preparedRank(item, normalized)
+      if (rank < 0) return
+      if (top.length < 9) {
+        top.push({ entry: item.entry, rank })
+        top.sort((left, right) => left.rank - right.rank)
+        return
+      }
+      if (rank >= top[top.length - 1].rank) return
+      top[top.length - 1] = { entry: item.entry, rank }
+      top.sort((left, right) => left.rank - right.rank)
+    })
+    return top.map((hit) => hit.entry)
   }, [nodes, normalized, prepared])
 
   // 空闲预热拼音缓存：每批 2000 个、批间让出主线程，10 万对象也不会阻塞交互；

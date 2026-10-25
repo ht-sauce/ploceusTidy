@@ -13,7 +13,7 @@
 | 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
-| 当前阶段 | Konva 画布（rbush 视口裁剪 + 高清倍率，不做远景 LOD）、四套主题、空间（成员自动归属/可拖动/可连线/标题即标注/可改色/选中发光/右键自动整理）、不重叠与对齐吸附、连线标签颜色与选中发光、原生 Shell 右键菜单、缺失校验/重连、Shell 缩略图与快捷方式图标、右键菜单与关联跳转、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架、搜索（对象/标注/空间/连线 + 拼音首字母）、最小化暂停渲染已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
+| 当前阶段 | Konva 画布（rbush 视口裁剪含连线 + 高清倍率，不做远景 LOD）、四套主题、统一拖动行为（拖动期不校验碰撞、rbush 局部对齐吸附、松手判定落点；>2000 选中降级为包围盒 ghost）、空间（成员自动归属/随成员自动扩缩/可拖动/可连线/标题即标注/可改色/选中发光/右键自动整理）、不重叠、连线标签颜色与选中发光、原生 Shell 右键菜单、缺失校验/重连、Shell 缩略图与快捷方式图标（无内置预览与视频封面，图片/视频系统打开）、右键菜单与关联跳转、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架、搜索（对象/标注/空间/连线 + 拼音首字母 + top-9 线性选择）、最小化暂停渲染、SQLite 读写分离连接 + 指纹增量保存 + 保存序列化 Worker + 重命令异步化（主线程不等数据库）、Minimap 单 canvas、构建手动分包（首屏主脚本约 310KB）已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
 
 ## 2. 命令
 
@@ -49,19 +49,19 @@ ploceusTidy/
 │   ├── index.html             # Vite 入口
 │   ├── main.tsx / App.tsx     # App 仅入口：主题状态 + ConfigProvider → Workspace
 │   ├── types/scene.ts
-│   ├── lib/tauri-api.ts       # Tauri invoke 封装
+│   ├── lib/tauri-api.ts       # Tauri invoke 封装；sceneSerialize.worker.ts 负责保存序列化
 │   ├── lib/theme.ts           # 四套主题语义令牌
-│   ├── lib/search.ts          # 搜索归一化与排序
+│   ├── domain/                # 领域纯函数：layout（碰撞/吸附/空位/整理/贴合）+ search（归一化/拼音/排序）
 │   ├── workspace/             # 编排层：useSceneStore / useScenePersistence / useImportClipboard
 │   │                          #        / useNodeActions / useContextMenu / useShortcuts / useSearch
 │   │                          #        / useWindowSuspended / Workspace
 │   ├── canvas/                # 画布层：CanvasBoard（图层编排）+ useCanvasViewport（视口）
 │   │                          #        + useVisibleScene（裁剪/连线筛选）+ useCanvasInteractions（交互会话）
 │   │                          #        + useVisibleThumbnails + NodeShape / GroupShape / EdgeLayer / Minimap
-│   │                          #        + CanvasTextEditor / layout / geometry / icons / constants / types
+│   │                          #        + CanvasTextEditor / geometry / icons / constants / types
 │   ├── components/            # 通用组件：TitleBar / SystemIcon / DetailsPanel / ContextMenu
 │   │                          #        / StatusBar / EmptyOverlay / TextPromptDialog / ColorPickerDialog
-│   │                          #        / NeighborPickerDialog / ImagePreviewDialog / SettingsDialog
+│   │                          #        / NeighborPickerDialog / SettingsDialog
 │   └── styles/global.css
 ├── desktop/                   # Tauri 2 桌面壳与 Rust 平台层（仅桌面，无 iOS/Android）
 │   ├── Cargo.toml / build.rs
@@ -124,10 +124,12 @@ ploceusTidy/
 
 | 事项 | 触发时机 | 说明 |
 | --- | --- | --- |
-| Tauri 剪贴板文件路径 spike | M0 | `clipboard-win::raw::get_file_list` 在目标 Windows 验证；失败则补 `CF_HDROP` 直读 |
-| 1 万 / 10 万画布基准 | M2 / M4 | 验证视口裁剪、空间索引、缩略图节流与高清倍率的显存开销 |
+| Tauri 剪贴板文件路径 | 已完成 | Windows `CF_HDROP` 可用；macOS NSPasteboard、Linux wl-paste/xclip 已有实现 |
+| 1 万 / 10 万画布基准 | 已完成 | 已实测（数字为性能优化前测得）；需要新数字时用 `PLOCEUS_BENCH_SEED` 重测 |
 | 搜索索引升级 | 5 万引用后 | `LIKE` → FTS5 trigram / 内存索引 |
+| 百万级画布 | 有真实需求时 | 渲染已与总量无关；需增量索引更新与增量写库 |
 | 多画布 | v2 评估 | 当前单画布 + 空间（分组框） |
-| macOS/Linux | 后续 | 剪贴板、Shell 缩略图、打包分别补平台实现 |
+| macOS/Linux | 后续 | 剪贴板已有；Shell 缩略图降级；打包（dmg/AppImage/deb）与真机验证未做 |
+| 代码签名 | 发布前 | NSIS 已验收；签名未做，不影响功能验证 |
 
 决策一经确认，按 `docs/spec/08-adr.md` 补 ADR，并同批补齐命令表、工程结构与领域规范。

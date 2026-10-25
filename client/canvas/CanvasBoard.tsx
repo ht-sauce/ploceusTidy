@@ -130,6 +130,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const groupBoxRefs = useRef(new Map<string, Konva.Rect>())
   const groupTitleRefs = useRef(new Map<string, Konva.Label>())
   const edgeRefs = useRef(new Map<string, Konva.Arrow>())
+  // 超大选择集拖动的包围盒 ghost：拖动期直接驱动，不触发重渲染。
+  const ghostRef = useRef<Konva.Rect>(null)
   const [size, setSize] = useState<StageSize>({ width: 1280, height: 720 })
   // ICON_IMAGES 是模块级缓存，图标解码完成后靠这个版本号触发一次重渲染。
   const [, setIconVersion] = useState(0)
@@ -269,6 +271,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     groupBoxRefs,
     groupTitleRefs,
     edgeRefs,
+    ghostRef,
     viewportRef,
     setViewport,
     zoomAt,
@@ -632,6 +635,19 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             />
           ) : null}
 
+          {/* 超大选择集拖动的包围盒 ghost：默认隐藏，拖动期由交互层直接驱动。 */}
+          <Rect
+            ref={ghostRef}
+            visible={false}
+            listening={false}
+            fill={tokens.selectedBg}
+            opacity={0.5}
+            stroke={tokens.primary}
+            strokeWidth={1.5}
+            dash={[8, 6]}
+            cornerRadius={8}
+          />
+
           {/* 拖动吸附参考线：贯穿当前视口，只做视觉提示，不参与命中。 */}
           {interactions.guides
             ? (() => {
@@ -718,6 +734,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           groups={groups}
           viewport={viewport}
           size={size}
+          themeId={themeId}
           onMoveTo={moveViewportTo}
         />
       ) : null}

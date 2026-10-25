@@ -25,24 +25,40 @@ fn workspace_get(state: State<'_, AppState>) -> Result<WorkspaceInfo, String> {
 }
 
 /// 读取完整场景；首屏一次性加载，缩略图等重数据后续按需补充。
+/// 异步命令：查询与结果序列化都在运行时线程执行，不阻塞主线程（10 万对象时明显）。
 #[tauri::command]
-fn scene_load(state: State<'_, AppState>) -> Result<SceneData, String> {
-    db::scene_load(&state)
+async fn scene_load(app: AppHandle) -> Result<SceneData, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::scene_load(&state)
+    })
+    .await
+    .map_err(|error| format!("加载场景任务失败：{error}"))?
 }
 
 /// 增量保存完整场景：按 ID upsert，只清理本次快照之外的对象，失败整体回滚。
+/// 前端已把场景序列化为 JSON 字符串（Web Worker 完成），这里解析与写库都在运行时线程。
 #[tauri::command]
-fn scene_save(state: State<'_, AppState>, scene: SceneData) -> Result<(), String> {
-    db::scene_save(&state, &scene)
+async fn scene_save(app: AppHandle, scene: String) -> Result<(), String> {
+    let parsed: SceneData =
+        serde_json::from_str(&scene).map_err(|error| format!("解析场景失败：{error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::scene_save(&state, &parsed)
+    })
+    .await
+    .map_err(|error| format!("保存场景任务失败：{error}"))?
 }
 
 /// 批量导入绝对路径：Rust 侧负责规范化、符号链接校验与去重，失败项带路径与原因返回。
 #[tauri::command]
-fn import_paths(
-    state: State<'_, AppState>,
-    request: ImportRequest,
-) -> Result<ImportResult, String> {
-    db::import_paths(&state, &request)
+async fn import_paths(app: AppHandle, request: ImportRequest) -> Result<ImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::import_paths(&state, &request)
+    })
+    .await
+    .map_err(|error| format!("导入任务失败：{error}"))?
 }
 
 /// 读取剪贴板中的文件路径列表；仅 Windows 实现，只在用户主动粘贴时调用。
@@ -106,39 +122,6 @@ fn save_clipboard_image(
     db::save_asset(&state, &bytes, &clean_ext)
 }
 
-/// 返回图片的 data URL；超过 24MB 直接拒绝，避免前端内存与 IPC 压力。
-#[tauri::command]
-fn preview_ref(state: State<'_, AppState>, node_id: String) -> Result<String, String> {
-    let (path, url) = db::node_target(&state, &node_id)?;
-    if let Some(url) = url {
-        return Ok(url);
-    }
-
-    let path = path.ok_or_else(|| "该对象没有可预览的文件".to_string())?;
-    let metadata =
-        std::fs::metadata(&path).map_err(|error| format!("读取文件信息失败：{error}"))?;
-    if metadata.len() > 24 * 1024 * 1024 {
-        return Err("图片超过 24MB，请用系统查看器打开".to_string());
-    }
-
-    let ext = std::path::Path::new(&path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        _ => "image/png",
-    };
-    let bytes = std::fs::read(&path).map_err(|error| format!("读取图片失败：{error}"))?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:{mime};base64,{encoded}"))
-}
-
 /// 按 ID 读取单个节点，用于重复导入后的定位刷新。
 #[tauri::command]
 fn node_get(state: State<'_, AppState>, node_id: String) -> Result<Option<SceneNode>, String> {
@@ -146,13 +129,19 @@ fn node_get(state: State<'_, AppState>, node_id: String) -> Result<Option<SceneN
 }
 
 /// 按需生成缩略图并返回 data URL；无路径、缺失或非 Windows 平台返回 `None`。
+/// 异步命令：可见卡片会并发请求，文件读取与 base64 都在阻塞线程池执行。
 #[tauri::command]
-fn thumb_get(
-    state: State<'_, AppState>,
+async fn thumb_get(
+    app: AppHandle,
     node_id: String,
     size: Option<u32>,
 ) -> Result<Option<String>, String> {
-    db::thumb_get(&state, &node_id, size.unwrap_or(96))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::thumb_get(&state, &node_id, size.unwrap_or(96))
+    })
+    .await
+    .map_err(|error| format!("缩略图任务失败：{error}"))?
 }
 
 /// 桌面常驻：把窗口压到普通窗口之下；只影响层级，不改变窗口尺寸与焦点。
@@ -202,9 +191,15 @@ fn meta_set(state: State<'_, AppState>, key: String, value: String) -> Result<()
 }
 
 /// 批量校验引用是否存在；`node_ids` 为空表示全量校验，结果同时写回数据库。
+/// 异步命令：全量校验是长时间批处理，不能占用主线程。
 #[tauri::command]
-fn ref_check(state: State<'_, AppState>, node_ids: Vec<String>) -> Result<Vec<RefStatus>, String> {
-    db::ref_check(&state, &node_ids)
+async fn ref_check(app: AppHandle, node_ids: Vec<String>) -> Result<Vec<RefStatus>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::ref_check(&state, &node_ids)
+    })
+    .await
+    .map_err(|error| format!("校验任务失败：{error}"))?
 }
 
 /// 重新关联缺失引用到新路径；只接受绝对路径，符号链接拒绝。
@@ -321,7 +316,6 @@ pub fn run() {
             open_ref,
             reveal_ref,
             save_clipboard_image,
-            preview_ref,
             node_get,
             meta_get,
             meta_set,

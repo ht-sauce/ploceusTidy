@@ -9,9 +9,50 @@ import type { ImportResult, RefStatus, RelinkResult, SceneData, WorkspaceInfo } 
 /** 浏览器调试模式下为 false，用于跳过桌面专属逻辑。 */
 export const isDesktopClient = isTauri()
 
+/**
+ * 场景序列化走 Web Worker：10 万对象的 JSON.stringify 在主线程是 100–300ms
+ * 的一次性卡顿（松手保存后），放 Worker 后主线程只做一次结构化克隆。
+ * Worker 不可用或出错时回退主线程序列化，保证保存不失败。
+ */
+let sceneWorker: Worker | null = null
+function stringifyScene(scene: SceneData): Promise<string> {
+  if (typeof Worker === 'undefined') return Promise.resolve(JSON.stringify(scene))
+  try {
+    if (!sceneWorker) {
+      sceneWorker = new Worker(new URL('./sceneSerialize.worker.ts', import.meta.url), {
+        type: 'module',
+      })
+    }
+    const worker = sceneWorker
+    return new Promise<string>((resolve, reject) => {
+      const onMessage = (event: MessageEvent<string>) => {
+        cleanup()
+        resolve(event.data)
+      }
+      const onError = (event: ErrorEvent) => {
+        cleanup()
+        reject(new Error(event.message || '场景序列化失败'))
+      }
+      const cleanup = () => {
+        worker.removeEventListener('message', onMessage)
+        worker.removeEventListener('error', onError)
+      }
+      worker.addEventListener('message', onMessage)
+      worker.addEventListener('error', onError)
+      worker.postMessage({ scene })
+    })
+  } catch {
+    return Promise.resolve(JSON.stringify(scene))
+  }
+}
+
 export const desktopApi = {
   loadScene: () => invoke<SceneData>('scene_load'),
-  saveScene: (scene: SceneData) => invoke<void>('scene_save', { scene }),
+  // Rust 侧接收 JSON 字符串并在运行时线程解析（异步命令），主线程不参与序列化。
+  saveScene: (scene: SceneData) =>
+    stringifyScene(scene)
+      .catch(() => JSON.stringify(scene))
+      .then((json) => invoke<void>('scene_save', { scene: json })),
   /** 批量导入绝对路径；去重与失败明细由 Rust 侧统一处理。 */
   importPaths: (paths: string[], x: number, y: number) =>
     invoke<ImportResult>('import_paths', { request: { paths, x, y } }),
@@ -24,8 +65,6 @@ export const desktopApi = {
   /** 把粘贴的截图写入 dataWorkSpace/assets，返回落盘路径。 */
   saveClipboardImage: (data: string, ext: string) =>
     invoke<string>('save_clipboard_image', { data, ext }),
-  /** 返回图片 data URL；超过 24MB 由 Rust 侧拒绝。 */
-  previewRef: (nodeId: string) => invoke<string>('preview_ref', { nodeId }),
   workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
   /** 用 Windows Shell 生成缩略图；不可用时返回 null。 */
   thumbGet: (nodeId: string, size = 96) => invoke<string | null>('thumb_get', { nodeId, size }),
