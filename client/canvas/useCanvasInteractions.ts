@@ -14,9 +14,9 @@ import type { Rect } from '@/domain/layout'
 import type { HandleSide } from './constants'
 import { asHandleSide, edgePoints } from './geometry'
 import {
-  constrainDrag,
   LAYOUT_GAP,
   SNAP_THRESHOLD,
+  rectsOverlap,
   snapOffset,
   type SnapGuides,
 } from '@/domain/layout'
@@ -145,6 +145,9 @@ export function useCanvasInteractions({
     startY: number
     appliedX: number
     appliedY: number
+    /** 吸附前的裸偏移：落点被拒时先退回裸偏移，再考虑整体回退（与对象拖动一致）。 */
+    rawOffsetX: number
+    rawOffsetY: number
     box: Rect
     mode: 'title' | 'box'
     /** 按下时的成员快照：拖动期直接驱动成员图形，松手一次性提交（成员随空间一起动，不参与碰撞）。 */
@@ -256,53 +259,48 @@ export function useCanvasInteractions({
   )
 
   /**
-   * 空间拖动：以按下时的矩形为基准做累积位移，先吸附再挡在其他空间之外。
-   * 标题拖动与框体拖动共用同一套约束。拖动期不提交状态：直接驱动空间框、
-   * 标题与成员节点的 Konva 图形，松手时一次性提交——逐帧 setNodes 会在
-   * 10 万对象下每帧全量重建数组并重渲染，表现为「拖不动」。
-   * 节点障碍用 rbush 只查落点附近（对数级），不逐帧扫描全量节点。
+   * 空间拖动：与对象拖动完全一致的行为模式——拖动期不校验碰撞、纯跟随指针，
+   * 只做 rbush 局部对齐吸附；落点约束（不压非成员对象/其他空间）推迟到松手统一判定。
+   * 拖动期不提交状态：直接驱动空间框、标题与成员节点的 Konva 图形，松手一次性提交。
    */
   const moveGroupSession = (pointerX: number, pointerY: number) => {
     const session = groupDrag.current
     if (!session) return
     const scale = viewportRef.current.scale
-    const desiredX = (pointerX - session.startX) / scale
-    const desiredY = (pointerY - session.startY) / scale
+    let desiredX = (pointerX - session.startX) / scale
+    let desiredY = (pointerY - session.startY) / scale
+    session.rawOffsetX = desiredX
+    session.rawOffsetY = desiredY
+    // 对齐吸附：rbush 局部邻居 + 其他空间（数量少），不做任何碰撞约束。
     const threshold = SNAP_THRESHOLD / scale
-    // 候选位与落点最多相差一个吸附阈值，查询框按「吸附阈值 + 间距」外扩即可覆盖全部潜在障碍。
-    const pad = threshold + LAYOUT_GAP
     const memberIds = new Set(session.members.map((member) => member.id))
-    const localNodes = nearbyRects(
+    const neighbors = nearbyRects(
       {
-        x: session.box.x + desiredX - pad,
-        y: session.box.y + desiredY - pad,
-        w: session.box.w + pad * 2,
-        h: session.box.h + pad * 2,
+        x: session.box.x + desiredX - threshold,
+        y: session.box.y + desiredY - threshold,
+        w: session.box.w + threshold * 2,
+        h: session.box.h + threshold * 2,
       },
-      pad,
+      threshold,
       memberIds,
     )
-    const obstacles = [
-      // 空间数量少，其他空间全量参与；空间不能压在非成员对象上。
-      ...groups
-        .filter((item) => item.id !== session.id)
-        .map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
-      ...localNodes,
-    ]
-    const result = constrainDrag(
+    const groupTargets = groups
+      .filter((item) => item.id !== session.id)
+      .map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h }))
+    const snapped = snapOffset(
       [session.box],
-      obstacles,
+      [...groupTargets, ...neighbors],
       desiredX,
       desiredY,
-      LAYOUT_GAP,
       threshold,
-      obstacles,
     )
-    const nextX = Math.round(result.dx)
-    const nextY = Math.round(result.dy)
+    desiredX = snapped.dx
+    desiredY = snapped.dy
+    applyGuides(snapped.guides)
+    const nextX = Math.round(desiredX)
+    const nextY = Math.round(desiredY)
     const stepX = nextX - session.appliedX
     const stepY = nextY - session.appliedY
-    applyGuides(result.guides)
     if (Math.abs(stepX) < 0.4 && Math.abs(stepY) < 0.4) return
     session.appliedX = nextX
     session.appliedY = nextY
@@ -329,24 +327,48 @@ export function useCanvasInteractions({
     })
   }
 
-  /** 空间拖动收尾：图形归位到最终坐标，位移非零时一次性提交给 store。 */
+  /**
+   * 空间拖动收尾：与对象拖动一致——松手统一判定落点，被压住先退回裸偏移，
+   * 裸偏移仍被压住才整体回到拖动前的位置；图形归位到最终接受的落点后再提交。
+   */
   const commitGroupDrag = () => {
     const session = groupDrag.current
     groupDrag.current = null
     setGuides(null)
     if (!session) return
-    const finalX = session.box.x + session.appliedX
-    const finalY = session.box.y + session.appliedY
+    const memberIds = new Set(session.members.map((member) => member.id))
+    // 空间是容器：压到非成员对象或其他空间都算落点不合适；成员随空间移动不参与判定。
+    const landingBlockedAt = (offsetX: number, offsetY: number) => {
+      const rect = {
+        x: session.box.x + offsetX,
+        y: session.box.y + offsetY,
+        w: session.box.w,
+        h: session.box.h,
+      }
+      const hitGroup = groups.some(
+        (item) => item.id !== session.id && rectsOverlap(item, rect, LAYOUT_GAP),
+      )
+      return hitGroup || landingBlocked(rect, memberIds)
+    }
+    const snapped = { x: session.appliedX, y: session.appliedY }
+    const raw = { x: Math.round(session.rawOffsetX), y: Math.round(session.rawOffsetY) }
+    const accepted = landingBlockedAt(snapped.x, snapped.y)
+      ? landingBlockedAt(raw.x, raw.y)
+        ? { x: 0, y: 0 }
+        : raw
+      : snapped
+    const finalX = session.box.x + accepted.x
+    const finalY = session.box.y + accepted.y
     // 零位移时不会有重渲染来纠正图形，必须手动归位（标题拖动模式下标题被 Konva 拖走过）。
     groupBoxRefs.current.get(session.id)?.position({ x: finalX, y: finalY })
     groupTitleRefs.current.get(session.id)?.position({ x: finalX + 8, y: finalY - 15 })
     session.members.forEach((member) => {
       nodeGroupRefs.current
         .get(member.id)
-        ?.position({ x: member.x + session.appliedX, y: member.y + session.appliedY })
+        ?.position({ x: member.x + accepted.x, y: member.y + accepted.y })
     })
-    if (session.appliedX !== 0 || session.appliedY !== 0) {
-      onMoveGroup(session.id, session.appliedX, session.appliedY)
+    if (accepted.x !== 0 || accepted.y !== 0) {
+      onMoveGroup(session.id, accepted.x, accepted.y)
     }
   }
 
@@ -738,6 +760,8 @@ export function useCanvasInteractions({
       startY: pointer.y,
       appliedX: 0,
       appliedY: 0,
+      rawOffsetX: 0,
+      rawOffsetY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'box',
       members: nodes
@@ -776,6 +800,8 @@ export function useCanvasInteractions({
       startY: pointer.y,
       appliedX: 0,
       appliedY: 0,
+      rawOffsetX: 0,
+      rawOffsetY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'title',
       members: nodes

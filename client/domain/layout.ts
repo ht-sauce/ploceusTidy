@@ -187,40 +187,6 @@ export function snapOffset(
 }
 
 /**
- * 拖动约束：先尝试吸附，再退到原始偏移，最后按单轴滑动，保证任何时刻都不重叠。
- * 全部冲突时停在原位，避免「边拖边穿模」。
- */
-export function constrainDrag(
-  moving: Rect[],
-  obstacles: Rect[],
-  dx: number,
-  dy: number,
-  gap = LAYOUT_GAP,
-  threshold = SNAP_THRESHOLD,
-  snapTargets: Rect[] = obstacles,
-) {
-  // 历史数据可能已经重叠；已经压住的障碍物不再参与判定，否则对象会被永久卡死。
-  const blocking = obstacles.filter(
-    (obstacle) => !moving.some((rect) => rectsOverlap(rect, obstacle, gap)),
-  )
-  if (blocking.length === 0) {
-    const snapped = snapOffset(moving, snapTargets, dx, dy, threshold)
-    return { dx: snapped.dx, dy: snapped.dy, guides: snapped.guides }
-  }
-  const snapped = snapOffset(moving, snapTargets, dx, dy, threshold)
-  const candidates = [
-    { dx: snapped.dx, dy: snapped.dy, guides: snapped.guides },
-    { dx, dy, guides: EMPTY_GUIDES },
-    { dx, dy: 0, guides: EMPTY_GUIDES },
-    { dx: 0, dy, guides: EMPTY_GUIDES },
-    { dx: 0, dy: 0, guides: EMPTY_GUIDES },
-  ]
-  return (
-    candidates.find((item) => !collides(moving, blocking, item.dx, item.dy, gap)) ?? candidates[4]
-  )
-}
-
-/**
  * 在目标附近螺旋搜索一个不冲突的整体偏移，用于新建对象避让。
  * 只平移整簇对象，保持导入时生成的相对网格不变。
  */
