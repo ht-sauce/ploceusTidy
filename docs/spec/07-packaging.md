@@ -23,8 +23,9 @@
 ## 4. 构建与发布
 
 - 构建命令：前端 `pnpm build`，桌面安装包 `pnpm tauri:build`；仅导出 exe 可用 `pnpm tauri build --no-bundle`。
+- 安装包原始产物在 `desktop/target/release/bundle/nsis/`；`pnpm tauri:build` 完成后由 `scripts/collect-installer.mjs` 自动复制到项目根 `release/`（不入库），发布取包一律用 `release/` 下的最新安装包。
 - 不启用自动更新（v1）；手动安装包升级，保留 `dataWorkSpace`。
-- 代码签名与 SmartScreen 处理后续补充；v1 先保证本地可安装运行。
+- 代码签名与 SmartScreen 处理后续补充；v1 先保证本地可安装运行。当前 `tauri.conf.json` 无任何签名配置，产物未签名。
 - 不接入崩溃上报/遥测。
 
 ## 5. 体积与启动

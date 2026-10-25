@@ -4,6 +4,7 @@ client/dist/
 desktop/target/
 desktop/gen/
 dataWorkSpace/
+release/
 .screenshots/
 .trae-html-share-packages/
 *.local

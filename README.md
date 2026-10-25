@@ -20,7 +20,7 @@
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间标题与连线标签 |
 | 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制 |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
-| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包命令 `pnpm tauri:build`（安装验收待补） |
+| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`，产物自动收集到项目根 `release/`（安装往返验收已完成） |
 
 ## 核心能力
 
@@ -64,7 +64,7 @@ ploceusTidy/
 | 开发启动（浏览器调试） | `pnpm dev` |
 | 开发启动（桌面客户端，release） | `pnpm tauri:dev` |
 | 构建前端 | `pnpm build` |
-| 构建桌面安装包 | `pnpm tauri:build` |
+| 构建桌面安装包 | `pnpm tauri:build`（安装包输出到 `release/`） |
 | Rust 测试 | `cargo test --manifest-path desktop/Cargo.toml --lib` |
 | 静态检查 | `pnpm lint` / `pnpm lint:fix` |
 | 格式化 | `pnpm format` / `pnpm format:check` |
@@ -96,5 +96,4 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 1 万 / 10 万画布基准实测（含高清倍率、碰撞与吸附的显存与帧率）。
-- NSIS 安装包验收与代码签名；自动更新不在 v1。
+- 代码签名；自动更新不在 v1。（1 万/10 万画布基准与 NSIS 安装往返验收已完成，数字为性能优化前测得。）

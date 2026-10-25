@@ -13,7 +13,7 @@
     "format:check": "prettier --check .",
     "check-spec": "node scripts/check-spec.mjs",
     "tauri:dev": "tauri dev --config desktop/tauri.conf.json --release",
-    "tauri:build": "tauri build --config desktop/tauri.conf.json"
+    "tauri:build": "tauri build --config desktop/tauri.conf.json && node scripts/collect-installer.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "6.3.4",
