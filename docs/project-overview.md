@@ -36,8 +36,8 @@ ploceusTidy/
 │   └── ploceusTidy.jpg             # 品牌图
 ├── client/                         # React 前端
 │   ├── index.html                  # Vite 入口
-│   ├── main.tsx                    # React 入口、Ant Design ConfigProvider / App
-│   ├── App.tsx                     # 场景状态、Tauri 加载/保存、拖入/粘贴、搜索、标注
+│   ├── main.tsx                    # React 挂载
+│   ├── App.tsx                     # 入口壳：仅主题状态 + Ant Design 容器
 │   ├── vite-env.d.ts
 │   ├── lib/
 │   │   ├── tauri-api.ts            # invoke 封装、isTauri
@@ -45,11 +45,38 @@ ploceusTidy/
 │   │   └── search.ts               # 搜索归一化与排序分级
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
-│   ├── components/
+│   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
+│   │   ├── Workspace.tsx           # 组合画布/标题栏/属性面板/状态栏/弹窗
+│   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 删除/撤销/标注/空间命令
+│   │   ├── useScenePersistence.ts  # 加载/保存/缺失校验/拖入监听
+│   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴
+│   │   ├── useNodeActions.ts       # 打开、定位、预览、重连、双击激活
+│   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作
+│   │   ├── useShortcuts.ts         # 全局快捷键映射
+│   │   └── useSearch.ts            # 搜索条目与排序
+│   ├── canvas/                     # 画布域（Konva 渲染与交互）
+│   │   ├── CanvasBoard.tsx         # 图层编排：组合视口/可见性/交互会话
+│   │   ├── useCanvasViewport.ts    # 视口缩放、定位、适配、缩放回调
+│   │   ├── useVisibleScene.ts      # rbush 视口裁剪、LOD、连线筛选
+│   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线/悬停会话
+│   │   ├── useVisibleThumbnails.ts # 可见图片缩略图延迟加载
+│   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条、四向锚点
+│   │   ├── GroupShape.tsx          # 空间虚线框与命中区域
+│   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
+│   │   ├── Minimap.tsx             # 迷你地图与点击定位
+│   │   ├── CanvasTextEditor.tsx    # 文字内联编辑
+│   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
+│   │   ├── icons.tsx               # 系统图标与缩略图缓存
+│   │   ├── constants.ts            # LOD、迷你地图、锚点等常量
+│   │   └── types.ts                # 右键目标、视口、舞台尺寸类型
+│   ├── components/                 # 通用界面组件
 │   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建文字、设置、操作说明、窗口按钮
-│   │   ├── CanvasBoard.tsx         # Konva 画布：视口、rbush 裁剪、LOD、分组、连线、锚点连线、迷你地图
 │   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接
-│   │   ├── DetailsPanel.tsx        # 引用详情（含缺失徽标与重新关联）与标注编辑
+│   │   ├── DetailsPanel.tsx        # 右键「属性」面板与标注编辑（只读属性，动作走右键菜单）
+│   │   ├── ContextMenu.tsx         # 画布右键菜单渲染
+│   │   ├── StatusBar.tsx           # 保存状态、对象数、缩放与画布按钮
+│   │   ├── EmptyOverlay.tsx        # 空画布引导
+│   │   ├── EdgeLabelDialog.tsx     # 连线标签编辑弹窗
 │   │   ├── ImagePreviewDialog.tsx  # Ant Design 图片预览
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
 │   └── styles/global.css
@@ -77,8 +104,9 @@ client/
 └── shared/            # 更完整的 IPC 契约与共享类型
 ```
 
-- 画布渲染已切换到 Konva（`CanvasBoard.tsx`），场景模型与渲染层解耦，替换渲染器不影响业务命令。
-- 领域层 `client/domain` 尚未抽离：实体逻辑目前在 `App.tsx`，抽离前不得再往组件里堆业务规则。
+- 画布渲染已切换到 Konva（`client/canvas/CanvasBoard.tsx`），场景模型与渲染层解耦，替换渲染器不影响业务命令。
+- `App.tsx` 只做入口（主题状态 + Ant Design 容器）；场景命令在 `client/workspace/useSceneStore.ts`，交互在 `client/canvas/`，通用界面在 `client/components/`。
+- 领域层 `client/domain` 尚未抽离：如需跨端复用或纯函数测试，再逐步从 `workspace/` 抽出，禁止把业务规则写回组件。
 
 ## 4. 功能域 → 文件速查
 
@@ -88,13 +116,16 @@ client/
 | v1 做什么 / 验收 | `docs/REQUIREMENTS.md` |
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
-| 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`CanvasBoard.tsx`、`SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
-| 画布平移缩放、Konva 渲染、LOD、锚点连线、迷你地图 | `client/components/CanvasBoard.tsx`、`docs/spec/02-client-architecture.md` §4 |
+| 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
+| 画布平移缩放、Konva 渲染、LOD、空间与锚点连线、右键菜单、迷你地图 | `client/canvas/*`、`docs/spec/02-client-architecture.md` §4 |
+| 场景命令、选择、删除/撤销、标注、空间 | `client/workspace/useSceneStore.ts` |
+| 加载/保存/缺失校验/拖入、快捷键、右键菜单动作 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts` |
+| 打开/定位/预览/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
-| 搜索归一化与排序 | `client/lib/search.ts`、`client/App.tsx` |
+| 搜索归一化与排序 | `client/lib/search.ts`、`client/workspace/useSearch.ts` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
-| 拖入 / 粘贴 / 打开 / 定位 | `client/App.tsx`、`client/lib/tauri-api.ts` |
-| 搜索、标注、设置 | `client/App.tsx`、`TitleBar.tsx`、`DetailsPanel.tsx`、`SettingsDialog.tsx` |
+| 拖入 / 粘贴 / 打开 / 定位 | `client/workspace/useImportClipboard.ts`、`useNodeActions.ts`、`client/lib/tauri-api.ts` |
+| 搜索、标注、设置 | `client/workspace/useSearch.ts`、`useContextMenu.ts`、`TitleBar.tsx`、`DetailsPanel.tsx`、`SettingsDialog.tsx` |
 | 场景模型与共享类型 | `client/types/scene.ts` |
 | 表结构、dataWorkSpace、ID | `docs/spec/04-data-model.md` |
 | 文件打开/定位、缩略图、缺失 | `docs/spec/05-file-reference-contract.md` |

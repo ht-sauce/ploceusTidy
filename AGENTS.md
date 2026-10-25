@@ -13,7 +13,7 @@
 | 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` + `logs/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
-| 当前阶段 | Konva 画布（rbush 视口裁剪 + 三档 LOD）、四套主题、分组框、连线标签/删除、缺失校验/重连、Shell 缩略图、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
+| 当前阶段 | Konva 画布（rbush 视口裁剪 + 三档 LOD）、四套主题、空间（可拖动/可连线）、连线标签/删除、缺失校验/重连、Shell 缩略图、右键菜单、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
 
 ## 2. 命令
 
@@ -47,12 +47,19 @@ ploceusTidy/
 ├── scripts/                  # check-spec.mjs 规范扫描
 ├── assets/                    # 品牌图
 ├── client/                    # React 前端与高密度画布
-│   ├── main.tsx / App.tsx
+│   ├── main.tsx / App.tsx     # App 仅入口：主题状态 + ConfigProvider → Workspace
 │   ├── types/scene.ts
 │   ├── lib/tauri-api.ts       # Tauri invoke 封装
 │   ├── lib/theme.ts           # 四套主题语义令牌
 │   ├── lib/search.ts          # 搜索归一化与排序
-│   ├── components/            # TitleBar / CanvasBoard(Konva) / SystemIcon / DetailsPanel / SettingsDialog
+│   ├── workspace/             # 编排层：useSceneStore / useScenePersistence / useImportClipboard
+│   │                          #        / useNodeActions / useContextMenu / useShortcuts / useSearch / Workspace
+│   ├── canvas/                # 画布层：CanvasBoard（图层编排）+ useCanvasViewport（视口）
+│   │                          #        + useVisibleScene（裁剪/LOD）+ useCanvasInteractions（交互会话）
+│   │                          #        + useVisibleThumbnails + NodeShape / GroupShape / EdgeLayer / Minimap
+│   │                          #        + CanvasTextEditor / geometry / icons / constants / types
+│   ├── components/            # 通用组件：TitleBar / SystemIcon / DetailsPanel / ContextMenu
+│   │                          #        / StatusBar / EmptyOverlay / EdgeLabelDialog / ImagePreviewDialog / SettingsDialog
 │   └── styles/global.css
 ├── desktop/                   # Tauri 2 桌面壳与 Rust 平台层（仅桌面，无 iOS/Android）
 │   ├── Cargo.toml / build.rs

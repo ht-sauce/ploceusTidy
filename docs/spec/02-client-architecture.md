@@ -12,13 +12,15 @@
 
 | 层 | 职责 | 禁止 |
 | --- | --- | --- |
-| 界面层 `client/components` | React 组件：顶栏搜索、面板、设置、提示 | 直接读文件/数据库 |
-| 画布层 `client/canvas` | 视口、空间索引、可见节点渲染、LOD、交互 | 作为场景真相源 |
+| 入口层 `client/App.tsx` | 主题状态、Ant Design `ConfigProvider` 容器、挂载 `Workspace` | 任何业务规则、IPC 调用 |
+| 界面层 `client/components` | 无状态/低状态通用组件：标题栏、属性面板、右键菜单、状态栏、设置、提示 | 直接读文件/数据库 |
+| 编排层 `client/workspace` | 场景命令、持久化、导入、对象动作、快捷键、菜单、搜索等 hook 与组合 | 直接绘制 Konva 图元 |
+| 画布层 `client/canvas` | 视口、空间索引、可见节点渲染、LOD、交互、迷你地图 | 作为场景真相源 |
 | 领域层 `client/domain` | 引用/节点/边/标注模型、命令、撤销、定位、搜索编排 | 依赖 React/Konva/Tauri |
-| 桥接层 `client/shared` | DTO、命令契约、Tauri invoke 封装 | 业务规则 |
+| 桥接层 `client/lib`、`client/shared` | DTO、命令契约、Tauri invoke 封装、主题令牌 | 业务规则 |
 | Rust 核心 `desktop` | 文件系统、剪贴板、SQLite、Shell 缩略图、打开/定位 | 依赖前端框架 |
 
-依赖方向：界面/画布 → 领域 → 桥接 → Rust。领域层通过端口接口调用桥接，测试时可替换。
+依赖方向：入口 → 编排 → 界面/画布 → 领域 → 桥接 → Rust。编排层通过端口接口调用桥接，测试时可替换。领域层 `client/domain` 尚未独立成目录，当前实体命令位于 `client/workspace/useSceneStore.ts`，纯几何/命名/配色函数位于 `client/canvas/geometry.ts`，不得把业务规则写回组件。
 
 主题由界面层统一提供语义色快照，Ant Design 与 Konva 读取同一套令牌，不各自维护色板。切换主题只更新绘制参数，不修改场景数据，不重建撤销栈。
 
@@ -124,17 +126,44 @@ ploceusTidy/
 ├── client/                     # React 前端
 │   ├── index.html
 │   ├── main.tsx
-│   ├── App.tsx
+│   ├── App.tsx                  # 入口：主题状态 + ConfigProvider，挂载 Workspace
 │   ├── vite-env.d.ts
-│   ├── lib/tauri-api.ts
+│   ├── lib/tauri-api.ts         # invoke 封装、isTauri
 │   ├── lib/theme.ts             # 四套主题语义令牌
 │   ├── lib/search.ts            # 搜索归一化与排序
 │   ├── types/scene.ts
+│   ├── workspace/               # 编排层：场景命令、持久化、导入、动作、快捷键、菜单
+│   │   ├── Workspace.tsx
+│   │   ├── useSceneStore.ts
+│   │   ├── useScenePersistence.ts
+│   │   ├── useImportClipboard.ts
+│   │   ├── useNodeActions.ts
+│   │   ├── useContextMenu.ts
+│   │   ├── useShortcuts.ts
+│   │   └── useSearch.ts
+│   ├── canvas/                  # 画布层：Konva 渲染与交互
+│   │   ├── CanvasBoard.tsx      # 图层编排
+│   │   ├── useCanvasViewport.ts # 视口缩放/定位/适配
+│   │   ├── useVisibleScene.ts   # 裁剪/LOD/连线筛选
+│   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线会话
+│   │   ├── useVisibleThumbnails.ts  # 缩略图延迟加载
+│   │   ├── NodeShape.tsx
+│   │   ├── GroupShape.tsx
+│   │   ├── EdgeLayer.tsx
+│   │   ├── Minimap.tsx
+│   │   ├── CanvasTextEditor.tsx
+│   │   ├── geometry.ts
+│   │   ├── icons.tsx
+│   │   ├── constants.ts
+│   │   └── types.ts
 │   ├── components/
 │   │   ├── TitleBar.tsx
-│   │   ├── CanvasBoard.tsx      # Konva 渲染层
 │   │   ├── SystemIcon.tsx
 │   │   ├── DetailsPanel.tsx
+│   │   ├── ContextMenu.tsx
+│   │   ├── StatusBar.tsx
+│   │   ├── EmptyOverlay.tsx
+│   │   ├── EdgeLabelDialog.tsx
 │   │   ├── ImagePreviewDialog.tsx
 │   │   └── SettingsDialog.tsx
 │   ├── styles/global.css
@@ -151,8 +180,8 @@ ploceusTidy/
 └── assets/
 ```
 
-- 当前客户端：`CanvasBoard.tsx` 用 React DOM 只渲染可见行；M2 将场景模型接入 Konva。
-- 文件命名：React 组件 PascalCase，TS 模块 kebab-case，Rust 模块 snake_case；图表、字段名保留原文。
+- 当前客户端：`client/canvas/CanvasBoard.tsx` 负责视口、裁剪与交互会话，图元由 `NodeShape`/`GroupShape`/`EdgeLayer`/`Minimap` 渲染；业务命令在 `client/workspace/useSceneStore.ts`。
+- 文件命名：React 组件 PascalCase，TS 模块 kebab-case，Rust 模块 snake_case；图表、字段名保留原文。hook 模块以 `use` 前缀 camelCase（如 `useSceneStore.ts`）。
 
 ## 8. 依赖与理由
 

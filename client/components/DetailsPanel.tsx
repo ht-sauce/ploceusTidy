@@ -1,32 +1,20 @@
 /**
- * 右侧详情面板：展示选中节点的元数据、打开/定位动作，以及标注编辑。
- * 面板占用 280px 固定宽度，画布随之收缩而不是被覆盖。
+ * 右侧属性面板：只展示选中对象的元数据，打开/定位/标注等动作走画布右键菜单。
+ * 标注编辑复用同一块面板；面板由用户主动打开，不随选择自动出现。
  */
 import { useState } from 'react'
 import { Button, Input } from 'antd'
-import {
-  CloseOutlined,
-  EditOutlined,
-  ExportOutlined,
-  EyeOutlined,
-  FolderOpenOutlined,
-  LinkOutlined,
-} from '@ant-design/icons'
+import { CloseOutlined, LinkOutlined } from '@ant-design/icons'
 import type { SceneAnnotation, SceneNode } from '@/types/scene'
 import SystemIcon from './SystemIcon'
 
 interface DetailsPanelProps {
-  node: SceneNode
+  node: SceneNode | null
   annotation: SceneAnnotation | null
   annotationTargets: SceneNode[]
   mode: 'details' | 'annotation'
   onClose: () => void
-  onOpen: (node: SceneNode) => void
-  onReveal: (node: SceneNode) => void
   onRelink: (node: SceneNode) => void
-  onPreview: (node: SceneNode) => void
-  onEditText: (node: SceneNode) => void
-  onAddAnnotation: () => void
   onSaveAnnotation: (text: string) => void
   onDeleteAnnotation: () => void
 }
@@ -46,12 +34,7 @@ export default function DetailsPanel({
   annotationTargets,
   mode,
   onClose,
-  onOpen,
-  onReveal,
   onRelink,
-  onPreview,
-  onEditText,
-  onAddAnnotation,
   onSaveAnnotation,
   onDeleteAnnotation,
 }: DetailsPanelProps) {
@@ -104,10 +87,12 @@ export default function DetailsPanel({
     )
   }
 
+  if (!node) return null
+
   return (
     <aside className="details-panel">
       <div className="details-head">
-        <span className="details-kicker">引用详情</span>
+        <span className="details-kicker">属性</span>
         <Button
           type="text"
           size="small"
@@ -138,39 +123,13 @@ export default function DetailsPanel({
         </div>
       </div>
 
-      <div className="details-actions">
-        {!node.isExists && node.kind !== 'text' && node.kind !== 'link' ? (
+      {!node.isExists && node.kind !== 'text' && node.kind !== 'link' ? (
+        <div className="details-actions">
           <Button type="primary" block icon={<LinkOutlined />} onClick={() => onRelink(node)}>
             重新关联文件
           </Button>
-        ) : node.kind === 'text' ? (
-          <Button type="primary" block icon={<EditOutlined />} onClick={() => onEditText(node)}>
-            编辑文字
-          </Button>
-        ) : node.kind === 'image' ? (
-          <Button type="primary" block icon={<EyeOutlined />} onClick={() => onPreview(node)}>
-            预览图片
-          </Button>
-        ) : (
-          <Button type="primary" block icon={<ExportOutlined />} onClick={() => onOpen(node)}>
-            {node.kind === 'link'
-              ? '打开链接'
-              : node.kind === 'folder'
-                ? '打开文件夹'
-                : '打开原文件'}
-          </Button>
-        )}
-
-        {node.kind !== 'text' && node.kind !== 'link' ? (
-          <Button block icon={<FolderOpenOutlined />} onClick={() => onReveal(node)}>
-            在资源管理器中定位
-          </Button>
-        ) : null}
-
-        <Button block onClick={onAddAnnotation}>
-          添加标注
-        </Button>
-      </div>
+        </div>
+      ) : null}
 
       <p className="details-note">
         只记录路径与展示元数据，不复制文件内容。原文件由系统默认程序打开。

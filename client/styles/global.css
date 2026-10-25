@@ -140,19 +140,19 @@ button {
 .search-input.ant-input-affix-wrapper {
   height: 30px;
   border-radius: var(--radius);
-  background: #f7f7f5;
+  background: var(--hover-bg);
   border-color: var(--line);
   box-shadow: none;
 }
 
 .search-input.ant-input-affix-wrapper:hover {
-  border-color: #cfcfc9;
+  border-color: var(--line-strong);
 }
 
 .search-input.ant-input-affix-wrapper-focused {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-soft);
-  background: #fff;
+  background: var(--surface);
 }
 
 .search-input .ant-input {
@@ -173,7 +173,7 @@ button {
   width: 520px;
   max-width: min(520px, 72vw);
   padding: 4px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
@@ -241,7 +241,7 @@ button {
   gap: 12px;
   margin-top: 3px;
   padding: 6px 8px 3px;
-  border-top: 1px solid #f0f0ec;
+  border-top: 1px solid var(--border);
   color: var(--faint);
   font-size: 9px;
 }
@@ -281,7 +281,7 @@ button {
 }
 
 .title-icon-btn.ant-btn:hover {
-  background: #f1f1ee;
+  background: var(--hover-bg);
   color: var(--text);
 }
 
@@ -297,7 +297,7 @@ button {
 }
 
 .close-btn.ant-btn:hover {
-  background: #fbeceb;
+  background: color-mix(in srgb, var(--error) 10%, var(--surface));
   color: var(--danger);
 }
 
@@ -335,7 +335,7 @@ button {
   padding: 5px 6px;
   border: 1px solid var(--primary);
   border-radius: 6px;
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
   color: var(--text);
   font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
@@ -347,7 +347,7 @@ button {
 
 .tile-tooltip-detail {
   margin-top: 2px;
-  color: #9a9a94;
+  color: var(--text-secondary);
   font-size: 10px;
 }
 
@@ -376,7 +376,7 @@ button {
   width: 160px;
   height: 90px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.92);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   border: 1px solid var(--line-strong);
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
@@ -386,22 +386,22 @@ button {
 
 .minimap-group {
   position: absolute;
-  border: 1px solid #dcdcd6;
+  border: 1px solid var(--border);
   border-radius: 2px;
-  background: #f1f1ed;
+  background: var(--hover-bg);
 }
 
 .minimap-dot {
   position: absolute;
   border-radius: 1px;
-  background: #b9b6ae;
+  background: color-mix(in srgb, var(--text-secondary) 45%, transparent);
 }
 
 .minimap-viewport {
   position: absolute;
   border: 1px solid var(--accent);
   border-radius: 1px;
-  background: rgba(47, 107, 91, 0.08);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
   pointer-events: none;
 }
 
@@ -442,6 +442,49 @@ button {
   color: var(--text-secondary);
 }
 
+/* 画布右键菜单：动作收在这里，不占画布排版。 */
+.context-menu {
+  position: fixed;
+  z-index: 400;
+  min-width: 176px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.14);
+}
+
+.context-item {
+  display: block;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-item:hover {
+  background: var(--hover-bg);
+}
+
+.context-item.is-danger {
+  color: var(--danger);
+}
+
+.context-item.is-danger:hover {
+  background: color-mix(in srgb, var(--error) 10%, var(--surface));
+}
+
+.context-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
 .details-panel {
   position: relative;
   flex: 0 0 min(280px, 46vw);
@@ -452,7 +495,7 @@ button {
   gap: 10px;
   padding: 12px;
   overflow: auto;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
@@ -493,8 +536,8 @@ button {
 .details-path {
   padding: 7px 8px;
   color: var(--muted);
-  background: #f7f7f4;
-  border: 1px solid #eeeeea;
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
   border-radius: 5px;
   font-size: 9.5px;
   line-height: 1.5;
@@ -509,7 +552,7 @@ button {
 
 .details-meta > div {
   padding: 6px 7px;
-  background: #f7f7f4;
+  background: var(--hover-bg);
   border-radius: 5px;
 }
 
@@ -554,16 +597,16 @@ button {
 }
 
 .annotation-color.amber {
-  background: #b88734;
+  background: #8a6420;
 }
 .annotation-color.red {
-  background: #b35a51;
+  background: #a0443c;
 }
 .annotation-color.blue {
-  background: #4f7392;
+  background: #3f6285;
 }
 .annotation-color.teal {
-  background: #2f6b5b;
+  background: #356b5b;
 }
 
 .empty-overlay {
@@ -572,14 +615,14 @@ button {
   z-index: 30;
   display: grid;
   place-items: center;
-  background: rgba(247, 247, 245, 0.84);
+  background: color-mix(in srgb, var(--canvas) 84%, transparent);
 }
 
 .empty-card {
   width: 420px;
   max-width: 90%;
   padding: 20px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
@@ -609,8 +652,8 @@ button {
 .empty-hints span {
   padding: 7px;
   color: var(--muted);
-  background: #f7f7f4;
-  border: 1px solid #eeeeea;
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
   border-radius: 5px;
   font-size: 10px;
 }
@@ -622,7 +665,7 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  background: #fff;
+  background: var(--surface);
   border-top: 1px solid var(--line);
   color: var(--faint);
   font-size: 9.5px;
@@ -643,7 +686,7 @@ button {
 }
 
 .status-separator {
-  color: #d3d3ce;
+  color: var(--border);
 }
 
 .zoom-label {
@@ -664,7 +707,7 @@ button {
 
 .settings-section {
   padding: 9px 0;
-  border-bottom: 1px solid #efefeb;
+  border-bottom: 1px solid var(--border);
 }
 
 .theme-grid {
@@ -717,8 +760,8 @@ button {
   flex-direction: column;
   gap: 3px;
   padding: 8px;
-  background: #f7f7f4;
-  border: 1px solid #ecece8;
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
   border-radius: 5px;
 }
 
@@ -781,7 +824,7 @@ button {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #d8d4ca;
+  background: color-mix(in srgb, var(--border) 70%, var(--text-secondary));
   border: 2px solid transparent;
   border-radius: 8px;
   background-clip: content-box;
