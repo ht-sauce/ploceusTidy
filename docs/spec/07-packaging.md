@@ -11,7 +11,7 @@
 
 - 默认 NSIS 按用户安装（`%LOCALAPPDATA%\Programs\ploceusTidy`）。
 - WebView2 使用 bootstrapper 下载模式，减小安装包；企业/离线环境可提供离线安装包。
-- 安装目录可写时，`dataWorkSpace` 默认在其下；否则回退 `%LOCALAPPDATA%\ploceusTidy\dataWorkSpace`。
+- 安装目录可写时，`dataWorkSpace` 默认在其下；否则回退 Tauri `app_data_dir\dataWorkSpace`（Windows 通常为 `%APPDATA%\com.ploceus.tidy\dataWorkSpace`）。
 - 安装/升级不得覆盖或删除 `dataWorkSpace`；卸载默认保留，由用户手动清理；安装包需明确提示。
 
 ## 3. 数据位置
@@ -22,10 +22,10 @@
 
 ## 4. 构建与发布
 
-- 前端构建命令已落地：`pnpm build`；Tauri 打包命令在后端脚手架建立后同批补入 `AGENTS.md` 与根 `README.md`。
+- 构建命令：前端 `pnpm build`，桌面安装包 `pnpm tauri:build`；仅导出 exe 可用 `pnpm tauri build --no-bundle`。
 - 不启用自动更新（v1）；手动安装包升级，保留 `dataWorkSpace`。
 - 代码签名与 SmartScreen 处理后续补充；v1 先保证本地可安装运行。
-- 不接入崩溃上报/遥测；日志只写本地。
+- 不接入崩溃上报/遥测。
 
 ## 5. 体积与启动
 

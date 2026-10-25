@@ -204,7 +204,7 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// 选择工作空间目录：优先安装目录（可写时），否则回退 `%LOCALAPPDATA%`。
+/// 选择工作空间目录：优先安装目录（可写时），否则回退 Tauri `app_data_dir`。
 /// 两个候选都按“能否创建目录”判断可写性，避免把数据库写到只读目录。
 fn resolve_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();

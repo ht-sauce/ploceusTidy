@@ -14,8 +14,8 @@
 | 对象 | 规则 | 示例 |
 | --- | --- | --- |
 | 变量 / 函数 | camelCase | `locateNode` |
-| 类型 / React 组件 | PascalCase | `FileTile` / `SceneNode` |
-| TS 模块 / 规则文件 | kebab-case | `mock-scene.ts` / `search-results` |
+| 类型 / React 组件 | PascalCase | `NodeShape` / `SceneNode` |
+| TS 模块 / 规则文件 | kebab-case | `scene-persistence.ts` / `search-results` |
 | 常量 | UPPER_SNAKE_CASE | `MAX_NODE_COUNT` / `DEFAULT_ZOOM` |
 | 环境变量 | 全大写下划线 | `DATA_WORKSPACE_PATH` |
 | 数据结构主键 / 关联键 | 自定义 ID | `nodeId` / `refId`，禁止依赖自增 |

@@ -158,7 +158,9 @@ export default function SettingsDialog({
             </button>
           ))}
         </div>
-        <p className="settings-note">主题只改变界面语义色，不改变文件图标、标注颜色与画布内容。</p>
+        <p className="settings-note">
+          主题只改变界面语义色，不改变文件图标与画布内容；标注文字牌、空间与连线未自定义时跟随主题主色。
+        </p>
       </section>
 
       <section className="settings-section">
@@ -201,7 +203,7 @@ export default function SettingsDialog({
         <div className="settings-row">
           <div>
             <strong>最小化时暂停渲染</strong>
-            <span>窗口不可见时停止缩略图与画布绘制</span>
+            <span>偏好已保存；窗口不可见时 WebView 会自动节流</span>
           </div>
           <Switch
             checked={pauseWhenMinimized}

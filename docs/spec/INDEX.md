@@ -26,7 +26,7 @@
 | 改导入 / 文件引用 | 00 → 05 → 06 → 04 |
 | 改数据模型 / 存储 | 04 → 05 → 08 的 ADR-003/006/007 |
 | 改窗口 / 界面 | 03 → 02 §5 → 08 的 ADR-008/011 |
-| 改高密度 / 系统图标 | 03 §1/§3/§4 → 08 ADR-013 → `client/components/TitleBar.tsx` / `CanvasBoard.tsx` / `SystemIcon.tsx` |
+| 改高密度 / 系统图标 | 03 §1/§3/§4 → 08 ADR-013/016 → `client/components/TitleBar.tsx` / `client/canvas/CanvasBoard.tsx` / `client/components/SystemIcon.tsx` |
 | 改打包 / 安装 | 07 → 04 §1 → 08 的 ADR-001/003 |
 | 查「为什么这么定」 | 08 的 ADR → 对应篇目的当前状态 |
 | 查「能不能这么做」 | `docs/README.md` §3 硬约束清单（优先级最高） |
@@ -39,8 +39,9 @@
 | 新增 / 变更引用、打开、定位、缺失语义 | 05 + `project-overview.md` |
 | 新增 / 变更导入来源、批量、剪贴板、失败语义 | 06 + 05 |
 | 新增模块 / 界面页面 / 配置项 | 02/03 对应章节 + `project-overview.md` |
+| 已实现能力 / 当前阶段变化 | 根 `README.md`（当前状态、核心能力、已知待补）+ `AGENTS.md` §1 + `docs/README.md` §6 |
 | 窗口形态、渲染生命周期变化 | 03 + 02 §5 + 08 ADR-008/011 |
-| 性能目标或画布渲染策略变化 | 02 §4/§9 + 08 ADR-005 |
+| 性能目标或画布渲染策略变化 | 02 §4/§9 + 08 ADR-005/016 |
 | 打包、安装、dataWorkSpace 路径变化 | 07 + 04 §1 + 根 `README.md` + `AGENTS.md` 命令表 |
 | 任何「二选一」的架构取舍 | 08 新增 ADR（含备选方案段） |
 | ADR 引用的路径 / 名称 / 默认值过时 | 同批修正 ADR 事实（只改事实，不改决策） |

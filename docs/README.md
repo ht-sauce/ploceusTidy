@@ -31,7 +31,7 @@
 | --- | --- | --- |
 | HC-1 | **高内聚低耦合，代码最简洁实现（第一准则）**：同一职责只落一处，依赖单向、最少；取满足需求的最短实现，禁止为假想需求预留抽象层 | 耦合与抽象层层累积，改动面失控，返工成本持续放大 |
 | HC-2 | **先读文档再动手**：接需求先读本文件与范围对应文档；未读不得改文件（单行修复除外） | 违反既有约束产出错误实现，返工并污染代码 |
-| HC-3 | **文档同步与不一致上报**：新增/删除文件、用途或接口变更时同批更新 `project-overview.md` 与对应 spec；发现 spec 与代码不一致，先报告用户裁决 | 过期规范比没有规范更危险，后续改动会「自信地」照着错误规则执行 |
+| HC-3 | **文档同步与不一致上报**：新增/删除文件、用途、能力或接口变更时，同批更新 `project-overview.md`、对应 spec 与根 `README.md` 的当前状态；发现 spec 与代码不一致，先报告用户裁决 | 过期规范比没有规范更危险，后续改动会「自信地」照着错误规则执行 |
 | HC-4 | **不主动创建文档**：除规范体系已声明的文件外，不得新建 `*.md` / `README.md`，除非用户明确要求 | 文档泛滥、事实分散，维护失真 |
 | HC-5 | **禁止全量扫描**：定位文件先查 `project-overview.md`，只精读目标文件与相关章节 | 上下文浪费、改错文件的概率上升 |
 | HC-6 | **先对话后改动**：需求理解 → 方案确认 → 硬约束对照完成后，一次性批量执行；禁止边读边改、边对话边改 | 半成品状态被误当成结论，改动彼此冲突 |
@@ -74,7 +74,7 @@
 - 画布交互对齐 PS：默认不可拖动，`空格 + 左键拖拽`平移，`Alt + 滚轮`缩放，左键拖空白框选。
 - 画布渲染层为 Konva 10 + react-konva + rbush（视口裁剪 + 高清倍率，不做远景 LOD 降级）。
 - Rust 最小测试（`cargo test --manifest-path desktop/Cargo.toml --lib`）与 `pnpm check-spec` 已建立。
-- `pnpm tauri build --no-bundle` 已产出 release exe 并可启动；debug exe 被 Windows 应用控制策略阻止（os error 4551），`pnpm tauri:dev` 已固定使用 release 模式。`cargo check` 与前端构建已通过。
-- 待补：视频封面、图片预览协议、1 万/10 万画布基准实测、NSIS 安装验收。
+- `pnpm tauri:build` 构建安装包；仅验证 release exe 可用 `pnpm tauri build --no-bundle`。debug exe 被 Windows 应用控制策略阻止（os error 4551），`pnpm tauri:dev` 已固定使用 release 模式。`cargo test` 与前端构建已通过。
+- 待补：视频封面、图片预览自定义协议、1 万/10 万画布基准实测、NSIS 安装验收与代码签名。
 - 源码工程已建立；`HC-9`、`HC-15`、`HC-16` 已生效。
 - git hooks 不启用：提交前手动执行 `pnpm lint` / `pnpm format:check` / `pnpm check-spec`。

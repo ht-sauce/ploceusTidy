@@ -72,9 +72,9 @@ sequenceDiagram
 - 窗口按钮调用 Tauri 窗口 API，权限在 `capabilities/default.json` 显式声明。
 - F12 通过 Rust 命令 `open_devtools` 打开 WebView 开发者工具；`tauri` 启用 `devtools` feature，release 构建同样可用。
 - 桌面常驻（可选，默认关闭）：窗口置底/桌面层，适合当作桌面工具。
-- 最小化/隐藏：暂停渲染、动画、缩略图请求；不退出进程。
+- 最小化/隐藏：画布本身按需重绘，窗口不可见时由 WebView 自动节流；`pause_when_minimized` 偏好已持久化，主动暂停策略待接入。不退出进程。
 - 关闭：退出进程；默认不做托盘常驻。
-- 监听窗口聚焦/失焦/尺寸/可见性事件，由 Rust 或 Tauri 窗口事件通知前端。
+- 当前监听容器尺寸（`ResizeObserver`）与窗口聚焦（触发引用校验）；窗口可见性事件后续按需接入。
 
 ## 6. IPC 契约（当前实现）
 
@@ -103,7 +103,7 @@ sequenceDiagram
 
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
 - `scene_save` 不暴露 SQL；前端只提交结构化场景。
-- 缩略图、预览协议、搜索索引后续补充。
+- 缩略图与预览已实现（`thumb_get` / `preview_ref`）；图片预览自定义协议与搜索索引后续补充。
 
 ## 7. 源码分层（已建）
 
@@ -187,23 +187,19 @@ ploceusTidy/
 
 | 依赖 | 用途 | 理由 |
 | --- | --- | --- |
-| Tauri 2 | 桌面壳 | 轻量、安装小、Rust 平台能力 |
-| React 19.3.1 + TS | 界面与领域 | 用户选定；类型安全、组件生态 |
-| Ant Design 6.6.7 | 顶栏、弹窗、图片预览、表单、Switch | 统一交互与可访问性 |
+| Tauri 2.12.4 | 桌面壳 | 轻量、安装小、Rust 平台能力 |
+| React 19.3.1 + React DOM 19.3.1 + TypeScript 6.0.3 | 界面与编排 | 用户选定；类型安全、组件生态 |
+| Ant Design 6.6.7（含 ColorPicker） | 顶栏、弹窗、图片预览、表单、取色器 | 统一交互与可访问性 |
 | @ant-design/icons 6.3.4 | 界面图标 | 与 Ant Design 一致 |
 | Vite 8.3.5 + @vitejs/plugin-react 6.1.2 | 开发与构建 | 最新稳定版，开发反馈快 |
-| Konva（M2） | 画布绘制 | Canvas 2D、变换、命中、批量绘制；可做虚拟化 |
-| rbush（M2） | 空间索引 | 视口查询；十万级节点必需 |
-| rusqlite（M1） | SQLite | 单文件、事务、WAL；DB 留在 Rust |
-| uuid（M1） | 自定义 ID | 主键与关联键统一 UUID TEXT |
-| image（M1） | 剪贴板图片缩略图 | 截图资源解码与缩放 |
-| clipboard-win（M1） | Windows 文件剪贴板 | CF_HDROP 文件列表 |
-| windows crate（M1） | Shell 缩略图/图标 | IShellItemImageFactory / SHGetFileInfoW |
-| tauri-plugin-opener（M1） | 打开/定位 | openPath / revealItemInDir |
-| tauri-plugin-dialog（M1） | 重新关联文件、工作空间迁移 | 原生文件/目录选择器 |
-| konva 10 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组绘制；视口裁剪 + 高清倍率 |
-| rbush 4 + @types/rbush | 视口空间索引 | 可见节点裁剪查询 |
+| konva 10.9 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组绘制；视口裁剪 + 高清倍率 |
+| rbush 4 + @types/rbush | 视口空间索引 | 可见节点裁剪查询；十万级节点必需 |
+| rusqlite 0.41（bundled） | SQLite | 单文件、事务、WAL；DB 留在 Rust |
+| uuid 1.29 | 自定义 ID | 主键与关联键统一 UUID TEXT |
+| base64 0.22 / serde 1 / serde_json 1 | IPC 编码与序列化 | 图片 data URL、场景快照传输 |
+| clipboard-win 5.4 | Windows 文件剪贴板 | CF_HDROP 文件列表 |
 | windows 0.61 + image 0.25 | Shell 缩略图、窗口置底 | IShellItemImageFactory / SetWindowPos；image 仅用于 PNG 编码 |
+| tauri-plugin-opener 2 / tauri-plugin-dialog 2 | 打开/定位、重新关联与迁移 | openPath / revealItemInDir、原生选择器 |
 
 > 不引入 React Flow：DOM 节点在万级规模不可控。画布引擎见 ADR-005，已用 Konva + rbush 落地。
 

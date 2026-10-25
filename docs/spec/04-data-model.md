@@ -7,13 +7,12 @@ dataWorkSpace/
 ├── ploceus.db          # SQLite 主库
 ├── assets/             # 粘贴的截图/图片副本
 │   └── <uuid>.<ext>
-├── thumbnails/         # 系统缩略图/图标缓存
-│   └── <refId>.png
-└── logs/               # 运行日志
+└── thumbnails/         # 系统缩略图/图标缓存
+    └── <refId>.png
 ```
 
 - 默认位置：安装目录下的 `dataWorkSpace/`（仅当目录可写）。
-- 回退位置：安装目录不可写时，使用 `%LOCALAPPDATA%\ploceusTidy\dataWorkSpace`。
+- 回退位置：安装目录不可写时，使用 Tauri `app_data_dir` 下的 `dataWorkSpace`（Windows 通常为 `%APPDATA%\com.ploceus.tidy\dataWorkSpace`）。
 - 用户可在设置中更改；迁移流程为复制 → 校验 → 切换，失败保留旧目录。
 - 数据库、资源、缩略图必须同属一个工作空间，不跨目录混用。
 - `dataWorkSpace` 是唯一写入区域；用户文件只读。
@@ -21,7 +20,7 @@ dataWorkSpace/
 ## 2. SQLite 约定
 
 - `PRAGMA journal_mode=WAL`；`foreign_keys=ON`；`busy_timeout=5000`。
-- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行。
+- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行；当前 `SCHEMA_VERSION = 2`（增量补列：`groups.color`）。
 - 每条命令一个事务；失败整体回滚。
 - `scene_save` 按 ID 增量 upsert，只清理本次快照之外的对象；`refs` 的 `size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验流程维护，保存流程不覆盖。
 - 不在数据库中存文件内容；只存路径、URL、文本、标注与画布坐标。
@@ -116,14 +115,14 @@ dataWorkSpace/
 - 文件/文件夹：按 `(kind, dedupe_key)` 去重；重复导入返回已有 `node`，不插入。
 - 文字、截图、URL：不去重。
 - 删除卡片：删除 `nodes` 行、对应 `edges`、`annotation_targets`；删除无节点引用的 `refs`；同一事务。
-- 原文件永远不动；撤销通过命令栈恢复节点与引用。
+- 原文件永远不动；撤销仅保留最近一次删除的快照，恢复节点、空间、连线与标注。
 
 ## 6. 搜索
 
-- `search_text` 在写入时归一化：NFKC、小写、`\`→`/`、去多余空白。
-- v1 用 `LIKE '%q%'` 查询 `refs.search_text`、`nodes.body`、`annotations.text`；`edges.label` 待连线标签实现后再加入。
-- 5 万引用后评估 FTS5 trigram 或内存 n-gram 索引；拼音首字母作为可选增强。
-- 排序：名称精确 > 前缀 > 子串 > 路径 > 标注/文字。
+- 搜索在前端内存中执行：把节点与标注拍平成条目，NFKC 归一、小写、`\`→`/`、压缩空白后做子串匹配。
+- 分级：名称精确 > 名称前缀 > 名称子串 > 路径/副标题/标注文本。
+- 不通过 SQL 查询、不索引文件内容；5 万引用后评估 FTS5 trigram 或内存 n-gram 索引。
+- 空间标题与连线标签暂未纳入搜索（见 08 待复核）。
 
 ## 7. 恢复
 

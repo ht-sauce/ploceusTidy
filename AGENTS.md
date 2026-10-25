@@ -10,7 +10,7 @@
 | 定位 | 把文件、截图、文字、URL 放到无限画布，分组、连线、标注、搜索定位；只存引用 |
 | 形态 | A · 代码工程，Tauri 桌面客户端 |
 | 技术栈 | Tauri 2 + Rust；React 19.3.1 + TypeScript 6.0.3；Ant Design 6.6.7；Vite 8.3.5；Konva 10 + react-konva + rbush（画布渲染层）；SQLite（rusqlite） |
-| 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` + `logs/` |
+| 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
 | 当前阶段 | Konva 画布（rbush 视口裁剪 + 高清倍率，不做远景 LOD）、四套主题、空间（成员自动归属/可拖动/可连线/标题即标注/可改色）、连线标签与颜色、缺失校验/重连、Shell 缩略图、右键菜单与关联跳转、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
@@ -38,8 +38,7 @@ ploceusTidy/
 ├── AGENTS.md                  # AI 入口（本文件）
 ├── README.md                  # 人类入口
 ├── package.json               # 前端依赖与命令
-├── index.html                 # Vite 入口
-├── vite.config.ts             # Vite + React 配置
+├── vite.config.ts             # Vite + React 配置（root: client）
 ├── tsconfig*.json             # TypeScript 配置
 ├── eslint.config.js           # ESLint flat config
 ├── prettier.config.cjs        # Prettier 配置
@@ -47,6 +46,7 @@ ploceusTidy/
 ├── scripts/                  # check-spec.mjs 规范扫描
 ├── assets/                    # 品牌图
 ├── client/                    # React 前端与高密度画布
+│   ├── index.html             # Vite 入口
 │   ├── main.tsx / App.tsx     # App 仅入口：主题状态 + ConfigProvider → Workspace
 │   ├── types/scene.ts
 │   ├── lib/tauri-api.ts       # Tauri invoke 封装
@@ -126,7 +126,7 @@ ploceusTidy/
 | Tauri 剪贴板文件路径 spike | M0 | `clipboard-win::raw::get_file_list` 在目标 Windows 验证；失败则补 `CF_HDROP` 直读 |
 | 1 万 / 10 万画布基准 | M2 / M4 | 验证视口裁剪、空间索引、缩略图节流与高清倍率的显存开销 |
 | 搜索索引升级 | 5 万引用后 | `LIKE` → FTS5 trigram / 内存索引 |
-| 多画布 | v2 评估 | 当前单画布 + 分组框 |
+| 多画布 | v2 评估 | 当前单画布 + 空间（分组框） |
 | macOS/Linux | 后续 | 剪贴板、Shell 缩略图、打包分别补平台实现 |
 
 决策一经确认，按 `docs/spec/08-adr.md` 补 ADR，并同批补齐命令表、工程结构与领域规范。
