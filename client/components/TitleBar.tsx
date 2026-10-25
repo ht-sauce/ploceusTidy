@@ -44,6 +44,8 @@ const TYPE_LABEL: Record<string, string> = {
   link: '链接',
   text: '文字',
   annotation: '标注',
+  group: '空间',
+  edge: '连线',
 }
 
 /** 快捷键说明：鼠标悬停问号即可查看，不占用画布空间。 */
@@ -153,7 +155,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
           value={query}
           allowClear
           prefix={<SearchOutlined />}
-          placeholder="搜索文件、路径、文字、URL 或标注"
+          placeholder="搜索文件、路径、文字、URL、标注、空间或连线"
           onChange={(event) => {
             onQueryChange(event.target.value)
             setActiveIndex(0)
@@ -197,7 +199,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
             ) : (
               <div className="search-empty">
                 <strong>没有匹配结果</strong>
-                <span>试试文件名、路径、文字、URL 或标注</span>
+                <span>试试文件名、路径、文字、URL、标注、空间或连线</span>
               </div>
             )}
           </div>

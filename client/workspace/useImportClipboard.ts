@@ -2,10 +2,11 @@
  * 导入与剪贴板：文件路径导入、文字/链接节点创建、截图落盘、粘贴事件分发。
  * 依赖场景 store 的写入能力，不直接触碰视口细节。
  */
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
 import type { SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
+import { findFreeOffset, LAYOUT_GAP, nodeRect } from '@/canvas/layout'
 import { mergeNodes, type SceneStore } from './useSceneStore'
 
 interface ImportOptions {
@@ -34,6 +35,13 @@ function readFileAsDataUrl(file: File): Promise<string> {
 
 export function useImportClipboard({ store, message, getCenterWorld, locate }: ImportOptions) {
   const { addNode, setNodes, setSelectedIds } = store
+  // 导入是异步命令，用 ref 读取最新场景做避让，避免闭包拿到旧数组。
+  const nodesRef = useRef(store.nodes)
+  const annotationsRef = useRef(store.annotations)
+  useEffect(() => {
+    nodesRef.current = store.nodes
+    annotationsRef.current = store.annotations
+  }, [store.annotations, store.nodes])
   // 同一次粘贴可能同时触发 keydown 与 paste 事件，500ms 内只处理一次。
   const clipboardGuard = useRef(0)
   // 同一次拖入可能被重复派发 drop；相同路径在短窗口内只导入一次，避免「已存在」刷屏。
@@ -118,8 +126,22 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
       try {
         const result = await desktopApi.importPaths(unique, center.x, center.y)
         if (result.created.length || result.existing.length) {
-          setNodes((previous) => mergeNodes(previous, [...result.created, ...result.existing]))
-          const target = result.created[0] ?? result.existing[0]
+          // Rust 按固定网格放置新对象；若落点压在已有对象上，整簇平移到最近空位。
+          const annotated = new Set(
+            annotationsRef.current.flatMap((annotation) => annotation.nodeIds),
+          )
+          const offset = findFreeOffset(
+            result.created.map((node) => nodeRect(node, false)),
+            nodesRef.current.map((node) => nodeRect(node, annotated.has(node.id))),
+            LAYOUT_GAP,
+          )
+          const created = result.created.map((node) => ({
+            ...node,
+            x: Math.round(node.x + offset.dx),
+            y: Math.round(node.y + offset.dy),
+          }))
+          setNodes((previous) => mergeNodes(previous, [...created, ...result.existing]))
+          const target = created[0] ?? result.existing[0]
           if (target) {
             setSelectedIds([target.id])
             window.setTimeout(() => locate(target.id), 0)

@@ -7,11 +7,11 @@ import type { SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 import { THUMB_IMAGES } from './icons'
 
-export function useVisibleThumbnails(visibleNodes: SceneNode[]) {
+export function useVisibleThumbnails(visibleNodes: SceneNode[], active = true) {
   const [, setThumbVersion] = useState(0)
 
   useEffect(() => {
-    if (!isDesktopClient) return
+    if (!isDesktopClient || !active) return
     const pending = visibleNodes.filter(
       (node) =>
         node.isExists &&
@@ -43,5 +43,5 @@ export function useVisibleThumbnails(visibleNodes: SceneNode[]) {
       ).then(() => setThumbVersion((value) => value + 1))
     }, 300)
     return () => window.clearTimeout(timer)
-  }, [visibleNodes])
+  }, [active, visibleNodes])
 }

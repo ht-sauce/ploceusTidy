@@ -9,6 +9,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import { nodeDisplayHeight, withEdgeColor } from '@/canvas/geometry'
+import { arrangeGroupMembers, findFreeOffset, LAYOUT_GAP, nodeRect } from '@/canvas/layout'
 
 /** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
 interface SceneSnapshot {
@@ -79,6 +80,8 @@ export interface SceneStore {
   moveGroup: (id: string, dx: number, dy: number) => void
   connect: (from: string, to: string) => void
   createGroup: (label: string, color?: string) => SceneGroup | null
+  /** 按当前阅读顺序整理空间内对象；返回整理的对象数量。 */
+  arrangeGroup: (id: string) => number
   renameGroup: (id: string, title: string) => void
   setGroupColor: (id: string, color: string) => void
   setEdgeColor: (id: string, color: string) => void
@@ -111,6 +114,11 @@ export function useSceneStore(): SceneStore {
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
+  /** 标注会让图标格多出 12px，布局碰撞按展示高度计算。 */
+  const annotatedIds = useMemo(
+    () => new Set(annotations.flatMap((annotation) => annotation.nodeIds)),
+    [annotations],
+  )
   const detailsNode = detailsNodeId ? (nodeById.get(detailsNodeId) ?? null) : null
   const activeAnnotation = activeAnnotationId
     ? (annotations.find((annotation) => annotation.id === activeAnnotationId) ?? null)
@@ -186,14 +194,20 @@ export function useSceneStore(): SceneStore {
 
   const addNode = useCallback(
     (node: SceneNode) => {
-      // 新对象落点已在某个空间内时自动成为成员，与拖入行为一致。
-      const placed = node.groupId ? node : { ...node, groupId: membershipOf(node, groups) }
+      // 新对象先避开已有对象，再按落点归属空间；避免导入/新建时压在别人身上。
+      const offset = findFreeOffset(
+        [nodeRect(node, false)],
+        nodes.map((item) => nodeRect(item, annotatedIds.has(item.id))),
+        LAYOUT_GAP,
+      )
+      const base = { ...node, x: Math.round(node.x + offset.dx), y: Math.round(node.y + offset.dy) }
+      const placed = base.groupId ? base : { ...base, groupId: membershipOf(base, groups) }
       setNodes((previous) => [...previous, placed])
       setSelectedIds([placed.id])
       setActiveAnnotationId(null)
       setDetailsMode('details')
     },
-    [groups],
+    [annotatedIds, groups, nodes],
   )
 
   const moveNodes = useCallback(
@@ -251,28 +265,103 @@ export function useSceneStore(): SceneStore {
       const minX = Math.min(...targets.map((node) => node.x)) - 16
       const minY = Math.min(...targets.map((node) => node.y)) - 32
       const maxX = Math.max(...targets.map((node) => node.x + node.w)) + 16
-      const maxY = Math.max(...targets.map((node) => node.y + nodeDisplayHeight(node))) + 16
+      const maxY =
+        Math.max(
+          ...targets.map((node) => node.y + nodeDisplayHeight(node, annotatedIds.has(node.id))),
+        ) + 16
+      const box = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+      const selected = new Set(targets.map((node) => node.id))
+      // 空间与其成员整体让位：不能压在其他空间或未选中的对象上。
+      const offset = findFreeOffset(
+        [box, ...targets.map((node) => nodeRect(node, annotatedIds.has(node.id)))],
+        [
+          ...groups.map((group) => ({ x: group.x, y: group.y, w: group.w, h: group.h })),
+          ...nodes
+            .filter((node) => !selected.has(node.id))
+            .map((node) => nodeRect(node, annotatedIds.has(node.id))),
+        ],
+        LAYOUT_GAP,
+        16,
+        16,
+        16,
+      )
       const group: SceneGroup = {
         id: `group-${crypto.randomUUID()}`,
         title: label,
         color,
-        x: minX,
-        y: minY,
-        w: maxX - minX,
-        h: maxY - minY,
+        x: box.x + offset.dx,
+        y: box.y + offset.dy,
+        w: box.w,
+        h: box.h,
       }
 
       setGroups((previous) => [...previous, group])
       setNodes((previous) =>
         previous.map((node) =>
-          selectedIds.includes(node.id) ? { ...node, groupId: group.id } : node,
+          selected.has(node.id)
+            ? {
+                ...node,
+                x: node.x + offset.dx,
+                y: node.y + offset.dy,
+                groupId: group.id,
+              }
+            : node,
         ),
       )
       setSelectedGroupId(group.id)
       setSelectedIds([])
       return group
     },
-    [nodeById, selectedIds],
+    [annotatedIds, groups, nodeById, nodes, selectedIds],
+  )
+
+  /**
+   * 空间内自动整理：保持当前阅读顺序排成网格，空间随之收高；
+   * 若变高后压到其他空间，则按 16px 步长整体让位，内部对象跟随平移。
+   */
+  const arrangeGroup = useCallback(
+    (id: string) => {
+      const group = groupById.get(id)
+      if (!group) return 0
+      const members = nodes.filter((node) => node.groupId === id)
+      if (members.length === 0) return 0
+      const arranged = arrangeGroupMembers(members, group, LAYOUT_GAP, (node) =>
+        annotatedIds.has(node.id),
+      )
+      const nextBox = { x: group.x, y: group.y, w: arranged.width, h: arranged.height }
+      const obstacles = [
+        ...groups
+          .filter((item) => item.id !== id)
+          .map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
+        ...nodes
+          .filter((node) => node.groupId !== id)
+          .map((node) => nodeRect(node, annotatedIds.has(node.id))),
+      ]
+      const offset = findFreeOffset([nextBox], obstacles, LAYOUT_GAP, 16, 16, 16)
+      undoRef.current = { nodes, groups, edges, annotations }
+      setGroups((previous) =>
+        previous.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                x: Math.round(item.x + offset.dx),
+                y: Math.round(item.y + offset.dy),
+                w: arranged.width,
+                h: arranged.height,
+              }
+            : item,
+        ),
+      )
+      const positions = new Map(arranged.positions.map((item) => [item.id, item]))
+      setNodes((previous) =>
+        previous.map((node) => {
+          const position = positions.get(node.id)
+          return position ? { ...node, x: position.x + offset.dx, y: position.y + offset.dy } : node
+        }),
+      )
+      return members.length
+    },
+    [annotatedIds, annotations, edges, groupById, groups, nodes],
   )
 
   /** 空间标题即空间标注，重命名后立即显示在空间框上。 */
@@ -503,6 +592,7 @@ export function useSceneStore(): SceneStore {
     moveGroup,
     connect,
     createGroup,
+    arrangeGroup,
     renameGroup,
     setGroupColor,
     setEdgeColor,

@@ -20,6 +20,8 @@ interface ContextMenuOptions {
   editText: (id: string) => void
   editEdgeLabel: (id: string) => void
   renameGroup: (id: string) => void
+  /** 按当前顺序整理空间内对象。 */
+  arrangeGroup: (id: string) => void
   pickGroupColor: (id: string) => void
   pickEdgeColor: (id: string) => void
   /** 跳转到当前对象/空间的关联对象；一对多时由调用方弹出选择。 */
@@ -35,6 +37,7 @@ export function useContextMenu({
   editText,
   editEdgeLabel,
   renameGroup,
+  arrangeGroup,
   pickGroupColor,
   pickEdgeColor,
   locateNeighbor,
@@ -99,6 +102,7 @@ export function useContextMenu({
       else if (key === 'edge-label') editEdgeLabel(target.id)
       else if (key === 'edge-color') pickEdgeColor(target.id)
       else if (key === 'group-rename') renameGroup(target.id)
+      else if (key === 'group-arrange') arrangeGroup(target.id)
       else if (key === 'group-color') pickGroupColor(target.id)
       else if (key === 'system-menu' && node) {
         openSystemMenu(node.id, current.anchorX, current.anchorY)
@@ -106,6 +110,7 @@ export function useContextMenu({
     },
     [
       addAnnotation,
+      arrangeGroup,
       deleteTarget,
       editEdgeLabel,
       editText,
@@ -172,6 +177,7 @@ export function useContextMenu({
     return [
       { key: 'group-rename', label: '重命名空间' },
       { key: 'group-color', label: '空间颜色' },
+      ...(count > 0 ? [{ key: 'group-arrange', label: '自动整理空间' }] : []),
       ...(hasNeighbor ? [{ key: 'locate-neighbor', label: '跳转到关联对象' }] : []),
       { key: 'divider-1', label: '', divider: true },
       { key: 'group-info', label: `空间内 ${count} 个对象` },

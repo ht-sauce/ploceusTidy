@@ -9,9 +9,10 @@ import type { Dispatch, RefObject, SetStateAction } from 'react'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
+import type { CanvasContextTarget, CanvasViewport, Rect, StageSize } from './types'
 import type { HandleSide } from './constants'
 import { edgePoints } from './geometry'
+import { constrainDrag, LAYOUT_GAP, SNAP_THRESHOLD, type SnapGuides } from './layout'
 
 type Box = { x: number; y: number; w: number; h: number }
 
@@ -29,6 +30,8 @@ interface UseCanvasInteractionsOptions {
   setViewport: Dispatch<SetStateAction<CanvasViewport>>
   zoomAt: (scale: number, anchorX: number, anchorY: number) => void
   boxOf: (id: string) => Box | null
+  /** 节点静态矩形（含标注高度），用于拖动碰撞与吸附；读取库值而非 Konva 实时位置。 */
+  nodeRectOf: (id: string) => Rect | null
   onSelect: (id: string, additive: boolean) => void
   onBoxSelect: (ids: string[], additive: boolean) => void
   onClearSelection: () => void
@@ -62,6 +65,7 @@ export function useCanvasInteractions({
   setViewport,
   zoomAt,
   boxOf,
+  nodeRectOf,
   onSelect,
   onBoxSelect,
   onClearSelection,
@@ -73,6 +77,7 @@ export function useCanvasInteractions({
   onContextMenu,
 }: UseCanvasInteractionsOptions) {
   const [selectionRect, setSelectionRect] = useState<Box | null>(null)
+  const [guides, setGuides] = useState<SnapGuides | null>(null)
   const [connectPreview, setConnectPreview] = useState<{
     from: string
     side: HandleSide
@@ -96,11 +101,11 @@ export function useCanvasInteractions({
     additive: boolean
   } | null>(null)
   const dragSession = useRef<{
-    items: { id: string; x: number; y: number }[]
+    items: { id: string; x: number; y: number; rect: Rect }[]
     pointerX: number
     pointerY: number
-    lastX: number
-    lastY: number
+    offsetX: number
+    offsetY: number
     moving: boolean
   } | null>(null)
   const connectSession = useRef<{
@@ -111,8 +116,11 @@ export function useCanvasInteractions({
   } | null>(null)
   const groupDrag = useRef<{
     id: string
-    lastX: number
-    lastY: number
+    startX: number
+    startY: number
+    appliedX: number
+    appliedY: number
+    box: Rect
     mode: 'title' | 'box'
   } | null>(null)
   const hoverTimer = useRef<number | null>(null)
@@ -154,6 +162,66 @@ export function useCanvasInteractions({
   const screenToWorld = (x: number, y: number) => {
     const current = viewportRef.current
     return { x: (x - current.x) / current.scale, y: (y - current.y) / current.scale }
+  }
+
+  /**
+   * 参考线只在内容变化时写入 state，避免拖动时每一帧都触发整块画布重渲染。
+   */
+  const applyGuides = useCallback((next: SnapGuides) => {
+    const empty = next.vertical.length === 0 && next.horizontal.length === 0
+    setGuides((previous) => {
+      if (empty) return previous === null ? previous : null
+      if (
+        previous &&
+        previous.vertical.join('|') === next.vertical.join('|') &&
+        previous.horizontal.join('|') === next.horizontal.join('|')
+      ) {
+        return previous
+      }
+      return next
+    })
+  }, [])
+
+  /**
+   * 空间拖动：以按下时的矩形为基准做累积位移，先吸附再挡在其他空间之外，
+   * 最后把增量交给上层带动内部节点。标题拖动与框体拖动共用同一套约束。
+   */
+  const moveGroupSession = (pointerX: number, pointerY: number) => {
+    const session = groupDrag.current
+    if (!session) return
+    const scale = viewportRef.current.scale
+    const desiredX = (pointerX - session.startX) / scale
+    const desiredY = (pointerY - session.startY) / scale
+    const otherGroups = groups.filter((item) => item.id !== session.id)
+    const obstacles = [
+      ...otherGroups.map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
+      // 空间不能压在非成员对象上；成员随空间一起移动，不参与碰撞。
+      ...nodes
+        .filter((item) => item.groupId !== session.id)
+        .map((item) => nodeRectOf(item.id))
+        .filter((item): item is Rect => Boolean(item)),
+    ]
+    const snapTargets = obstacles
+    const result = constrainDrag(
+      [session.box],
+      obstacles,
+      desiredX,
+      desiredY,
+      LAYOUT_GAP,
+      // 吸附阈值按屏幕像素折算，缩小画布时仍然「够得着」。
+      SNAP_THRESHOLD / scale,
+      snapTargets,
+    )
+    const nextX = Math.round(result.dx)
+    const nextY = Math.round(result.dy)
+    const stepX = nextX - session.appliedX
+    const stepY = nextY - session.appliedY
+    applyGuides(result.guides)
+    if (Math.abs(stepX) < 0.4 && Math.abs(stepY) < 0.4) return
+    session.appliedX = nextX
+    session.appliedY = nextY
+    // 空间移动时内部节点由上层一起位移，连线跟着盒子走。
+    onMoveGroup(session.id, stepX, stepY)
   }
 
   /** Alt / Ctrl + 滚轮缩放；普通滚轮按 PS 习惯做纵向平移，避免误缩放。 */
@@ -255,30 +323,42 @@ export function useCanvasInteractions({
     }
 
     if (groupDrag.current && groupDrag.current.mode === 'box') {
-      const session = groupDrag.current
-      const scale = viewportRef.current.scale
-      const dx = (pointer.x - session.lastX) / scale
-      const dy = (pointer.y - session.lastY) / scale
-      if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return
-      session.lastX = pointer.x
-      session.lastY = pointer.y
-      // 空间移动时内部节点由上层一起位移，连线跟着盒子走。
-      onMoveGroup(session.id, dx, dy)
+      moveGroupSession(pointer.x, pointer.y)
       return
     }
 
     if (dragSession.current) {
       const session = dragSession.current
       const scale = viewportRef.current.scale
-      const dx = (pointer.x - session.pointerX) / scale
-      const dy = (pointer.y - session.pointerY) / scale
-      session.lastX = pointer.x
-      session.lastY = pointer.y
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) session.moving = true
+      const desiredX = (pointer.x - session.pointerX) / scale
+      const desiredY = (pointer.y - session.pointerY) / scale
+      const movingIds = new Set(session.items.map((item) => item.id))
+      const obstacles = nodes
+        .filter((item) => !movingIds.has(item.id))
+        .map((item) => nodeRectOf(item.id))
+        .filter((item): item is Rect => Boolean(item))
+      const snapTargets = [
+        ...obstacles,
+        ...groups.map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
+      ]
+      const moving = session.items.map((item) => ({ ...item.rect, x: item.x, y: item.y }))
+      const result = constrainDrag(
+        moving,
+        obstacles,
+        desiredX,
+        desiredY,
+        LAYOUT_GAP,
+        SNAP_THRESHOLD / scale,
+        snapTargets,
+      )
+      session.offsetX = result.dx
+      session.offsetY = result.dy
+      if (Math.abs(result.dx) > 1 || Math.abs(result.dy) > 1) session.moving = true
+      applyGuides(result.guides)
       session.items.forEach((item) => {
         const group = nodeGroupRefs.current.get(item.id)
         if (!group) return
-        group.position({ x: item.x + dx, y: item.y + dy })
+        group.position({ x: item.x + result.dx, y: item.y + result.dy })
       })
       // 连线跟随拖动中的节点：Konva 的 className 不参与 find 选择器，按形状类型取。
       stageRef.current?.find('Arrow').forEach((shape) => {
@@ -362,14 +442,11 @@ export function useCanvasInteractions({
     if (dragSession.current) {
       const session = dragSession.current
       if (session.moving) {
-        const scale = viewportRef.current.scale
-        const dx = (session.lastX - session.pointerX) / scale
-        const dy = (session.lastY - session.pointerY) / scale
         onMoveNodes(
           session.items.map((item) => ({
             id: item.id,
-            x: Math.round(item.x + dx),
-            y: Math.round(item.y + dy),
+            x: Math.round(item.x + session.offsetX),
+            y: Math.round(item.y + session.offsetY),
           })),
         )
       } else {
@@ -381,6 +458,7 @@ export function useCanvasInteractions({
 
     panStart.current = null
     groupDrag.current = null
+    setGuides(null)
   }
 
   // 指针在画布外释放时 Stage 收不到 pointerup，会话会残留；这里做一次兜底收尾。
@@ -422,14 +500,15 @@ export function useCanvasInteractions({
 
     const dragIds = selectedSet.has(node.id) ? selectedIds : [node.id]
     dragSession.current = {
-      items: dragIds
-        .map((id) => nodeById.get(id))
-        .filter((item): item is SceneNode => Boolean(item))
-        .map((item) => ({ id: item.id, x: item.x, y: item.y })),
+      items: dragIds.flatMap((id) => {
+        const rect = nodeRectOf(id)
+        const item = nodeById.get(id)
+        return rect && item ? [{ id, x: item.x, y: item.y, rect }] : []
+      }),
       pointerX: pointer.x,
       pointerY: pointer.y,
-      lastX: pointer.x,
-      lastY: pointer.y,
+      offsetX: 0,
+      offsetY: 0,
       moving: false,
     }
   }
@@ -470,9 +549,19 @@ export function useCanvasInteractions({
     if (spaceRef.current || event.evt.button !== 0) return
     const pointer = stageRef.current?.getPointerPosition()
     if (!pointer) return
+    const group = groups.find((item) => item.id === groupId)
+    if (!group) return
     event.cancelBubble = true
     onSelectGroup(groupId)
-    groupDrag.current = { id: groupId, lastX: pointer.x, lastY: pointer.y, mode: 'box' }
+    groupDrag.current = {
+      id: groupId,
+      startX: pointer.x,
+      startY: pointer.y,
+      appliedX: 0,
+      appliedY: 0,
+      box: { x: group.x, y: group.y, w: group.w, h: group.h },
+      mode: 'box',
+    }
   }
 
   const handleGroupClick = (event: KonvaEventObject<MouseEvent>, groupId: string) => {
@@ -495,27 +584,31 @@ export function useCanvasInteractions({
   const handleGroupTitleDown = (event: KonvaEventObject<DragEvent>, groupId: string) => {
     const pointer = stageRef.current?.getPointerPosition()
     if (!pointer) return
+    const group = groups.find((item) => item.id === groupId)
+    if (!group) return
     event.cancelBubble = true
     onSelectGroup(groupId)
-    groupDrag.current = { id: groupId, lastX: pointer.x, lastY: pointer.y, mode: 'title' }
+    groupDrag.current = {
+      id: groupId,
+      startX: pointer.x,
+      startY: pointer.y,
+      appliedX: 0,
+      appliedY: 0,
+      box: { x: group.x, y: group.y, w: group.w, h: group.h },
+      mode: 'title',
+    }
   }
 
   const handleGroupTitleMove = (event: KonvaEventObject<DragEvent>) => {
-    const session = groupDrag.current
     const pointer = stageRef.current?.getPointerPosition()
-    if (!session || !pointer) return
+    if (!pointer) return
     event.cancelBubble = true
-    const scale = viewportRef.current.scale
-    const dx = (pointer.x - session.lastX) / scale
-    const dy = (pointer.y - session.lastY) / scale
-    if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return
-    session.lastX = pointer.x
-    session.lastY = pointer.y
-    onMoveGroup(session.id, dx, dy)
+    moveGroupSession(pointer.x, pointer.y)
   }
 
   const handleGroupTitleUp = () => {
     groupDrag.current = null
+    setGuides(null)
   }
 
   const handleNodeMouseEnter = (node: SceneNode) => {
@@ -545,6 +638,7 @@ export function useCanvasInteractions({
   return {
     spaceHeld,
     selectionRect,
+    guides,
     connectPreview,
     editor,
     setEditor,

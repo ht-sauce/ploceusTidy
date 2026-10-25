@@ -13,6 +13,7 @@
 | 构建 | Vite 8.3.5 + `@vitejs/plugin-react` 6.1.2 | `vite.config.ts` |
 | 画布 | Konva 10 + react-konva 19.3.2 + rbush 4，视口裁剪 + 高清倍率（不做远景 LOD） | 见 ADR-005 / ADR-016、02 §4 |
 | 主题 | 四套浅色主题语义令牌（`client/lib/theme.ts` + CSS 变量 + AntD ConfigProvider） | 见 ADR-014、03 §10 |
+| 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间与连线标签 | 见 ADR-020 |
 | 数据存储 | SQLite（rusqlite）+ `dataWorkSpace`；`PRAGMA user_version` 迁移 | 见 ADR-003 与 [04-data-model.md](spec/04-data-model.md) |
 | 外部数据源 | 纯本地，无云端、无遥测 | 见 ADR-004 |
 | 构建 / 测试命令 | `pnpm build` / `pnpm lint` / `pnpm check-spec`；Rust `cargo test --manifest-path desktop/Cargo.toml --lib`；桌面端 `pnpm tauri:dev`（release）/ `pnpm tauri:build` | —— |
@@ -42,7 +43,7 @@ ploceusTidy/
 │   ├── lib/
 │   │   ├── tauri-api.ts            # invoke 封装、isTauri
 │   │   ├── theme.ts                # 四套主题令牌与 applyTheme/normalizeTheme
-│   │   └── search.ts               # 搜索归一化与排序分级
+│   │   └── search.ts               # 搜索归一化、拼音首字母缓存与排序分级
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
 │   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
@@ -53,7 +54,8 @@ ploceusTidy/
 │   │   ├── useNodeActions.ts       # 打开、定位、预览、重连、双击激活
 │   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作（含系统菜单入口）
 │   │   ├── useShortcuts.ts         # 全局快捷键映射
-│   │   └── useSearch.ts            # 搜索条目与排序
+│   │   ├── useWindowSuspended.ts   # 最小化/隐藏检测，驱动暂停渲染
+│   │   └── useSearch.ts            # 搜索条目（对象/标注/空间/连线）与排序
 │   ├── canvas/                     # 画布域（Konva 渲染与交互）
 │   │   ├── CanvasBoard.tsx         # 图层编排：组合视口/可见性/交互会话
 │   │   ├── useCanvasViewport.ts    # 视口缩放、定位、适配、缩放回调
@@ -65,6 +67,7 @@ ploceusTidy/
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
 │   │   ├── Minimap.tsx             # 迷你地图与点击定位
 │   │   ├── CanvasTextEditor.tsx    # 文字内联编辑
+│   │   ├── layout.ts              # 矩形碰撞、吸附参考线、空位查找、空间自动整理（纯函数）
 │   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
 │   │   ├── icons.tsx               # 系统图标与缩略图缓存
 │   │   ├── constants.ts            # 迷你地图、名称预算、空间调色板、渲染倍率等常量
@@ -85,7 +88,7 @@ ploceusTidy/
 ├── desktop/                        # Tauri 2 桌面壳 / Rust 平台层（无移动端）
 │   ├── Cargo.toml / Cargo.lock / build.rs
 │   ├── tauri.conf.json             # decorations:false 无边框自定义标题栏、frontendDist ../client/dist、仅 nsis
-│   ├── capabilities/default.json   # core / opener / dialog 权限
+│   ├── capabilities/default.json   # core / opener / dialog 权限；窗口拖动、最小化、关闭与可见性查询
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
 │       ├── main.rs / lib.rs        # Tauri 启动、命令注册
@@ -119,12 +122,12 @@ client/
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
 | 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
-| 画布平移缩放、Konva 渲染、空间与锚点连线、右键菜单、迷你地图 | `client/canvas/*`、`docs/spec/02-client-architecture.md` §4 |
-| 场景命令、选择、删除/撤销、标注、空间成员自动归属、空间/连线配色 | `client/workspace/useSceneStore.ts` |
-| 加载/保存/缺失校验/拖入、快捷键、右键菜单动作 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts` |
+| 画布平移缩放、Konva 渲染、空间与锚点连线、不重叠与吸附、自动整理、右键菜单、迷你地图 | `client/canvas/*`、`client/canvas/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
+| 场景命令、选择、删除/撤销、标注、空间成员自动归属、空间/连线配色、空间自动整理 | `client/workspace/useSceneStore.ts` |
+| 加载/保存/缺失校验/拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts` |
 | 打开/定位/预览/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
-| 搜索归一化与排序 | `client/lib/search.ts`、`client/workspace/useSearch.ts` |
+| 搜索归一化、拼音首字母与排序 | `client/lib/search.ts`、`client/workspace/useSearch.ts` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/workspace/useImportClipboard.ts`、`useNodeActions.ts`、`client/lib/tauri-api.ts` |
 | 搜索、标注、设置 | `client/workspace/useSearch.ts`、`useContextMenu.ts`、`TitleBar.tsx`、`DetailsPanel.tsx`、`SettingsDialog.tsx` |

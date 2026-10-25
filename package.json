@@ -20,6 +20,7 @@
     "@tauri-apps/api": "2.12.4",
     "antd": "6.6.7",
     "konva": "^10.9.0",
+    "pinyin-pro": "3.29.5",
     "rbush": "^4.0.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",

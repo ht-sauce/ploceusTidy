@@ -72,9 +72,9 @@ sequenceDiagram
 - 窗口按钮调用 Tauri 窗口 API，权限在 `capabilities/default.json` 显式声明。
 - F12 通过 Rust 命令 `open_devtools` 打开 WebView 开发者工具；`tauri` 启用 `devtools` feature，release 构建同样可用。
 - 桌面常驻（可选，默认关闭）：窗口置底/桌面层，适合当作桌面工具。
-- 最小化/隐藏：画布本身按需重绘，窗口不可见时由 WebView 自动节流；`pause_when_minimized` 偏好已持久化，主动暂停策略待接入。不退出进程。
+- 最小化/隐藏：画布本身按需重绘；开启「最小化时暂停渲染」后，窗口不可见期间停止缩略图请求与定位脉冲，恢复后继续。不退出进程。
 - 关闭：退出进程；默认不做托盘常驻。
-- 当前监听容器尺寸（`ResizeObserver`）与窗口聚焦（触发引用校验）；窗口可见性事件后续按需接入。
+- 当前监听容器尺寸（`ResizeObserver`）、窗口聚焦（触发引用校验）与窗口最小化/可见性事件（`useWindowSuspended`）。
 
 ## 6. IPC 契约（当前实现）
 
@@ -104,7 +104,7 @@ sequenceDiagram
 
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
 - `scene_save` 不暴露 SQL；前端只提交结构化场景。
-- 缩略图与预览已实现（`thumb_get` / `preview_ref`）；图片预览自定义协议与搜索索引后续补充。
+- 缩略图与预览已实现（`thumb_get` / `preview_ref`）；图片预览保持 data URL 方案，不新增自定义协议；搜索索引在 5 万引用后再评估。
 
 ## 7. 源码分层（已建）
 
@@ -129,7 +129,7 @@ ploceusTidy/
 │   ├── vite-env.d.ts
 │   ├── lib/tauri-api.ts         # invoke 封装、isTauri
 │   ├── lib/theme.ts             # 四套主题语义令牌
-│   ├── lib/search.ts            # 搜索归一化与排序
+│   ├── lib/search.ts            # 搜索归一化、拼音首字母与排序
 │   ├── types/scene.ts
 │   ├── workspace/               # 编排层：场景命令、持久化、导入、动作、快捷键、菜单
 │   │   ├── Workspace.tsx
@@ -139,6 +139,7 @@ ploceusTidy/
 │   │   ├── useNodeActions.ts
 │   │   ├── useContextMenu.ts
 │   │   ├── useShortcuts.ts
+│   │   ├── useWindowSuspended.ts   # 最小化/隐藏检测，驱动暂停渲染
 │   │   └── useSearch.ts
 │   ├── canvas/                  # 画布层：Konva 渲染与交互
 │   │   ├── CanvasBoard.tsx      # 图层编排
@@ -151,6 +152,7 @@ ploceusTidy/
 │   │   ├── EdgeLayer.tsx
 │   │   ├── Minimap.tsx
 │   │   ├── CanvasTextEditor.tsx
+│   │   ├── layout.ts            # 矩形碰撞、吸附、空位与空间自动整理
 │   │   ├── geometry.ts
 │   │   ├── icons.tsx
 │   │   ├── constants.ts

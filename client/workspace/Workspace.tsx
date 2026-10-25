@@ -28,6 +28,7 @@ import { useImportClipboard, isTypingTarget } from './useImportClipboard'
 import { useScenePersistence } from './useScenePersistence'
 import { useContextMenu } from './useContextMenu'
 import { useShortcuts } from './useShortcuts'
+import { useWindowSuspended } from './useWindowSuspended'
 
 interface WorkspaceProps {
   themeId: ThemeId
@@ -55,11 +56,32 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     fallback: string
   } | null>(null)
   const [neighbors, setNeighbors] = useState<{ options: NeighborOption[] } | null>(null)
+  /** 「最小化时暂停渲染」偏好；真正的暂停状态由窗口事件驱动。 */
+  const [pauseWhenMinimized, setPauseWhenMinimized] = useState(true)
 
   const canvasRef = useRef<CanvasBoardHandle>(null)
   const titleBarRef = useRef<TitleBarHandle>(null)
 
-  const { results } = useSearch(query, store.nodes, store.annotations, store.nodeById)
+  const { results } = useSearch(
+    query,
+    store.nodes,
+    store.groups,
+    store.edges,
+    store.annotations,
+    store.nodeById,
+  )
+
+  const suspended = useWindowSuspended(pauseWhenMinimized)
+
+  useEffect(() => {
+    if (!isDesktopClient) return
+    desktopApi
+      .metaGet('pause_when_minimized')
+      .then((value) => setPauseWhenMinimized(value !== '0'))
+      .catch(() => {
+        // 配置读取失败时保持默认开启。
+      })
+  }, [])
 
   /** 只有场景为空且用户未主动收起时才显示引导。 */
   const showEmpty = store.nodes.length === 0 && !emptyDismissed
@@ -189,6 +211,15 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [message, store],
   )
 
+  const arrangeSpace = useCallback(
+    (id: string) => {
+      const count = store.arrangeGroup(id)
+      if (count > 0) message.success(`已整理 ${count} 个对象`)
+      else message.info('空间内还没有对象')
+    },
+    [message, store],
+  )
+
   const contextMenu = useContextMenu({
     store,
     openNode: (node) => void actions.openNode(node),
@@ -196,6 +227,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     editText: (id) => canvasRef.current?.editText(id),
     editEdgeLabel: openEdgeLabel,
     renameGroup: openGroupTitle,
+    arrangeGroup: arrangeSpace,
     pickGroupColor: openGroupColor,
     pickEdgeColor: openEdgeColor,
     locateNeighbor,
@@ -229,7 +261,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   const undo = useCallback(() => {
     if (store.undo()) message.success('已撤销')
-    else message.info('没有可撤销的删除操作')
+    else message.info('没有可撤销的操作')
   }, [message, store])
 
   const linkSelected = useCallback(() => {
@@ -372,6 +404,16 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   // ---------- 搜索与详情 ----------
 
   const selectResult = (entry: SearchEntry) => {
+    if (entry.groupId) {
+      canvasRef.current?.locateTarget(entry.groupId)
+      store.selectGroup(entry.groupId)
+      return
+    }
+    if (entry.edgeId) {
+      canvasRef.current?.locateEdge(entry.edgeId)
+      store.selectEdge(entry.edgeId)
+      return
+    }
     canvasRef.current?.locateNode(entry.nodeId)
     store.selectNode(entry.nodeId, false)
     if (entry.annotationId) {
@@ -381,6 +423,11 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   }
 
   const openResult = (entry: SearchEntry) => {
+    // 空间与连线没有可打开的原文件，Ctrl+Enter 退化为定位。
+    if (entry.groupId || entry.edgeId) {
+      selectResult(entry)
+      return
+    }
     const node = store.nodeById.get(entry.nodeId)
     if (node) void actions.openNode(node)
   }
@@ -413,6 +460,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           selectedGroupId={store.selectedGroupId}
           selectedEdgeId={store.selectedEdgeId}
           detailsOpen={Boolean(store.detailsNode)}
+          paused={suspended}
           onSelect={store.selectNode}
           onBoxSelect={store.boxSelect}
           onClearSelection={store.clearSelection}
@@ -491,6 +539,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         onThemeChange={onThemeChange}
         workspace={workspace}
         onWorkspaceChanged={setWorkspace}
+        onPauseWhenMinimizedChange={setPauseWhenMinimized}
         onSceneCleared={() => {
           store.setNodes([])
           store.setGroups([])

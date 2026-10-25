@@ -25,7 +25,7 @@ import {
   useState,
 } from 'react'
 import Konva from 'konva'
-import { Arrow, Circle, Layer, Label, Rect, Stage, Tag, Text } from 'react-konva'
+import { Arrow, Circle, Label, Layer, Line, Rect, Stage, Tag, Text } from 'react-konva'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode, ThemeId } from '@/types/scene'
 import { themeById } from '@/lib/theme'
 import CanvasTextEditor from './CanvasTextEditor'
@@ -73,12 +73,16 @@ interface CanvasBoardProps {
   onGroupTitleEdit: (id: string) => void
   /** 右键菜单由工作空间渲染，画布只上报目标与屏幕坐标。 */
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
+  /** 窗口最小化/隐藏时暂停缩略图与脉冲等主动渲染。 */
+  paused: boolean
 }
 
 export interface CanvasBoardHandle {
   locateNode: (id: string) => void
   /** 定位节点或空间，供连线邻居跳转使用。 */
   locateTarget: (id: string) => void
+  /** 定位连线中点，供搜索结果使用。 */
+  locateEdge: (id: string) => void
   fitView: () => void
   zoomBy: (factor: number) => void
   getCenterWorld: () => { x: number; y: number }
@@ -111,6 +115,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onScaleChange,
     onGroupTitleEdit,
     onContextMenu,
+    paused,
   },
   ref,
 ) {
@@ -179,7 +184,23 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     size,
   })
 
-  useVisibleThumbnails(visibleNodes)
+  useVisibleThumbnails(visibleNodes, !paused)
+
+  /** 节点静态矩形：拖动碰撞与吸附以库内坐标为准，避免被 Konva 实时位置干扰。 */
+  const nodeRectOf = useCallback(
+    (id: string) => {
+      const node = nodeById.get(id)
+      return node
+        ? {
+            x: node.x,
+            y: node.y,
+            w: node.w,
+            h: nodeDisplayHeight(node, annotationByNode.has(id)),
+          }
+        : null
+    },
+    [annotationByNode, nodeById],
+  )
 
   /**
    * 统一解析「节点或空间」的矩形。拖动中的节点以 Konva Group 的实时位置为准；
@@ -217,6 +238,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     setViewport,
     zoomAt,
     boxOf,
+    nodeRectOf,
     onSelect,
     onBoxSelect,
     onClearSelection,
@@ -228,22 +250,46 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onContextMenu,
   })
 
+  /**
+   * 连线定位：以两端盒子的中点为中心；缩放沿用当前比例并保证至少 0.92，
+   * 与节点定位的体感一致，不额外引入脉冲高亮。
+   */
+  const locateEdge = useCallback(
+    (id: string) => {
+      const edge = edges.find((item) => item.id === id)
+      if (!edge) return
+      const from = boxOf(edge.from)
+      const to = boxOf(edge.to)
+      if (!from || !to) return
+      const scale = Math.max(viewportRef.current.scale, 0.92)
+      const centerX = (from.x + from.w / 2 + to.x + to.w / 2) / 2
+      const centerY = (from.y + from.h / 2 + to.y + to.h / 2) / 2
+      setViewport({
+        x: size.width / 2 - centerX * scale,
+        y: size.height / 2 - centerY * scale,
+        scale,
+      })
+    },
+    [boxOf, edges, setViewport, size.height, size.width, viewportRef],
+  )
+
   useImperativeHandle(
     ref,
     () => ({
       locateNode: locateTarget,
       locateTarget,
+      locateEdge,
       fitView,
       zoomBy,
       getCenterWorld,
       editText: interactions.editText,
     }),
-    [fitView, getCenterWorld, interactions.editText, locateTarget, zoomBy],
+    [fitView, getCenterWorld, interactions.editText, locateEdge, locateTarget, zoomBy],
   )
 
-  // 定位后的脉冲高亮：只对当前定位对象做一次淡出，不持续渲染。
+  // 定位后的脉冲高亮：只对当前定位对象做一次淡出，不持续渲染；窗口不可见时跳过。
   useEffect(() => {
-    if (!pulseId) return
+    if (!pulseId || paused) return
     const ring = ringRefs.current.get(pulseId)
     if (!ring || !nodeById.get(pulseId)) return
     ring.opacity(1)
@@ -255,7 +301,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     })
     tween.play()
     return () => tween.destroy()
-  }, [nodeById, pulseId])
+  }, [nodeById, paused, pulseId])
 
   // 主题相关的色值直接取主题定义，切换主题时随 props 重算；
   // 不依赖 CSS 变量的写入时机，避免画布停留在上一套配色。
@@ -488,6 +534,40 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
               listening={false}
             />
           ) : null}
+
+          {/* 拖动吸附参考线：贯穿当前视口，只做视觉提示，不参与命中。 */}
+          {interactions.guides
+            ? (() => {
+                const left = -viewport.x / viewport.scale
+                const top = -viewport.y / viewport.scale
+                const right = left + size.width / viewport.scale
+                const bottom = top + size.height / viewport.scale
+                return (
+                  <>
+                    {interactions.guides.vertical.map((x) => (
+                      <Line
+                        key={`guide-v-${x}`}
+                        points={[x, top, x, bottom]}
+                        stroke={tokens.primary}
+                        strokeWidth={1}
+                        dash={[4, 4]}
+                        listening={false}
+                      />
+                    ))}
+                    {interactions.guides.horizontal.map((y) => (
+                      <Line
+                        key={`guide-h-${y}`}
+                        points={[left, y, right, y]}
+                        stroke={tokens.primary}
+                        strokeWidth={1}
+                        dash={[4, 4]}
+                        listening={false}
+                      />
+                    ))}
+                  </>
+                )
+              })()
+            : null}
 
           {interactions.connectPreview
             ? (() => {

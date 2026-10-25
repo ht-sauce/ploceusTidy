@@ -16,6 +16,8 @@ interface SettingsDialogProps {
   onThemeChange: (id: ThemeId) => void
   workspace: WorkspaceInfo | null
   onWorkspaceChanged: (info: WorkspaceInfo) => void
+  /** 最小化暂停偏好变化时同步给工作空间，立即生效。 */
+  onPauseWhenMinimizedChange: (value: boolean) => void
   onSceneCleared: () => void
 }
 
@@ -34,6 +36,7 @@ export default function SettingsDialog({
   onThemeChange,
   workspace,
   onWorkspaceChanged,
+  onPauseWhenMinimizedChange,
   onSceneCleared,
 }: SettingsDialogProps) {
   const { message, modal } = AntApp.useApp()
@@ -77,7 +80,9 @@ export default function SettingsDialog({
     setPauseWhenMinimized(checked)
     try {
       await desktopApi.metaSet('pause_when_minimized', checked ? '1' : '0')
+      onPauseWhenMinimizedChange(checked)
     } catch (error) {
+      setPauseWhenMinimized(!checked)
       message.error(`保存设置失败：${String(error)}`)
     }
   }
@@ -203,7 +208,7 @@ export default function SettingsDialog({
         <div className="settings-row">
           <div>
             <strong>最小化时暂停渲染</strong>
-            <span>偏好已保存；窗口不可见时 WebView 会自动节流</span>
+            <span>窗口最小化或隐藏时暂停缩略图与画布动画，恢复后继续</span>
           </div>
           <Switch
             checked={pauseWhenMinimized}

@@ -745,6 +745,10 @@ button {
   color: var(--muted);
 }
 
+.settings-modal.ant-modal {
+  top: 2vh;
+}
+
 .settings-modal .ant-modal-content {
   padding: 18px;
   border-radius: 8px;

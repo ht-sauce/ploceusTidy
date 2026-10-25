@@ -9,11 +9,11 @@
 | 产品名 | 络雀（仓库名 `ploceusTidy`） |
 | 定位 | 把文件、截图、文字、URL 放到无限画布，分组、连线、标注、搜索定位；只存引用 |
 | 形态 | A · 代码工程，Tauri 桌面客户端 |
-| 技术栈 | Tauri 2 + Rust；React 19.3.1 + TypeScript 6.0.3；Ant Design 6.6.7；Vite 8.3.5；Konva 10 + react-konva + rbush（画布渲染层）；SQLite（rusqlite） |
+| 技术栈 | Tauri 2 + Rust；React 19.3.1 + TypeScript 6.0.3；Ant Design 6.6.7；Vite 8.3.5；Konva 10 + react-konva + rbush（画布渲染层）；pinyin-pro（搜索首字母）；SQLite（rusqlite） |
 | 持久化 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/` |
 | 外部数据源 | 纯本地；无云端、无遥测、无外部 API |
 | 运行环境 | Windows 10/11 x64 桌面端；不含 iOS/Android；单机运行，不建端口表 |
-| 当前阶段 | Konva 画布（rbush 视口裁剪 + 高清倍率，不做远景 LOD）、四套主题、空间（成员自动归属/可拖动/可连线/标题即标注/可改色/选中发光）、连线标签颜色与选中发光、原生 Shell 右键菜单、缺失校验/重连、Shell 缩略图与快捷方式图标、右键菜单与关联跳转、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
+| 当前阶段 | Konva 画布（rbush 视口裁剪 + 高清倍率，不做远景 LOD）、四套主题、空间（成员自动归属/可拖动/可连线/标题即标注/可改色/选中发光/右键自动整理）、不重叠与对齐吸附、连线标签颜色与选中发光、原生 Shell 右键菜单、缺失校验/重连、Shell 缩略图与快捷方式图标、右键菜单与关联跳转、工作空间打开/迁移/重建、`app_meta` 配置、`user_version` 迁移框架、搜索（对象/标注/空间/连线 + 拼音首字母）、最小化暂停渲染已实现；Rust 最小测试与 `check-spec` 已建；release exe 可启动，debug exe 被本机应用控制策略阻止（os error 4551），开发统一用 release 模式 |
 
 ## 2. 命令
 
@@ -53,11 +53,12 @@ ploceusTidy/
 │   ├── lib/theme.ts           # 四套主题语义令牌
 │   ├── lib/search.ts          # 搜索归一化与排序
 │   ├── workspace/             # 编排层：useSceneStore / useScenePersistence / useImportClipboard
-│   │                          #        / useNodeActions / useContextMenu / useShortcuts / useSearch / Workspace
+│   │                          #        / useNodeActions / useContextMenu / useShortcuts / useSearch
+│   │                          #        / useWindowSuspended / Workspace
 │   ├── canvas/                # 画布层：CanvasBoard（图层编排）+ useCanvasViewport（视口）
 │   │                          #        + useVisibleScene（裁剪/连线筛选）+ useCanvasInteractions（交互会话）
 │   │                          #        + useVisibleThumbnails + NodeShape / GroupShape / EdgeLayer / Minimap
-│   │                          #        + CanvasTextEditor / geometry / icons / constants / types
+│   │                          #        + CanvasTextEditor / layout / geometry / icons / constants / types
 │   ├── components/            # 通用组件：TitleBar / SystemIcon / DetailsPanel / ContextMenu
 │   │                          #        / StatusBar / EmptyOverlay / TextPromptDialog / ColorPickerDialog
 │   │                          #        / NeighborPickerDialog / ImagePreviewDialog / SettingsDialog

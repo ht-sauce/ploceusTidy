@@ -74,17 +74,22 @@ export interface SceneAnnotation {
 }
 
 /**
- * 搜索条目：节点与标注共用同一套搜索结果结构。
- * 标注条目通过 `annotationId` 回指原标注。
+ * 搜索条目：节点、标注、空间与连线共用同一套搜索结果结构。
+ * `nodeId` 始终是定位目标（空间填空间 ID，连线填起点 ID）；
+ * 标注通过 `annotationId`、空间通过 `groupId`、连线通过 `edgeId` 回指原对象。
  */
 export interface SearchEntry {
   nodeId: string
-  type: SceneNodeKind | 'annotation'
+  type: SceneNodeKind | 'annotation' | 'group' | 'edge'
   title: string
   subtitle: string
   icon: SystemIconKind
   searchText: string
+  /** 名称的拼音首字母（小写、无空格），用于「xiangmu」这类输入。 */
+  pinyin: string
   annotationId?: string
+  groupId?: string
+  edgeId?: string
 }
 
 /** `scene_load` / `scene_save` 的完整场景快照。 */
