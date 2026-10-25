@@ -15,6 +15,7 @@ import {
   NODE_ICON_SIZE,
   NODE_ICON_TOP,
   NODE_LINE_HEIGHT,
+  NODE_NAME_FONT_SIZE,
 } from './constants'
 import { annotationTone, handlePoint } from './geometry'
 import { displayName } from '@/domain/layout'
@@ -116,13 +117,13 @@ function NodeShape({
         height={labelHeight}
         y={labelY}
         text={label}
-        fontSize={11}
+        fontSize={NODE_NAME_FONT_SIZE}
         fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
         fill={tokens.text}
         align="center"
         wrap="word"
         ellipsis
-        lineHeight={1.2}
+        lineHeight={1.15}
       />
       {!node.isExists ? (
         <Rect width={26} height={13} x={2} y={2} fill={tokens.error} cornerRadius={3} />

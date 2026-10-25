@@ -21,7 +21,9 @@ export const NAME_LINE_BUDGET = 6
 /** 卡片高度自适应：图标区 + 名称行 + 标注预留。 */
 export const NODE_ICON_TOP = 3
 export const NODE_ICON_SIZE = 32
-export const NODE_LINE_HEIGHT = 13
+/** 名称字号提高对比度后加大 1px（11 → 12），行高按 1.15 倍随之调整。 */
+export const NODE_NAME_FONT_SIZE = 12
+export const NODE_LINE_HEIGHT = 14
 export const NODE_PADDING_BOTTOM = 4
 export const NODE_ANNOTATION_HEIGHT = 12
 

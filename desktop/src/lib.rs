@@ -287,6 +287,15 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // 单实例必须最先注册：第二个进程启动时直接把已有窗口拉到前台并退出，
+        // 避免同一 dataWorkSpace 被两个窗口同时写库。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

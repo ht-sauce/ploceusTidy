@@ -16,6 +16,7 @@ import {
   LAYOUT_GAP,
   nodeDisplayHeight,
   nodeRect,
+  rectsOverlap,
 } from '@/domain/layout'
 
 /** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
@@ -87,6 +88,8 @@ export interface SceneStore {
   addNode: (node: SceneNode) => void
   moveNodes: (moves: { id: string; x: number; y: number }[]) => void
   moveGroup: (id: string, dx: number, dy: number) => void
+  /** 手动调整空间框（四角拖拽提交）：只改框本身；下次成员变化时仍按内容自动贴合。 */
+  resizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   connect: (from: string, to: string, fromHandle?: string, toHandle?: string) => void
   /** 叠放层级：置顶取当前最大 z + 1；置底取最小 z - 1。 */
   raiseNode: (id: string, to: 'top' | 'bottom') => void
@@ -299,6 +302,8 @@ export function useSceneStore(): SceneStore {
       }
       // 移动过的节点涉及的空间（旧归属 + 新归属）都要重新贴合内容。
       const affected = new Set<string>()
+      // 需要自动整理的空间：新加入成员的空间，以及拖动后与既有成员重叠的空间。
+      const arrangeTargets = new Set<string>()
       const next = nodes.map((node) => {
         const move = byId.get(node.id)
         const follow = delta.get(node.id)
@@ -312,12 +317,54 @@ export function useSceneStore(): SceneStore {
         // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
         const groupId = membershipOf(moved, groups)
         if (groupId) affected.add(groupId)
+        if (groupId && groupId !== node.groupId) arrangeTargets.add(groupId)
         return { ...moved, groupId }
       })
-      setNodes(next)
-      refitGroupsOf(next, affected)
+      // 同一空间内拖动后若与既有成员重叠（拖入时允许压住，靠整理消解），也触发整理。
+      const hasAnnotation = (node: SceneNode) => annotatedIds.has(node.id)
+      affected.forEach((groupId) => {
+        if (arrangeTargets.has(groupId)) return
+        const members = next.filter((node) => node.groupId === groupId)
+        for (const node of members) {
+          if (!delta.has(node.id)) continue
+          const rect = nodeRect(node, hasAnnotation(node))
+          const blocked = members.some(
+            (other) =>
+              other.id !== node.id &&
+              rectsOverlap(rect, nodeRect(other, hasAnnotation(other)), LAYOUT_GAP),
+          )
+          if (blocked) {
+            arrangeTargets.add(groupId)
+            return
+          }
+        }
+      })
+      // 整理在贴合之前应用：贴合按整理后的坐标反推空间框，成员保持网格不重叠。
+      let placed = next
+      if (arrangeTargets.size > 0) {
+        const positions = new Map<string, { x: number; y: number }>()
+        arrangeTargets.forEach((groupId) => {
+          const group = groupById.get(groupId)
+          if (!group) return
+          const arranged = arrangeGroupMembers(
+            next.filter((node) => node.groupId === groupId),
+            group,
+            LAYOUT_GAP,
+            hasAnnotation,
+          )
+          arranged.positions.forEach((item) => positions.set(item.id, item))
+        })
+        if (positions.size > 0) {
+          placed = next.map((node) => {
+            const position = positions.get(node.id)
+            return position ? { ...node, x: position.x, y: position.y } : node
+          })
+        }
+      }
+      setNodes(placed)
+      refitGroupsOf(placed, affected)
     },
-    [groups, nodes, refitGroupsOf],
+    [annotatedIds, groupById, groups, nodes, refitGroupsOf],
   )
 
   /** 叠放层级：置顶取当前最大 z + 1，置底取最小 z - 1，保持相对次序。 */
@@ -377,6 +424,26 @@ export function useSceneStore(): SceneStore {
       ),
     )
   }, [])
+
+  /** 手动调框：成员不移动，框可大于成员包围盒（便于预留放入空间）；成员下次变化时自动重算贴合。 */
+  const resizeGroup = useCallback(
+    (id: string, box: { x: number; y: number; w: number; h: number }) => {
+      setGroups((previous) =>
+        previous.map((group) =>
+          group.id === id
+            ? {
+                ...group,
+                x: Math.round(box.x),
+                y: Math.round(box.y),
+                w: Math.round(box.w),
+                h: Math.round(box.h),
+              }
+            : group,
+        ),
+      )
+    },
+    [],
+  )
 
   /** 建立有向连线；同向重复静默忽略，自连直接拒绝。 */
   const connect = useCallback(
@@ -808,6 +875,7 @@ export function useSceneStore(): SceneStore {
     addNode,
     moveNodes,
     moveGroup,
+    resizeGroup,
     connect,
     raiseNode,
     mountNode,

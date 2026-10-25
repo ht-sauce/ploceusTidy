@@ -469,6 +469,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           onClearSelection={store.clearSelection}
           onSelectGroup={store.selectGroup}
           onMoveGroup={store.moveGroup}
+          onResizeGroup={store.resizeGroup}
           onMoveNodes={store.moveNodes}
           onSelectEdge={store.selectEdge}
           onEdgeLabelEdit={openEdgeLabel}

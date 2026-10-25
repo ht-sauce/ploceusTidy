@@ -51,6 +51,8 @@ export default function App() {
           colorPrimary: tokens.primary,
           colorBgBase: tokens.surface,
           colorBgContainer: tokens.surface,
+          // 正文统一纯黑，和画布名称保持同一对比度；次要说明仍用 text-secondary 灰。
+          colorText: '#000000',
           colorBorder: tokens.border,
           borderRadius: 6,
           fontFamily: '"Segoe UI", "Microsoft YaHei", system-ui, sans-serif',

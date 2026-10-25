@@ -42,6 +42,7 @@ import { nodeDisplayHeight } from '@/domain/layout'
 import { ICON_IMAGES, THUMB_IMAGES, cssVar, startIconLoad } from './icons'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import { useCanvasInteractions } from './useCanvasInteractions'
+import type { GroupResizeCorner } from './useCanvasInteractions'
 import { useCanvasViewport } from './useCanvasViewport'
 import { useVisibleScene } from './useVisibleScene'
 import { useVisibleThumbnails } from './useVisibleThumbnails'
@@ -64,6 +65,8 @@ interface CanvasBoardProps {
   onClearSelection: () => void
   onSelectGroup: (id: string) => void
   onMoveGroup: (id: string, dx: number, dy: number) => void
+  /** 空间四角手动调框提交；不影响成员进出时的自动贴合。 */
+  onResizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onSelectEdge: (id: string) => void
   onEdgeLabelEdit: (id: string) => void
@@ -108,6 +111,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onClearSelection,
     onSelectGroup,
     onMoveGroup,
+    onResizeGroup,
     onMoveNodes,
     onSelectEdge,
     onEdgeLabelEdit,
@@ -284,6 +288,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onClearSelection,
     onSelectGroup,
     onMoveGroup,
+    onResizeGroup,
     onMoveNodes,
     onConnect,
     onActivate,
@@ -320,6 +325,17 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         interactionsRef.current.handleGroupClick(event, groupId),
       onContextMenu: (event: KonvaEventObject<MouseEvent>, groupId: string) =>
         interactionsRef.current.handleGroupContextMenu(event, groupId),
+    }),
+    [],
+  )
+  // 选中空间的四角调框手柄：拖动只改框，成员位置与自动贴合逻辑不受影响。
+  const groupResizeHandlers = useMemo(
+    () => ({
+      onResizeDown: (
+        event: KonvaEventObject<MouseEvent>,
+        groupId: string,
+        corner: GroupResizeCorner,
+      ) => interactionsRef.current.handleGroupResizeDown(event, groupId, corner),
     }),
     [],
   )
@@ -394,7 +410,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       border: theme.border,
       selectedBg: theme.selectedBg,
       surface: theme.surface,
-      text: cssVar('--text', '#30343A'),
+      text: cssVar('--text', '#000000'),
       textSecondary: cssVar('--text-secondary', '#747A83'),
       error: cssVar('--error', '#C44B52'),
     }
@@ -595,6 +611,28 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
                   />
                 )
               })
+            : null}
+
+          {/* 选中空间的四角调框手柄：方角标记，拖动即缩放框本身。 */}
+          {activeGroup
+            ? (['nw', 'ne', 'sw', 'se'] as GroupResizeCorner[]).map((corner) => (
+                <Rect
+                  key={`group-resize-${corner}`}
+                  x={(corner.includes('w') ? activeGroup.x : activeGroup.x + activeGroup.w) - 4}
+                  y={(corner.includes('n') ? activeGroup.y : activeGroup.y + activeGroup.h) - 4}
+                  width={8}
+                  height={8}
+                  fill={tokens.surface}
+                  stroke={tokens.primary}
+                  strokeWidth={1.5}
+                  cornerRadius={2}
+                  // 命中区外扩，小方块也好抓。
+                  hitStrokeWidth={10}
+                  onMouseDown={(event) =>
+                    groupResizeHandlers.onResizeDown(event, activeGroup.id, corner)
+                  }
+                />
+              ))
             : null}
 
           {pulseId

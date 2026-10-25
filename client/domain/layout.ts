@@ -31,6 +31,9 @@ const PLACE_STEP_Y = 72
 /** 空间标题区高度与内边距，自动整理时按同一套尺度排版。 */
 const GROUP_HEADER = 32
 const GROUP_PADDING = 16
+/** 空间手动调框的最小尺寸：低于它标题与一行成员都放不下。 */
+export const GROUP_MIN_W = 140
+export const GROUP_MIN_H = 100
 
 /**
  * 展示名：图标格只有两行，后缀必须出现——同名不同后缀的文件功能完全不同。

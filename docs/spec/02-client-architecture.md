@@ -204,6 +204,7 @@ ploceusTidy/
 | clipboard-win 5.4 | Windows 文件剪贴板 | CF_HDROP 文件列表 |
 | windows 0.61 + image 0.25 | Shell 缩略图、窗口置底、原生右键菜单 | IShellItemImageFactory / SetWindowPos / IContextMenu + TrackPopupMenuEx；image 仅用于 PNG 编码 |
 | tauri-plugin-opener 2 / tauri-plugin-dialog 2 | 打开/定位、重新关联与迁移 | openPath / revealItemInDir、原生选择器 |
+| tauri-plugin-single-instance 2 | 单实例运行 | 第二个进程激活已有窗口并退出（ADR-024） |
 
 > 不引入 React Flow：DOM 节点在万级规模不可控。画布引擎见 ADR-005，已用 Konva + rbush 落地。
 

@@ -237,7 +237,7 @@ export default function SettingsDialog({
         <h3>关于</h3>
         <div className="settings-row">
           <div>
-            <strong>络雀 0.1.0</strong>
+            <strong>络雀 0.1.1</strong>
             <span>Tauri 2 · React 19 · 纯本地，无云端与遥测</span>
           </div>
         </div>

@@ -14,6 +14,8 @@ import type { Rect } from '@/domain/layout'
 import { GHOST_DRAG_LIMIT, type HandleSide } from './constants'
 import { asHandleSide, edgePoints } from './geometry'
 import {
+  GROUP_MIN_H,
+  GROUP_MIN_W,
   LAYOUT_GAP,
   SNAP_THRESHOLD,
   rectsOverlap,
@@ -22,6 +24,33 @@ import {
 } from '@/domain/layout'
 
 type Box = { x: number; y: number; w: number; h: number }
+
+/** 空间手动调框的抓角：北/南改高、东/西改宽，西北/西南以对角为锚。 */
+export type GroupResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
+
+/** 四角调框的落点计算：低于最小尺寸时把锚边钉回最小尺寸处，框不缩破下限。 */
+function resizedBoxOf(box: Rect, corner: GroupResizeCorner, dx: number, dy: number) {
+  let { x, y, w, h } = box
+  if (corner.includes('e')) w = box.w + dx
+  if (corner.includes('w')) {
+    w = box.w - dx
+    x = box.x + box.w - w
+  }
+  if (corner.includes('s')) h = box.h + dy
+  if (corner.includes('n')) {
+    h = box.h - dy
+    y = box.y + box.h - h
+  }
+  if (w < GROUP_MIN_W) {
+    w = GROUP_MIN_W
+    if (corner.includes('w')) x = box.x + box.w - w
+  }
+  if (h < GROUP_MIN_H) {
+    h = GROUP_MIN_H
+    if (corner.includes('n')) y = box.y + box.h - h
+  }
+  return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }
+}
 
 interface UseCanvasInteractionsOptions {
   nodes: SceneNode[]
@@ -54,6 +83,8 @@ interface UseCanvasInteractionsOptions {
   onClearSelection: () => void
   onSelectGroup: (id: string) => void
   onMoveGroup: (id: string, dx: number, dy: number) => void
+  /** 空间四角手动调框的松手提交；成员变化时仍由 store 自动贴合。 */
+  onResizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
   onActivate: (id: string) => void
@@ -94,6 +125,7 @@ export function useCanvasInteractions({
   onClearSelection,
   onSelectGroup,
   onMoveGroup,
+  onResizeGroup,
   onMoveNodes,
   onConnect,
   onActivate,
@@ -157,6 +189,16 @@ export function useCanvasInteractions({
     mode: 'title' | 'box'
     /** 按下时的成员快照：拖动期直接驱动成员图形，松手一次性提交（成员随空间一起动，不参与碰撞）。 */
     members: { id: string; x: number; y: number }[]
+  } | null>(null)
+  /** 空间手动调框会话：与空间拖动互斥，拖动期直驱框图形，松手一次性提交尺寸。 */
+  const groupResize = useRef<{
+    id: string
+    startX: number
+    startY: number
+    box: Rect
+    corner: GroupResizeCorner
+    /** 拖动期已计算的最新框；松手提交直接取它，不依赖指针是否还在画布内。 */
+    current: Rect
   } | null>(null)
   const hoverTimer = useRef<number | null>(null)
 
@@ -332,6 +374,45 @@ export function useCanvasInteractions({
     })
   }
 
+  /** 空间手动调框：拖动期只驱动框/标题图形与受影响连线，成员位置不动；松手一次性提交。 */
+  const moveGroupResize = (pointerX: number, pointerY: number) => {
+    const session = groupResize.current
+    if (!session) return
+    const scale = viewportRef.current.scale
+    const box = resizedBoxOf(
+      session.box,
+      session.corner,
+      (pointerX - session.startX) / scale,
+      (pointerY - session.startY) / scale,
+    )
+    session.current = box
+    groupBoxRefs.current
+      .get(session.id)
+      ?.setAttrs({ x: box.x, y: box.y, width: box.w, height: box.h })
+    groupTitleRefs.current.get(session.id)?.position({ x: box.x + 8, y: box.y - 15 })
+    updateEdgeShapes(new Set([session.id]), { id: session.id, box })
+  }
+
+  const commitGroupResize = () => {
+    const session = groupResize.current
+    groupResize.current = null
+    if (!session) return
+    const box = session.current
+    // 零缩放时没有重渲染来纠正图形，这里统一归位到最终尺寸。
+    groupBoxRefs.current
+      .get(session.id)
+      ?.setAttrs({ x: box.x, y: box.y, width: box.w, height: box.h })
+    groupTitleRefs.current.get(session.id)?.position({ x: box.x + 8, y: box.y - 15 })
+    if (
+      Math.abs(box.x - session.box.x) > 0.5 ||
+      Math.abs(box.y - session.box.y) > 0.5 ||
+      Math.abs(box.w - session.box.w) > 0.5 ||
+      Math.abs(box.h - session.box.h) > 0.5
+    ) {
+      onResizeGroup(session.id, box)
+    }
+  }
+
   /**
    * 空间拖动收尾：与对象拖动一致——松手统一判定落点，被压住先退回裸偏移，
    * 裸偏移仍被压住才整体回到拖动前的位置；图形归位到最终接受的落点后再提交。
@@ -472,6 +553,11 @@ export function useCanvasInteractions({
         y: panStart.current.y + dy,
         scale: viewportRef.current.scale,
       })
+      return
+    }
+
+    if (groupResize.current) {
+      moveGroupResize(pointer.x, pointer.y)
       return
     }
 
@@ -662,9 +748,12 @@ export function useCanvasInteractions({
               movingIds,
             )
           }
-          return session.items.some((item) =>
-            landingBlocked({ ...item.rect, x: item.x + offsetX, y: item.y + offsetY }, movingIds),
-          )
+          return session.items.some((item) => {
+            const rect = { ...item.rect, x: item.x + offsetX, y: item.y + offsetY }
+            // 落入空间即被接受：即使压住既有成员，入库后也会整组自动整理消解重叠。
+            if (groups.some((group) => rectsOverlap(group, rect, LAYOUT_GAP))) return false
+            return landingBlocked(rect, movingIds)
+          })
         }
         const accepted = isBlocked(session.offsetX, session.offsetY)
           ? isBlocked(session.rawOffsetX, session.rawOffsetY)
@@ -699,6 +788,7 @@ export function useCanvasInteractions({
     }
 
     panStart.current = null
+    commitGroupResize()
     commitGroupDrag()
   }
 
@@ -714,6 +804,7 @@ export function useCanvasInteractions({
         dragSession.current ||
         connectSession.current ||
         groupDrag.current ||
+        groupResize.current ||
         panStart.current
       ) {
         pointerUpRef.current()
@@ -822,6 +913,30 @@ export function useCanvasInteractions({
     }
   }
 
+  /** 选中空间的四角调框手柄按下：开启调框会话；成员位置不动，只改空间框。 */
+  const handleGroupResizeDown = (
+    event: KonvaEventObject<MouseEvent>,
+    groupId: string,
+    corner: GroupResizeCorner,
+  ) => {
+    if (spaceRef.current || event.evt.button !== 0) return
+    const pointer = stageRef.current?.getPointerPosition()
+    if (!pointer) return
+    const group = groups.find((item) => item.id === groupId)
+    if (!group) return
+    event.cancelBubble = true
+    onSelectGroup(groupId)
+    const box = { x: group.x, y: group.y, w: group.w, h: group.h }
+    groupResize.current = {
+      id: groupId,
+      startX: pointer.x,
+      startY: pointer.y,
+      box,
+      corner,
+      current: box,
+    }
+  }
+
   const handleGroupClick = (event: KonvaEventObject<MouseEvent>, groupId: string) => {
     event.cancelBubble = true
     onSelectGroup(groupId)
@@ -917,6 +1032,7 @@ export function useCanvasInteractions({
     handleNodeContextMenu,
     handleHandleDown,
     handleGroupBoxDown,
+    handleGroupResizeDown,
     handleGroupClick,
     handleGroupContextMenu,
     handleEdgeContextMenu,
