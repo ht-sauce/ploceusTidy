@@ -3,7 +3,7 @@
  *
  * 职责边界：
  * - 视口状态与缩放/定位 → `useCanvasViewport`；
- * - 视口裁剪、LOD、连线筛选 → `useVisibleScene`；
+ * - 视口裁剪、连线筛选 → `useVisibleScene`；
  * - 平移/框选/拖动/连线/悬停会话 → `useCanvasInteractions`；
  * - 缩略图加载 → `useVisibleThumbnails`；
  * - 图元绘制 → `NodeShape` / `GroupShape` / `EdgeLayer` / `Minimap`。

@@ -39,7 +39,6 @@ export default function GroupShape({
       opacity={active ? 0.9 : 1}
       stroke={color}
       strokeWidth={active ? 2 : 1.6}
-      dash={[6, 4]}
       cornerRadius={8}
       onMouseDown={(event) => onPointerDown(event, group.id)}
       onClick={(event) => onClick(event, group.id)}

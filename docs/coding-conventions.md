@@ -39,7 +39,7 @@
 | 文件顶部 | 一句话职责 + 关键边界；TS/TSX 用 `/** ... */`，Rust 用 `//!` |
 | 导出函数 / Tauri 命令 / 类型 | 意图、参数与返回语义、失败条件；Rust 用 `///` 文档注释 |
 | 复杂算法与坐标变换 | 说明坐标系、单位、方向；如 world ↔ screen 的变换公式 |
-| 魔法数值 | 说明来源与后果；如 LOD 阈值 50%、预取边距 180px |
+| 魔法数值 | 说明来源与后果；如视口预取边距 180px、渲染倍率 2 |
 | 非显然的状态 / ref / 平台处理 | 说明它解决的具体问题；如指针捕获后为什么需要 `pressedOnNode` |
 | 大文件分段 | 用 `// ---------- 段落名 ----------` 分隔职责区，段落不超过约 150 行 |
 | 权限、平台差异、回退路径 | 说明为什么需要该权限或为什么只能这样回退 |
@@ -89,7 +89,7 @@
 | 进程 / 通信约定 | Tauri `invoke`；前端不直接访问文件系统/数据库 | 同上 §6 |
 | 数据模型与迁移 | SQLite + `dataWorkSpace`；`PRAGMA user_version` 迁移 | [spec/04-data-model.md](spec/04-data-model.md) |
 | 文件引用契约 | 只读引用；打开/定位只接受 `refId` | [spec/05-file-reference-contract.md](spec/05-file-reference-contract.md) |
-| 画布与性能 | 当前客户端：React DOM 虚拟行；生产：Konva 虚拟化 + rbush + 三档 LOD | 02 §4、[08-adr.md](spec/08-adr.md) ADR-005 |
+| 画布与性能 | 当前客户端：Konva 虚拟化 + rbush 视口裁剪 + 高清倍率，不做远景 LOD | 02 §4、[08-adr.md](spec/08-adr.md) ADR-005 / ADR-016 |
 | 格式化工具与配置 | `prettier.config.cjs`：`printWidth: 100`、`semi: false`、`tabWidth: 2`、`useTabs: false`、`singleQuote: true`、`trailingComma: 'all'`、`endOfLine: 'auto'` | 本文件 |
 | ESLint | `eslint.config.js` flat config：`@eslint/js`、`typescript-eslint`、`react-hooks`、`react-refresh`、`eslint-config-prettier` | 本文件 |
 | 编辑器基础 | `.editorconfig`：UTF-8、LF、2 空格、文件末尾换行 | 本文件 |

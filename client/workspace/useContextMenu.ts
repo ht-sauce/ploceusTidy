@@ -154,15 +154,11 @@ export function useContextMenu({
     }
     const group = groupById.get(target.id)
     const count = group ? nodes.filter((item) => item.groupId === group.id).length : 0
-    const hasNeighbor = edges.some(
-      (edge) => edge.from === target.id || edge.to === target.id,
-    )
+    const hasNeighbor = edges.some((edge) => edge.from === target.id || edge.to === target.id)
     return [
       { key: 'group-rename', label: '重命名空间' },
       { key: 'group-color', label: '空间颜色' },
-      ...(hasNeighbor
-        ? [{ key: 'locate-neighbor', label: '跳转到关联对象' }]
-        : []),
+      ...(hasNeighbor ? [{ key: 'locate-neighbor', label: '跳转到关联对象' }] : []),
       { key: 'divider-1', label: '', divider: true },
       { key: 'group-info', label: `空间内 ${count} 个对象` },
       { key: 'divider-2', label: '', divider: true },

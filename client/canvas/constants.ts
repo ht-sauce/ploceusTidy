@@ -29,14 +29,7 @@ export const STAGE_PIXEL_RATIO = Math.min(
 )
 
 /** 空间默认配色：高饱和、彼此可区分；用户可再用取色器改。 */
-export const GROUP_PALETTE = [
-  '#7C6FB0',
-  '#3F86B8',
-  '#3E9B7C',
-  '#C08A3A',
-  '#B25E77',
-  '#4E8E9E',
-]
+export const GROUP_PALETTE = ['#7C6FB0', '#3F86B8', '#3E9B7C', '#C08A3A', '#B25E77', '#4E8E9E']
 
 /** 四向锚点顺序：上、右、下、左；选中后用于拖出连线。 */
 export type HandleSide = 'top' | 'right' | 'bottom' | 'left'

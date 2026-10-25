@@ -55,7 +55,8 @@ dataWorkSpace/
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `title` | TEXT | 分组框标题 |
+| `title` | TEXT | 空间标题，同时作为空间标注展示 |
+| `color` | TEXT NULL | 空间主色 `#RRGGBB`；为空时前端回退主题主色 |
 | `x`,`y`,`w`,`h` | REAL | 世界坐标与尺寸（按内容收高） |
 | `created_at` / `updated_at` | INTEGER | epoch ms |
 
@@ -74,7 +75,7 @@ dataWorkSpace/
 | `z` | INTEGER NOT NULL DEFAULT 0 | 叠放层级 |
 | `parent_node_id` | TEXT NULL | 规划字段：相对父节点挂载，当前未实现 |
 | `data_json` | TEXT NULL | 规划字段：扩展样式，当前未写入 |
-| `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸（默认 72×64 图标格） |
+| `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸（默认 72 宽；渲染高度按名称行数与标注自适应） |
 | `created_at` | INTEGER | epoch ms |
 | `updated_at` | INTEGER | epoch ms |
 
@@ -89,7 +90,7 @@ dataWorkSpace/
 | `from_node` / `to_node` | TEXT | 起止节点 ID |
 | `from_handle` / `to_handle` | TEXT NULL | 规划字段：锚点，当前未实现 |
 | `label` | TEXT NULL | 连线标签 |
-| `style_json` | TEXT NULL | 规划字段：线型与颜色，当前未写入 |
+| `style_json` | TEXT NULL | 连线样式：当前存 `{"color":"#RRGGBB"}`，缺省回退主题主色 |
 | `created_at` | INTEGER NOT NULL DEFAULT 0 | epoch ms |
 
 ### `annotations` 与 `annotation_targets`

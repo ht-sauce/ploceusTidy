@@ -251,8 +251,7 @@ export function useSceneStore(): SceneStore {
       const minX = Math.min(...targets.map((node) => node.x)) - 16
       const minY = Math.min(...targets.map((node) => node.y)) - 32
       const maxX = Math.max(...targets.map((node) => node.x + node.w)) + 16
-      const maxY =
-        Math.max(...targets.map((node) => node.y + nodeDisplayHeight(node))) + 16
+      const maxY = Math.max(...targets.map((node) => node.y + nodeDisplayHeight(node))) + 16
       const group: SceneGroup = {
         id: `group-${crypto.randomUUID()}`,
         title: label,

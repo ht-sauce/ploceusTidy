@@ -58,6 +58,7 @@ export default function EdgeLayer({
               stroke={color}
               fill={color}
               strokeWidth={active ? 3 : 2.2}
+              dash={[8, 5]}
               hitStrokeWidth={16}
               onClick={(event) => {
                 event.cancelBubble = true

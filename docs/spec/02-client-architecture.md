@@ -4,7 +4,7 @@
 
 - Tauri 2 + Rust 核心 + Windows WebView2。
 - React 19.3.1 + TypeScript 6.0.3 + Ant Design 6.6.7 负责界面；Vite 8.3.5 构建。
-- 画布渲染层为 Konva 10 + react-konva 19.3.2，配 rbush 空间索引做视口裁剪与三档 LOD。
+- 画布渲染层为 Konva 10 + react-konva 19.3.2，配 rbush 空间索引做视口裁剪；渲染倍率不低于 2，任何缩放都绘制完整对象。
 - 单窗口、单进程模型；无本地 HTTP 服务，不建端口表。
 - SQLite 由 Rust 侧 `rusqlite` 持有，前端不直接执行 SQL。
 
@@ -15,7 +15,7 @@
 | 入口层 `client/App.tsx` | 主题状态、Ant Design `ConfigProvider` 容器、挂载 `Workspace` | 任何业务规则、IPC 调用 |
 | 界面层 `client/components` | 无状态/低状态通用组件：标题栏、属性面板、右键菜单、状态栏、设置、提示 | 直接读文件/数据库 |
 | 编排层 `client/workspace` | 场景命令、持久化、导入、对象动作、快捷键、菜单、搜索等 hook 与组合 | 直接绘制 Konva 图元 |
-| 画布层 `client/canvas` | 视口、空间索引、可见节点渲染、LOD、交互、迷你地图 | 作为场景真相源 |
+| 画布层 `client/canvas` | 视口、空间索引、可见节点渲染、交互、迷你地图、高清倍率 | 作为场景真相源 |
 | 领域层 `client/domain` | 引用/节点/边/标注模型、命令、撤销、定位、搜索编排 | 依赖 React/Konva/Tauri |
 | 桥接层 `client/lib`、`client/shared` | DTO、命令契约、Tauri invoke 封装、主题令牌 | 业务规则 |
 | Rust 核心 `desktop` | 文件系统、剪贴板、SQLite、Shell 缩略图、打开/定位 | 依赖前端框架 |
@@ -57,14 +57,12 @@ sequenceDiagram
 - 可见节点的引用详情、标注详情按需批量拉取；离开视口后释放详情与图片。
 - `rbush` 空间索引按视口查询可见节点与边。
 - 只给可见节点创建 Konva 形状；离屏节点不创建、不更新。
-- LOD 三档：
-  - 远景（低于 50%）：类型色点，不绘文字与系统图标。
-  - 中景（50%–70%）：简化系统图标 + 单行名称。
-  - 近景（70% 以上）：完整系统图标 + 最多两行名称；路径与完整内容仍由 Tooltip 展示。
+- 不做远景 LOD 降级：任何缩放都绘制完整图标格与名称（最多两行），只按视口裁剪离屏对象；卡片高度按名称行数与标注自适应。
+- `Konva.pixelRatio` 固定不低于 2，低 DPI 屏上文字边缘保持清晰；放大后不额外提高倍率，避免显存失控。
 - 迷你地图只用紧凑索引绘制简化色块，不复用完整卡片。
 - 缩略图只在可见且停留超过阈值时加载，缓存到 `dataWorkSpace/thumbnails`。
 - 渲染按需：无动画时停止 `requestAnimationFrame`；窗口隐藏/最小化/失焦时暂停绘制与加载。
-- 边只绘制与可见节点相连或穿过视口的部分；箭头使用批量绘制。
+- 边只绘制有效端点（节点或空间），任何缩放都保留完整关系网。
 - 容量目标：存储 10 万引用；同屏绘制控制在数百到两千个对象。
 
 ## 5. 窗口生命周期
@@ -144,7 +142,7 @@ ploceusTidy/
 │   ├── canvas/                  # 画布层：Konva 渲染与交互
 │   │   ├── CanvasBoard.tsx      # 图层编排
 │   │   ├── useCanvasViewport.ts # 视口缩放/定位/适配
-│   │   ├── useVisibleScene.ts   # 裁剪/LOD/连线筛选
+│   │   ├── useVisibleScene.ts   # 裁剪/连线筛选
 │   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线会话
 │   │   ├── useVisibleThumbnails.ts  # 缩略图延迟加载
 │   │   ├── NodeShape.tsx
@@ -163,7 +161,9 @@ ploceusTidy/
 │   │   ├── ContextMenu.tsx
 │   │   ├── StatusBar.tsx
 │   │   ├── EmptyOverlay.tsx
-│   │   ├── EdgeLabelDialog.tsx
+│   │   ├── TextPromptDialog.tsx
+│   │   ├── ColorPickerDialog.tsx
+│   │   ├── NeighborPickerDialog.tsx
 │   │   ├── ImagePreviewDialog.tsx
 │   │   └── SettingsDialog.tsx
 │   ├── styles/global.css
@@ -201,7 +201,7 @@ ploceusTidy/
 | windows crate（M1） | Shell 缩略图/图标 | IShellItemImageFactory / SHGetFileInfoW |
 | tauri-plugin-opener（M1） | 打开/定位 | openPath / revealItemInDir |
 | tauri-plugin-dialog（M1） | 重新关联文件、工作空间迁移 | 原生文件/目录选择器 |
-| konva 10 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组/LOD 绘制 |
+| konva 10 + react-konva 19.3.2 | 画布渲染层 | 节点/连线/分组绘制；视口裁剪 + 高清倍率 |
 | rbush 4 + @types/rbush | 视口空间索引 | 可见节点裁剪查询 |
 | windows 0.61 + image 0.25 | Shell 缩略图、窗口置底 | IShellItemImageFactory / SetWindowPos；image 仅用于 PNG 编码 |
 

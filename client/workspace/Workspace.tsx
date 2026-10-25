@@ -101,11 +101,14 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   const themeTokens = themeById(themeId)
 
-  const openEdgeLabel = useCallback((id: string) => {
-    const edge = store.edges.find((item) => item.id === id)
-    store.selectEdge(id)
-    setPrompt({ kind: 'edge', id, text: edge?.label ?? '' })
-  }, [store])
+  const openEdgeLabel = useCallback(
+    (id: string) => {
+      const edge = store.edges.find((item) => item.id === id)
+      store.selectEdge(id)
+      setPrompt({ kind: 'edge', id, text: edge?.label ?? '' })
+    },
+    [store],
+  )
 
   const openGroupTitle = useCallback(
     (id: string) => {
