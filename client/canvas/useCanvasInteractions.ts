@@ -9,10 +9,11 @@ import type { Dispatch, RefObject, SetStateAction } from 'react'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import type { CanvasContextTarget, CanvasViewport, Rect, StageSize } from './types'
+import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
+import type { Rect } from '@/domain/layout'
 import type { HandleSide } from './constants'
 import { edgePoints } from './geometry'
-import { constrainDrag, LAYOUT_GAP, SNAP_THRESHOLD, type SnapGuides } from './layout'
+import { constrainDrag, LAYOUT_GAP, SNAP_THRESHOLD, type SnapGuides } from '@/domain/layout'
 
 type Box = { x: number; y: number; w: number; h: number }
 
@@ -38,7 +39,7 @@ interface UseCanvasInteractionsOptions {
   onSelectGroup: (id: string) => void
   onMoveGroup: (id: string, dx: number, dy: number) => void
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
-  onConnect: (from: string, to: string) => void
+  onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
   onActivate: (id: string) => void
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
 }
@@ -408,7 +409,23 @@ export function useCanvasInteractions({
                 world.y <= group.y + group.h,
             )
       const targetId = hitNode?.id ?? hitGroup?.id
-      if (targetId) onConnect(session.from, targetId)
+      if (targetId) {
+        // 落点侧边：按指针在目标框内的相对位置取最近边中点，反向即目标连线锚点。
+        const targetBox = boxOf(targetId)
+        let toHandle: string = 'left'
+        if (targetBox) {
+          const relX = (world.x - targetBox.x) / targetBox.w
+          const relY = (world.y - targetBox.y) / targetBox.h
+          const dist = {
+            left: relX,
+            right: 1 - relX,
+            top: relY,
+            bottom: 1 - relY,
+          } as Record<string, number>
+          toHandle = Object.keys(dist).reduce((best, key) => (dist[key] < dist[best] ? key : best))
+        }
+        onConnect(session.from, targetId, session.side, toHandle)
+      }
       return
     }
 

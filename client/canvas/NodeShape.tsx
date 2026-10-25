@@ -14,7 +14,8 @@ import {
   NODE_ICON_TOP,
   NODE_LINE_HEIGHT,
 } from './constants'
-import { annotationTone, displayName, handlePoint } from './geometry'
+import { annotationTone, handlePoint } from './geometry'
+import { displayName } from '@/domain/layout'
 import type { SceneAnnotation, SceneNode } from '@/types/scene'
 
 interface NodeShapeProps {

@@ -2,16 +2,8 @@
  * 画布纯函数：坐标换算、名称截断、类型色、连线路径。
  * 无 React、无 Konva 实例依赖，便于单测与复用。
  */
-import {
-  NAME_LINE_BUDGET,
-  NODE_ANNOTATION_HEIGHT,
-  NODE_ICON_SIZE,
-  NODE_ICON_TOP,
-  NODE_LINE_HEIGHT,
-  NODE_PADDING_BOTTOM,
-  type HandleSide,
-} from './constants'
-import type { SceneEdge, SceneNode } from '@/types/scene'
+import type { HandleSide } from './constants'
+import type { SceneEdge } from '@/types/scene'
 
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
@@ -29,41 +21,6 @@ export function handlePoint(box: { w: number; h: number }, side: HandleSide) {
     default:
       return { x: 0, y: box.h / 2 }
   }
-}
-
-/**
- * 展示名：图标格只有两行，后缀必须出现——同名不同后缀的文件功能完全不同。
- * 两行放得下就交给 Konva 自动换行；放不下时主体截断放第一行，后缀单独第二行。
- */
-export function displayName(name: string) {
-  const dot = name.lastIndexOf('.')
-  const hasExt = dot > 0 && dot < name.length - 1
-  if (name.length <= NAME_LINE_BUDGET * 2) return name
-  if (!hasExt) return `${name.slice(0, NAME_LINE_BUDGET * 2 - 1)}…`
-  const base = name.slice(0, dot)
-  const ext = name.slice(dot)
-  const extLine =
-    ext.length > NAME_LINE_BUDGET * 2 ? `${ext.slice(0, NAME_LINE_BUDGET * 2 - 1)}…` : ext
-  return `${base.slice(0, NAME_LINE_BUDGET - 1)}…\n${extLine}`
-}
-
-/**
- * 卡片展示高度：按名称行数自适应（最多两行），有标注时再让出一条标注高度。
- * 不改变持久化尺寸，只影响渲染与命中框。
- */
-export function nodeDisplayHeight(node: SceneNode, hasAnnotation = false) {
-  const name = displayName(node.name)
-  const lines = name.includes('\n')
-    ? 2
-    : Math.min(2, Math.ceil(Array.from(name).length / NAME_LINE_BUDGET))
-  return (
-    NODE_ICON_TOP +
-    NODE_ICON_SIZE +
-    1 +
-    lines * NODE_LINE_HEIGHT +
-    NODE_PADDING_BOTTOM +
-    (hasAnnotation ? NODE_ANNOTATION_HEIGHT : 0)
-  )
 }
 
 /** #RGB / #RRGGBB 解析；非法值回退到 fallback。 */
@@ -136,11 +93,23 @@ interface Box {
   h: number
 }
 
+/** 把持久化的锚点字符串收敛成合法侧边；非法/空值返回 null（按方位自动路由）。 */
+export function asHandleSide(value: string | undefined | null): HandleSide | null {
+  return value === 'top' || value === 'right' || value === 'bottom' || value === 'left'
+    ? value
+    : null
+}
+
 /**
  * 连线路径点：[x1, y1, cx1, cy1, cx2, cy2, x2, y2]。
- * 水平距离更大时从左右侧边出发，否则从上下侧边出发，避免线条穿过卡片内容。
+ * 端点锚点显式给定时从对应侧边中点出发；否则按方位自动选边，避免线条穿过卡片内容。
  */
-export function edgePoints(from: Box, to: Box) {
+export function edgePoints(
+  from: Box,
+  to: Box,
+  fromSide: HandleSide | null = null,
+  toSide: HandleSide | null = null,
+) {
   const fromX = from.x + from.w / 2
   const fromY = from.y + from.h / 2
   const toX = to.x + to.w / 2
@@ -148,33 +117,25 @@ export function edgePoints(from: Box, to: Box) {
   const dx = toX - fromX
   const dy = toY - fromY
 
+  const start =
+    fromSide ??
+    (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : dy >= 0 ? 'bottom' : 'top')
+  const end =
+    toSide ??
+    (Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'left' : 'right') : dy >= 0 ? 'top' : 'bottom')
+
+  const startPoint = handlePoint(from, start)
+  const endPoint = handlePoint(to, end)
+  const x1 = from.x + startPoint.x
+  const y1 = from.y + startPoint.y
+  const x2 = to.x + endPoint.x
+  const y2 = to.y + endPoint.y
+
   if (Math.abs(dx) >= Math.abs(dy)) {
-    const x1 = dx >= 0 ? from.x + from.w : from.x
-    const x2 = dx >= 0 ? to.x : to.x + to.w
     const bend = Math.max(30, Math.min(100, Math.abs(x2 - x1) * 0.34))
-    return [
-      x1,
-      fromY,
-      x1 + (dx >= 0 ? bend : -bend),
-      fromY,
-      x2 - (dx >= 0 ? bend : -bend),
-      toY,
-      x2,
-      toY,
-    ]
+    return [x1, y1, x1 + (dx >= 0 ? bend : -bend), y1, x2 - (dx >= 0 ? bend : -bend), y2, x2, y2]
   }
 
-  const y1 = dy >= 0 ? from.y + from.h : from.y
-  const y2 = dy >= 0 ? to.y : to.y + to.h
   const bend = Math.max(28, Math.min(80, Math.abs(y2 - y1) * 0.32))
-  return [
-    fromX,
-    y1,
-    fromX,
-    y1 + (dy >= 0 ? bend : -bend),
-    toX,
-    y2 - (dy >= 0 ? bend : -bend),
-    toX,
-    y2,
-  ]
+  return [x1, y1, x1, y1 + (dy >= 0 ? bend : -bend), x2, y2 - (dy >= 0 ? bend : -bend), x2, y2]
 }

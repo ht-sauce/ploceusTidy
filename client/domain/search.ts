@@ -1,12 +1,11 @@
 /**
- * 搜索匹配与排序：归一化后做子串匹配，按名称精确、前缀、子串、路径分档；
- * 名称额外生成拼音首字母，支持「xmcl」这类输入。
- * 只在内存中执行，不索引文件内容；5 万引用后再评估 FTS5 或 n-gram 索引。
+ * 搜索匹配与排序（领域层，纯函数）：归一化后子串匹配 + 名称拼音首字母，
+ * 按名称精确、前缀、子串、路径分档。只在内存执行，不索引文件内容。
  */
 import { pinyin } from 'pinyin-pro'
 import type { SearchEntry } from '@/types/scene'
 
-/** 首字母缓存：场景刷新时会重复构建条目，避免逐次做全量拼音转换。 */
+/** 首字母缓存：场景刷新会重复构建条目，避免逐次全量拼音转换。 */
 const INITIALS_CACHE = new Map<string, string>()
 const CACHE_LIMIT = 20000
 

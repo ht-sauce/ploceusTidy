@@ -1367,6 +1367,92 @@ pub fn workspace_migrate(state: &AppState, target: &Path) -> Result<WorkspaceInf
     workspace_info(state)
 }
 
+// ---------- 基准数据种子 ----------
+
+/// 生成 `count` 个不重叠的测试节点，按网格排布并带一个空间与若干连线。
+/// 仅用于 1 万/10 万画布性能实测；用法：`PLOCEUS_BENCH_SEED=10000 pnpm tauri:dev`。
+/// 节点为文字卡（`text`），不落任何真实文件引用，测完可直接「重建工作空间」清空。
+pub fn seed_bench_nodes(state: &AppState, count: i64) -> Result<i64, String> {
+    let mut connection = state.db.lock().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开启事务失败：{error}"))?;
+    let timestamp = now_ms();
+
+    // 12 列网格，与 1440px 视口下每屏可见量对齐；步长 80×72 对应图标格 + 间距。
+    const COLUMNS: i64 = 12;
+    let mut nodes = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let id = Uuid::new_v4().to_string();
+        let col = index % COLUMNS;
+        let row = index / COLUMNS;
+        let x = col as f64 * 80.0;
+        let y = row as f64 * 72.0;
+        let name = format!("基准对象 {index}");
+        transaction
+            .execute(
+                r#"
+                INSERT INTO refs (id, kind, name, search_text, created_at, updated_at)
+                VALUES (?1, 'link', ?2, ?2, ?3, ?3)
+                "#,
+                params![&id, &name, timestamp],
+            )
+            .map_err(|error| format!("写入引用失败：{error}"))?;
+        transaction
+            .execute(
+                r#"
+                INSERT INTO nodes
+                    (id, type, icon, name, subtitle, body, ref_id, group_id, z,
+                     parent_node_id, data_json, x, y, w, h, created_at, updated_at)
+                VALUES (?1, 'text', 'text', ?2, '', ?2, ?1, '', 0, NULL, NULL, ?3, ?4, 72, 64, ?5, ?5)
+                "#,
+                params![&id, &name, x, y, timestamp],
+            )
+            .map_err(|error| format!("写入节点失败：{error}"))?;
+        nodes.push(id);
+    }
+
+    // 一个覆盖首屏的空间 + 每 50 个节点一条连线，覆盖空间与连线在万级场景下的开销。
+    let group_id = format!("group-bench-{}", Uuid::new_v4());
+    transaction
+        .execute(
+            "INSERT INTO groups (id, title, x, y, w, h, created_at, updated_at) VALUES (?1, '基准空间', 0, 0, 400, 320, ?2, ?2)",
+            params![&group_id, timestamp],
+        )
+        .map_err(|error| format!("写入空间失败：{error}"))?;
+    for index in 0..count.min(400) {
+        transaction
+            .execute(
+                "UPDATE nodes SET group_id = ?2 WHERE id = ?1",
+                params![&nodes[index as usize], &group_id],
+            )
+            .map_err(|error| format!("写入空间成员失败：{error}"))?;
+    }
+    let mut edge_count = 0;
+    let mut index = 0;
+    while index + 1 < count.min(200) {
+        transaction
+            .execute(
+                "INSERT INTO edges (id, from_node, to_node, label, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    format!("edge-bench-{}", Uuid::new_v4()),
+                    &nodes[index as usize],
+                    &nodes[(index + 1) as usize],
+                    format!("基准连线 {edge_count}"),
+                    timestamp
+                ],
+            )
+            .map_err(|error| format!("写入连线失败：{error}"))?;
+        edge_count += 1;
+        index += 50;
+    }
+
+    transaction
+        .commit()
+        .map_err(|error| format!("提交基准数据失败：{error}"))?;
+    Ok(count)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

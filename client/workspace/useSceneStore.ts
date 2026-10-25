@@ -8,8 +8,14 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import { nodeDisplayHeight, withEdgeColor } from '@/canvas/geometry'
-import { arrangeGroupMembers, findFreeOffset, LAYOUT_GAP, nodeRect } from '@/canvas/layout'
+import { withEdgeColor } from '@/canvas/geometry'
+import {
+  arrangeGroupMembers,
+  findFreeOffset,
+  LAYOUT_GAP,
+  nodeDisplayHeight,
+  nodeRect,
+} from '@/domain/layout'
 
 /** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
 interface SceneSnapshot {
@@ -78,7 +84,14 @@ export interface SceneStore {
   addNode: (node: SceneNode) => void
   moveNodes: (moves: { id: string; x: number; y: number }[]) => void
   moveGroup: (id: string, dx: number, dy: number) => void
-  connect: (from: string, to: string) => void
+  connect: (from: string, to: string, fromHandle?: string, toHandle?: string) => void
+  /** 叠放层级：置顶取当前最大 z + 1；置底取最小 z - 1。 */
+  raiseNode: (id: string, to: 'top' | 'bottom') => void
+  /** 挂载到父节点；父移动时子按世界坐标跟随，父删除时子卸载为独立对象。 */
+  mountNode: (id: string, parentId: string) => void
+  unmountNode: (id: string) => void
+  /** 扩展样式：写入 `dataJson`；空串清空。非法 JSON 由调用方在保存前校验。 */
+  updateNodeDataJson: (id: string, dataJson: string) => void
   createGroup: (label: string, color?: string) => SceneGroup | null
   /** 按当前阅读顺序整理空间内对象；返回整理的对象数量。 */
   arrangeGroup: (id: string) => number
@@ -213,18 +226,77 @@ export function useSceneStore(): SceneStore {
   const moveNodes = useCallback(
     (moves: { id: string; x: number; y: number }[]) => {
       const byId = new Map(moves.map((move) => [move.id, move]))
-      setNodes((previous) =>
-        previous.map((node) => {
+      setNodes((previous) => {
+        // 已挂载的子节点不直接拖动，但要跟随父节点的世界位移，保持相对位置。
+        const delta = new Map<string, { dx: number; dy: number }>()
+        moves.forEach((move) => {
+          const node = previous.find((item) => item.id === move.id)
+          if (!node) return
+          delta.set(node.id, { dx: move.x - node.x, dy: move.y - node.y })
+        })
+        // 多级挂载：父再有父时，子按最上层拖动者的总位移跟随（按层级逐轮归并）。
+        for (let round = 0; round < previous.length; round += 1) {
+          let changed = false
+          previous.forEach((node) => {
+            if (!node.parentNodeId || delta.has(node.id)) return
+            const parentDelta = delta.get(node.parentNodeId)
+            if (!parentDelta) return
+            delta.set(node.id, parentDelta)
+            changed = true
+          })
+          if (!changed) break
+        }
+        return previous.map((node) => {
           const move = byId.get(node.id)
-          if (!move) return node
-          const moved = { ...node, x: move.x, y: move.y }
+          const follow = delta.get(node.id)
+          if (!move && !follow) return node
+          const moved = {
+            ...node,
+            x: move ? move.x : node.x + (follow?.dx ?? 0),
+            y: move ? move.y : node.y + (follow?.dy ?? 0),
+          }
           // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
           return { ...moved, groupId: membershipOf(moved, groups) }
-        }),
-      )
+        })
+      })
     },
     [groups],
   )
+
+  /** 叠放层级：置顶取当前最大 z + 1，置底取最小 z - 1，保持相对次序。 */
+  const raiseNode = useCallback(
+    (id: string, to: 'top' | 'bottom') => {
+      if (nodes.length === 0) return
+      const min = Math.min(...nodes.map((node) => node.z))
+      const max = Math.max(...nodes.map((node) => node.z))
+      const z = to === 'top' ? max + 1 : min - 1
+      setNodes((previous) => previous.map((node) => (node.id === id ? { ...node, z } : node)))
+    },
+    [nodes],
+  )
+
+  /** 挂载/卸载只维护引用关系；坐标始终是世界坐标，不引入第二套坐标系。 */
+  const mountNode = useCallback((id: string, parentId: string) => {
+    if (id === parentId) return
+    setNodes((previous) =>
+      previous.map((node) => (node.id === id ? { ...node, parentNodeId: parentId } : node)),
+    )
+  }, [])
+
+  const unmountNode = useCallback((id: string) => {
+    setNodes((previous) =>
+      previous.map((node) => (node.id === id ? { ...node, parentNodeId: undefined } : node)),
+    )
+  }, [])
+
+  const updateNodeDataJson = useCallback((id: string, dataJson: string) => {
+    const value = dataJson.trim()
+    setNodes((previous) =>
+      previous.map((node) =>
+        node.id === id ? { ...node, dataJson: value ? value : undefined } : node,
+      ),
+    )
+  }, [])
 
   /** 移动空间时带动内部节点，保持相对位置不变。 */
   const moveGroup = useCallback((id: string, dx: number, dy: number) => {
@@ -245,14 +317,26 @@ export function useSceneStore(): SceneStore {
   }, [])
 
   /** 建立有向连线；同向重复静默忽略，自连直接拒绝。 */
-  const connect = useCallback((from: string, to: string) => {
-    if (from === to) return
-    setEdges((previous) =>
-      previous.some((edge) => edge.from === from && edge.to === to)
-        ? previous
-        : [...previous, { id: `edge-${crypto.randomUUID()}`, from, to }],
-    )
-  }, [])
+  const connect = useCallback(
+    (from: string, to: string, fromHandle?: string, toHandle?: string) => {
+      if (from === to) return
+      setEdges((previous) =>
+        previous.some((edge) => edge.from === from && edge.to === to)
+          ? previous
+          : [
+              ...previous,
+              {
+                id: `edge-${crypto.randomUUID()}`,
+                from,
+                to,
+                fromHandle: fromHandle || undefined,
+                toHandle: toHandle || undefined,
+              },
+            ],
+      )
+    },
+    [],
+  )
 
   /** 用当前选中对象的包围盒创建持久空间，并把对象归入该空间。 */
   const createGroup = useCallback(
@@ -410,7 +494,14 @@ export function useSceneStore(): SceneStore {
         return
       }
       const ids = new Set([target.id])
-      setNodes((previous) => previous.filter((node) => !ids.has(node.id)))
+      setNodes((previous) =>
+        previous
+          .filter((node) => !ids.has(node.id))
+          // 被删父节点的子节点卸载为独立对象，坐标不变。
+          .map((node) =>
+            ids.has(node.parentNodeId ?? '') ? { ...node, parentNodeId: undefined } : node,
+          ),
+      )
       setEdges((previous) => previous.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to)))
       setAnnotations((previous) =>
         previous
@@ -439,7 +530,14 @@ export function useSceneStore(): SceneStore {
     if (selectedIds.length === 0) return false
     undoRef.current = { nodes, groups, edges, annotations }
     const ids = new Set(selectedIds)
-    setNodes((previous) => previous.filter((node) => !ids.has(node.id)))
+    setNodes((previous) =>
+      previous
+        .filter((node) => !ids.has(node.id))
+        // 被删父节点的子节点卸载为独立对象，坐标不变。
+        .map((node) =>
+          ids.has(node.parentNodeId ?? '') ? { ...node, parentNodeId: undefined } : node,
+        ),
+    )
     setEdges((previous) => previous.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to)))
     setAnnotations((previous) =>
       previous
@@ -591,6 +689,10 @@ export function useSceneStore(): SceneStore {
     moveNodes,
     moveGroup,
     connect,
+    raiseNode,
+    mountNode,
+    unmountNode,
+    updateNodeDataJson,
     createGroup,
     arrangeGroup,
     renameGroup,

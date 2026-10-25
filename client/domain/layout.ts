@@ -1,14 +1,29 @@
 /**
- * 画布布局纯函数：矩形碰撞、拖动吸附、空位查找与空间自动整理。
+ * 画布布局领域纯函数：矩形碰撞、拖动吸附、空位查找、空间自动整理与展示尺寸。
  * 坐标均为世界坐标；所有函数只读入参，不修改节点对象。
+ * 尺寸常量来自画布规格（`canvas/constants`），布局与渲染共用同一套数值。
  */
-import { nodeDisplayHeight } from './geometry'
-import type { Rect } from './types'
+import {
+  NAME_LINE_BUDGET,
+  NODE_ANNOTATION_HEIGHT,
+  NODE_ICON_SIZE,
+  NODE_ICON_TOP,
+  NODE_LINE_HEIGHT,
+  NODE_PADDING_BOTTOM,
+} from '@/canvas/constants'
 import type { SceneGroup, SceneNode } from '@/types/scene'
+
+/** 世界坐标矩形：布局碰撞、吸附与自动整理共用。 */
+export interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
 
 /** 对象之间保留的最小间距；与导入网格的 8px 间距保持一致。 */
 export const LAYOUT_GAP = 8
-/** 拖动吸附阈值（世界坐标 px）：超过这个距离就不再吸边。 */
+/** 拖动吸附阈值（屏幕 px，除以缩放折算为世界坐标）。 */
 export const SNAP_THRESHOLD = 6
 /** 新建对象避让时的搜索步长，与 72×64 图标格 + 8px 间距一致。 */
 const PLACE_STEP_X = 80
@@ -16,6 +31,41 @@ const PLACE_STEP_Y = 72
 /** 空间标题区高度与内边距，自动整理时按同一套尺度排版。 */
 const GROUP_HEADER = 32
 const GROUP_PADDING = 16
+
+/**
+ * 展示名：图标格只有两行，后缀必须出现——同名不同后缀的文件功能完全不同。
+ * 两行放得下就交给 Konva 自动换行；放不下时主体截断放第一行，后缀单独第二行。
+ */
+export function displayName(name: string) {
+  const dot = name.lastIndexOf('.')
+  const hasExt = dot > 0 && dot < name.length - 1
+  if (name.length <= NAME_LINE_BUDGET * 2) return name
+  if (!hasExt) return `${name.slice(0, NAME_LINE_BUDGET * 2 - 1)}…`
+  const base = name.slice(0, dot)
+  const ext = name.slice(dot)
+  const extLine =
+    ext.length > NAME_LINE_BUDGET * 2 ? `${ext.slice(0, NAME_LINE_BUDGET * 2 - 1)}…` : ext
+  return `${base.slice(0, NAME_LINE_BUDGET - 1)}…\n${extLine}`
+}
+
+/**
+ * 卡片展示高度：按名称行数自适应（最多两行），有标注时再让出一条标注高度。
+ * 不改变持久化尺寸，只影响渲染与命中框。
+ */
+export function nodeDisplayHeight(node: SceneNode, hasAnnotation = false) {
+  const name = displayName(node.name)
+  const lines = name.includes('\n')
+    ? 2
+    : Math.min(2, Math.ceil(Array.from(name).length / NAME_LINE_BUDGET))
+  return (
+    NODE_ICON_TOP +
+    NODE_ICON_SIZE +
+    1 +
+    lines * NODE_LINE_HEIGHT +
+    NODE_PADDING_BOTTOM +
+    (hasAnnotation ? NODE_ANNOTATION_HEIGHT : 0)
+  )
+}
 
 /** 两个矩形是否相交；`gap` 为额外要求的间距，0 表示只要求不重叠。 */
 export function rectsOverlap(a: Rect, b: Rect, gap = 0): boolean {

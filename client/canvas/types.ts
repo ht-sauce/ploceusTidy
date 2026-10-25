@@ -17,11 +17,3 @@ export interface StageSize {
   width: number
   height: number
 }
-
-/** 世界坐标矩形：布局碰撞、吸附与自动整理共用。 */
-export interface Rect {
-  x: number
-  y: number
-  w: number
-  h: number
-}

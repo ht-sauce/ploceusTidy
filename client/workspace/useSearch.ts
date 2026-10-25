@@ -4,7 +4,7 @@
  */
 import { useMemo } from 'react'
 import type { SearchEntry, SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import { normalizeSearch, pinyinInitials, searchRank } from '@/lib/search'
+import { normalizeSearch, pinyinInitials, searchRank } from '@/domain/search'
 
 export function useSearch(
   query: string,

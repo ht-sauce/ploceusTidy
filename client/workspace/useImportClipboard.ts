@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
 import type { SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
-import { findFreeOffset, LAYOUT_GAP, nodeRect } from '@/canvas/layout'
+import { findFreeOffset, LAYOUT_GAP, nodeRect } from '@/domain/layout'
 import { mergeNodes, type SceneStore } from './useSceneStore'
 
 interface ImportOptions {

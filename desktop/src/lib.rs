@@ -275,6 +275,23 @@ pub fn run() {
                 == Some("1");
             app.manage(state);
 
+            // 画布性能实测：设 `PLOCEUS_BENCH_SEED=<数量>` 启动即清空并灌入测试数据。
+            // 仅用于 1 万/10 万基准；不设该变量时完全不触发，不影响正常使用。
+            if let Ok(raw) = std::env::var("PLOCEUS_BENCH_SEED") {
+                let count: i64 = raw.trim().parse().unwrap_or(0);
+                if count > 0 {
+                    let state = app.state::<db::AppState>();
+                    if let Err(error) = db::workspace_rebuild(&state) {
+                        eprintln!("基准数据清空失败：{error}");
+                    } else {
+                        match db::seed_bench_nodes(&state, count) {
+                            Ok(done) => println!("基准数据已生成：{done} 个引用"),
+                            Err(error) => eprintln!("基准数据生成失败：{error}"),
+                        }
+                    }
+                }
+            }
+
             // 初始窗口按当前显示器收敛到 62% × 66%，并限制上限，避免大屏一启动就铺满。
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(Some(monitor)) = window.current_monitor() {

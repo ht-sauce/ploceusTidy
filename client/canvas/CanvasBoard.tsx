@@ -35,7 +35,8 @@ import Minimap from './Minimap'
 import NodeShape from './NodeShape'
 import { MINIMAP_MIN_H, MINIMAP_MIN_W, STAGE_PIXEL_RATIO } from './constants'
 import type { CanvasTokens, HandleSide } from './constants'
-import { groupTone, handlePoint, nodeDisplayHeight } from './geometry'
+import { groupTone, handlePoint } from './geometry'
+import { nodeDisplayHeight } from '@/domain/layout'
 import { ICON_IMAGES, THUMB_IMAGES, cssVar, startIconLoad } from './icons'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import { useCanvasInteractions } from './useCanvasInteractions'
@@ -450,31 +451,34 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             )
           })}
 
-          {visibleNodes.map((node) => (
-            <NodeShape
-              key={node.id}
-              node={node}
-              height={nodeDisplayHeight(node, annotationByNode.has(node.id))}
-              annotation={annotationByNode.get(node.id)}
-              icon={ICON_IMAGES.get(node.icon)}
-              thumb={THUMB_IMAGES.get(node.id) ?? null}
-              selected={selectedSet.has(node.id)}
-              singleSelected={selectedSet.size === 1}
-              tokens={tokens}
-              registerRef={(instance) => {
-                if (instance) nodeGroupRefs.current.set(node.id, instance)
-                else nodeGroupRefs.current.delete(node.id)
-              }}
-              onPointerDown={interactions.handleNodePointerDown}
-              onClick={interactions.handleNodeClick}
-              onDblClick={interactions.handleNodeDblClick}
-              onContextMenu={interactions.handleNodeContextMenu}
-              onHoverStart={interactions.handleNodeMouseEnter}
-              onHoverEnd={interactions.handleNodeMouseLeave}
-              onAnnotation={onAnnotation}
-              onHandleDown={interactions.handleHandleDown}
-            />
-          ))}
+          {/* 按 z 升序渲染：z 大的后画、盖在上层；稳定排序保证同 z 保持插入次序。 */}
+          {[...visibleNodes]
+            .sort((left, right) => left.z - right.z)
+            .map((node) => (
+              <NodeShape
+                key={node.id}
+                node={node}
+                height={nodeDisplayHeight(node, annotationByNode.has(node.id))}
+                annotation={annotationByNode.get(node.id)}
+                icon={ICON_IMAGES.get(node.icon)}
+                thumb={THUMB_IMAGES.get(node.id) ?? null}
+                selected={selectedSet.has(node.id)}
+                singleSelected={selectedSet.size === 1}
+                tokens={tokens}
+                registerRef={(instance) => {
+                  if (instance) nodeGroupRefs.current.set(node.id, instance)
+                  else nodeGroupRefs.current.delete(node.id)
+                }}
+                onPointerDown={interactions.handleNodePointerDown}
+                onClick={interactions.handleNodeClick}
+                onDblClick={interactions.handleNodeDblClick}
+                onContextMenu={interactions.handleNodeContextMenu}
+                onHoverStart={interactions.handleNodeMouseEnter}
+                onHoverEnd={interactions.handleNodeMouseLeave}
+                onAnnotation={onAnnotation}
+                onHandleDown={interactions.handleHandleDown}
+              />
+            ))}
 
           {/* 选中空间时同样给出四向锚点：空间可以和文件一样连线。 */}
           {activeGroup
