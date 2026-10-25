@@ -20,11 +20,13 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from 'react'
 import Konva from 'konva'
+import type { KonvaEventObject } from 'konva/lib/Node'
 import { Arrow, Circle, Label, Layer, Line, Rect, Stage, Tag, Text } from 'react-konva'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode, ThemeId } from '@/types/scene'
 import { themeById } from '@/lib/theme'
@@ -124,6 +126,10 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const stageRef = useRef<Konva.Stage>(null)
   const nodeGroupRefs = useRef(new Map<string, Konva.Group>())
   const ringRefs = useRef(new Map<string, Konva.Rect>())
+  // 空间框/标题与箭头的图形引用：拖动期由交互层直接驱动，松手才提交状态。
+  const groupBoxRefs = useRef(new Map<string, Konva.Rect>())
+  const groupTitleRefs = useRef(new Map<string, Konva.Label>())
+  const edgeRefs = useRef(new Map<string, Konva.Arrow>())
   const [size, setSize] = useState<StageSize>({ width: 1280, height: 720 })
   // ICON_IMAGES 是模块级缓存，图标解码完成后靠这个版本号触发一次重渲染。
   const [, setIconVersion] = useState(0)
@@ -144,6 +150,24 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
   useEffect(() => {
     startIconLoad(() => setIconVersion((value) => value + 1))
+  }, [])
+
+  /** 稳定的图形引用注册器：props 引用不变是 memo 组件跳过重渲染的前提。 */
+  const registerNodeRef = useCallback((id: string, instance: Konva.Group | null) => {
+    if (instance) nodeGroupRefs.current.set(id, instance)
+    else nodeGroupRefs.current.delete(id)
+  }, [])
+  const registerGroupBoxRef = useCallback((id: string, instance: Konva.Rect | null) => {
+    if (instance) groupBoxRefs.current.set(id, instance)
+    else groupBoxRefs.current.delete(id)
+  }, [])
+  const registerGroupTitleRef = useCallback((id: string, instance: Konva.Label | null) => {
+    if (instance) groupTitleRefs.current.set(id, instance)
+    else groupTitleRefs.current.delete(id)
+  }, [])
+  const registerEdgeRef = useCallback((id: string, instance: Konva.Arrow | null) => {
+    if (instance) edgeRefs.current.set(id, instance)
+    else edgeRefs.current.delete(id)
   }, [])
 
   useEffect(() => {
@@ -242,6 +266,9 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     size,
     stageRef,
     nodeGroupRefs,
+    groupBoxRefs,
+    groupTitleRefs,
+    edgeRefs,
     viewportRef,
     setViewport,
     zoomAt,
@@ -259,6 +286,47 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onActivate,
     onContextMenu,
   })
+
+  // 事件转发：NodeShape / GroupShape / EdgeLayer 用 memo 跳过无关重渲染，
+  // 处理器经 ref 转发保持引用稳定，不随每次渲染更换。
+  const interactionsRef = useRef(interactions)
+  useLayoutEffect(() => {
+    interactionsRef.current = interactions
+  })
+  const nodeHandlers = useMemo(
+    () => ({
+      onPointerDown: (event: KonvaEventObject<MouseEvent>, node: SceneNode) =>
+        interactionsRef.current.handleNodePointerDown(event, node),
+      onClick: (event: KonvaEventObject<MouseEvent>, node: SceneNode) =>
+        interactionsRef.current.handleNodeClick(event, node),
+      onDblClick: (node: SceneNode) => interactionsRef.current.handleNodeDblClick(node),
+      onContextMenu: (event: KonvaEventObject<MouseEvent>, node: SceneNode) =>
+        interactionsRef.current.handleNodeContextMenu(event, node),
+      onHoverStart: (node: SceneNode) => interactionsRef.current.handleNodeMouseEnter(node),
+      onHoverEnd: () => interactionsRef.current.handleNodeMouseLeave(),
+      onHandleDown: (event: KonvaEventObject<MouseEvent>, node: SceneNode, side: HandleSide) =>
+        interactionsRef.current.handleHandleDown(event, node, side),
+    }),
+    [],
+  )
+  const groupHandlers = useMemo(
+    () => ({
+      onPointerDown: (event: KonvaEventObject<MouseEvent>, groupId: string) =>
+        interactionsRef.current.handleGroupBoxDown(event, groupId),
+      onClick: (event: KonvaEventObject<MouseEvent>, groupId: string) =>
+        interactionsRef.current.handleGroupClick(event, groupId),
+      onContextMenu: (event: KonvaEventObject<MouseEvent>, groupId: string) =>
+        interactionsRef.current.handleGroupContextMenu(event, groupId),
+    }),
+    [],
+  )
+  const edgeHandlers = useMemo(
+    () => ({
+      onContextMenu: (event: KonvaEventObject<MouseEvent>, id: string) =>
+        interactionsRef.current.handleEdgeContextMenu(event, id),
+    }),
+    [],
+  )
 
   /**
    * 连线定位：以两端盒子的中点为中心；缩放沿用当前比例并保证至少 0.92，
@@ -315,22 +383,27 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
   // 主题相关的色值直接取主题定义，切换主题时随 props 重算；
   // 不依赖 CSS 变量的写入时机，避免画布停留在上一套配色。
-  const theme = themeById(themeId)
-  const tokens: CanvasTokens = {
-    primary: theme.primary,
-    border: theme.border,
-    selectedBg: theme.selectedBg,
-    surface: theme.surface,
-    text: cssVar('--text', '#30343A'),
-    textSecondary: cssVar('--text-secondary', '#747A83'),
-    error: cssVar('--error', '#C44B52'),
-  }
+  // memo：tokens 引用稳定是 NodeShape / EdgeLayer memo 生效的前提。
+  const tokens: CanvasTokens = useMemo(() => {
+    const theme = themeById(themeId)
+    return {
+      primary: theme.primary,
+      border: theme.border,
+      selectedBg: theme.selectedBg,
+      surface: theme.surface,
+      text: cssVar('--text', '#30343A'),
+      textSecondary: cssVar('--text-secondary', '#747A83'),
+      error: cssVar('--error', '#C44B52'),
+    }
+  }, [themeId])
 
   /**
    * 迷你地图映射范围：只取内容包围盒（无内容时取当前视口）。
    * 若把视口并进来，平移会同时扩大范围，视口框就会始终粘在原地。
+   * 内容包围盒只随场景变化记忆化；平移/缩放不再对 10 万对象做全量扫描。
    */
-  const minimapBounds = useMemo(() => {
+  const contentBounds = useMemo(() => {
+    if (nodes.length === 0 && groups.length === 0) return null
     let minX = Infinity
     let minY = Infinity
     let maxX = -Infinity
@@ -343,11 +416,6 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     }
     nodes.forEach((node) => consider(node.x, node.y, node.w, node.h))
     groups.forEach((group) => consider(group.x, group.y, group.w, group.h))
-    if (!Number.isFinite(minX)) {
-      const left = -viewport.x / viewport.scale
-      const top = -viewport.y / viewport.scale
-      consider(left, top, size.width / viewport.scale, size.height / viewport.scale)
-    }
     const padX = Math.max(120, (maxX - minX) * 0.15)
     const padY = Math.max(120, (maxY - minY) * 0.15)
     return {
@@ -356,7 +424,23 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       width: Math.max(MINIMAP_MIN_W, maxX - minX + padX * 2),
       height: Math.max(MINIMAP_MIN_H, maxY - minY + padY * 2),
     }
-  }, [groups, nodes, size.height, size.width, viewport])
+  }, [groups, nodes])
+
+  const minimapBounds = useMemo(() => {
+    if (contentBounds) return contentBounds
+    const left = -viewport.x / viewport.scale
+    const top = -viewport.y / viewport.scale
+    const width = size.width / viewport.scale
+    const height = size.height / viewport.scale
+    const padX = Math.max(120, width * 0.15)
+    const padY = Math.max(120, height * 0.15)
+    return {
+      minX: left - padX,
+      minY: top - padY,
+      width: Math.max(MINIMAP_MIN_W, width + padX * 2),
+      height: Math.max(MINIMAP_MIN_H, height + padY * 2),
+    }
+  }, [contentBounds, size.height, size.width, viewport])
 
   /** 迷你地图点击/拖拽：把点击处对应的世界坐标移到视口中心。 */
   const moveViewportTo = useCallback(
@@ -406,9 +490,10 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
               group={group}
               active={selectedGroupId === group.id}
               tokens={tokens}
-              onPointerDown={interactions.handleGroupBoxDown}
-              onClick={interactions.handleGroupClick}
-              onContextMenu={interactions.handleGroupContextMenu}
+              registerRef={registerGroupBoxRef}
+              onPointerDown={groupHandlers.onPointerDown}
+              onClick={groupHandlers.onClick}
+              onContextMenu={groupHandlers.onContextMenu}
             />
           ))}
         </Layer>
@@ -421,9 +506,10 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             tokens={tokens}
             boxOf={boxOf}
             surfaceColor={tokens.surface}
+            registerRef={registerEdgeRef}
             onSelect={onSelectEdge}
             onLabelEdit={onEdgeLabelEdit}
-            onContextMenu={interactions.handleEdgeContextMenu}
+            onContextMenu={edgeHandlers.onContextMenu}
           />
         </Layer>
 
@@ -435,6 +521,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             return (
               <Label
                 key={`title-${group.id}`}
+                ref={(instance) => registerGroupTitleRef(group.id, instance)}
                 x={group.x + 8}
                 y={group.y - 15}
                 draggable
@@ -474,18 +561,15 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
                 selected={selectedSet.has(node.id)}
                 singleSelected={selectedSet.size === 1}
                 tokens={tokens}
-                registerRef={(instance) => {
-                  if (instance) nodeGroupRefs.current.set(node.id, instance)
-                  else nodeGroupRefs.current.delete(node.id)
-                }}
-                onPointerDown={interactions.handleNodePointerDown}
-                onClick={interactions.handleNodeClick}
-                onDblClick={interactions.handleNodeDblClick}
-                onContextMenu={interactions.handleNodeContextMenu}
-                onHoverStart={interactions.handleNodeMouseEnter}
-                onHoverEnd={interactions.handleNodeMouseLeave}
+                registerRef={registerNodeRef}
+                onPointerDown={nodeHandlers.onPointerDown}
+                onClick={nodeHandlers.onClick}
+                onDblClick={nodeHandlers.onDblClick}
+                onContextMenu={nodeHandlers.onContextMenu}
+                onHoverStart={nodeHandlers.onHoverStart}
+                onHoverEnd={nodeHandlers.onHoverEnd}
                 onAnnotation={onAnnotation}
-                onHandleDown={interactions.handleHandleDown}
+                onHandleDown={nodeHandlers.onHandleDown}
               />
             ))}
 

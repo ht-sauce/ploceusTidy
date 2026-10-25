@@ -55,6 +55,7 @@ export function useVisibleScene({
   const frameRequest = useRef<number | null>(null)
 
   // 视口变化后按帧裁剪可见节点，平移缩放期间不额外触发渲染风暴。
+  // 直接映射命中项（O(命中数)），不对全量节点做 filter（10 万对象下每个平移帧都扫一遍）。
   useEffect(() => {
     if (frameRequest.current) cancelAnimationFrame(frameRequest.current)
     frameRequest.current = requestAnimationFrame(() => {
@@ -64,19 +65,42 @@ export function useVisibleScene({
       const right = left + size.width / viewport.scale + margin * 2
       const bottom = top + size.height / viewport.scale + margin * 2
       const hits = rbush.search({ minX: left, minY: top, maxX: right, maxY: bottom })
-      const hitIds = new Set(hits.map((item) => item.id))
-      setVisibleNodes(nodes.filter((node) => hitIds.has(node.id)))
+      setVisibleNodes(
+        hits
+          .map((item) => nodeById.get(item.id))
+          .filter((node): node is SceneNode => Boolean(node)),
+      )
     })
     return () => {
       if (frameRequest.current) cancelAnimationFrame(frameRequest.current)
     }
-  }, [nodes, rbush, size.height, size.width, viewport])
+  }, [nodeById, nodes, rbush, size.height, size.width, viewport])
 
-  // 连线数量远小于对象，全部保留：缩小后仍能看到完整关系网。
+  // 连线按视口裁剪：端点包络盒（贝塞尔曲线落在端点凸包内，两端盒子的并集即覆盖曲线）
+  // 与视口无交才跳过；缩小画布时视口覆盖全部，完整关系网仍然可见。
   const visibleEdges = useMemo(() => {
-    const exists = (id: string) => nodeById.has(id) || groupById.has(id)
-    return edges.filter((edge) => exists(edge.from) && exists(edge.to))
-  }, [edges, groupById, nodeById])
+    const boxOf = (id: string): Rect | null => {
+      const node = nodeById.get(id)
+      if (node) return { x: node.x, y: node.y, w: node.w, h: nodeHeightOf(node) }
+      const group = groupById.get(id)
+      return group ? { x: group.x, y: group.y, w: group.w, h: group.h } : null
+    }
+    const margin = 120 / viewport.scale
+    const left = -viewport.x / viewport.scale - margin
+    const top = -viewport.y / viewport.scale - margin
+    const right = left + size.width / viewport.scale + margin * 2
+    const bottom = top + size.height / viewport.scale + margin * 2
+    return edges.filter((edge) => {
+      const from = boxOf(edge.from)
+      const to = boxOf(edge.to)
+      if (!from || !to) return false
+      const minX = Math.min(from.x, to.x)
+      const minY = Math.min(from.y, to.y)
+      const maxX = Math.max(from.x + from.w, to.x + to.w)
+      const maxY = Math.max(from.y + from.h, to.y + to.h)
+      return maxX >= left && minX <= right && maxY >= top && minY <= bottom
+    })
+  }, [edges, groupById, nodeById, nodeHeightOf, size.height, size.width, viewport])
 
   /**
    * 松手时的落点判定：用 rbush 空间索引查落点附近是否存在非自身的对象，

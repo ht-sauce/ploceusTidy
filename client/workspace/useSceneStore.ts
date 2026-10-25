@@ -228,9 +228,11 @@ export function useSceneStore(): SceneStore {
       const byId = new Map(moves.map((move) => [move.id, move]))
       setNodes((previous) => {
         // 已挂载的子节点不直接拖动，但要跟随父节点的世界位移，保持相对位置。
+        // 按 id 建一次索引：在全量数组上逐个 find 在多选拖动时是 O(M×N)。
+        const prevById = new Map(previous.map((node) => [node.id, node]))
         const delta = new Map<string, { dx: number; dy: number }>()
         moves.forEach((move) => {
-          const node = previous.find((item) => item.id === move.id)
+          const node = prevById.get(move.id)
           if (!node) return
           delta.set(node.id, { dx: move.x - node.x, dy: move.y - node.y })
         })
@@ -267,8 +269,13 @@ export function useSceneStore(): SceneStore {
   const raiseNode = useCallback(
     (id: string, to: 'top' | 'bottom') => {
       if (nodes.length === 0) return
-      const min = Math.min(...nodes.map((node) => node.z))
-      const max = Math.max(...nodes.map((node) => node.z))
+      // 循环代替 Math.min(...map)：10 万参数的展开会超出调用栈。
+      let min = Infinity
+      let max = -Infinity
+      nodes.forEach((node) => {
+        if (node.z < min) min = node.z
+        if (node.z > max) max = node.z
+      })
       const z = to === 'top' ? max + 1 : min - 1
       setNodes((previous) => previous.map((node) => (node.id === id ? { ...node, z } : node)))
     },
@@ -346,14 +353,18 @@ export function useSceneStore(): SceneStore {
         .filter((node): node is SceneNode => Boolean(node))
       if (targets.length === 0) return null
 
-      const minX = Math.min(...targets.map((node) => node.x)) - 16
-      const minY = Math.min(...targets.map((node) => node.y)) - 32
-      const maxX = Math.max(...targets.map((node) => node.x + node.w)) + 16
-      const maxY =
-        Math.max(
-          ...targets.map((node) => node.y + nodeDisplayHeight(node, annotatedIds.has(node.id))),
-        ) + 16
-      const box = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+      // 单次扫描代替 Math.min(...map)：全选后建空间时展开 10 万个参数会超出调用栈。
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      targets.forEach((node) => {
+        minX = Math.min(minX, node.x)
+        minY = Math.min(minY, node.y)
+        maxX = Math.max(maxX, node.x + node.w)
+        maxY = Math.max(maxY, node.y + nodeDisplayHeight(node, annotatedIds.has(node.id)))
+      })
+      const box = { x: minX - 16, y: minY - 32, w: maxX - minX + 32, h: maxY - minY + 48 }
       const selected = new Set(targets.map((node) => node.id))
       // 空间与其成员整体让位：不能压在其他空间或未选中的对象上。
       const offset = findFreeOffset(

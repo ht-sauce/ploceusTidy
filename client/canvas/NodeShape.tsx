@@ -1,7 +1,9 @@
 /**
  * 单个画布对象的图形：图标格、名称、缺失徽标、标注条、四向连线锚点。
  * 任何缩放级别都渲染完整对象，不做远景色点降级；只负责绘制与事件上报。
+ * memo 包装：选中/平移等无关重渲染只影响真正变化的卡片。
  */
+import { memo, useCallback } from 'react'
 import { Circle, Group, Image as KonvaImage, Label, Rect, Tag, Text } from 'react-konva'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
@@ -28,7 +30,8 @@ interface NodeShapeProps {
   selected: boolean
   singleSelected: boolean
   tokens: CanvasTokens
-  registerRef: (instance: Konva.Group | null) => void
+  /** 稳定的引用注册器：按 id 存取 Konva.Group，供拖动期直接驱动位置。 */
+  registerRef: (id: string, instance: Konva.Group | null) => void
   onPointerDown: (event: KonvaEventObject<MouseEvent>, node: SceneNode) => void
   onClick: (event: KonvaEventObject<MouseEvent>, node: SceneNode) => void
   onDblClick: (node: SceneNode) => void
@@ -39,7 +42,7 @@ interface NodeShapeProps {
   onHandleDown: (event: KonvaEventObject<MouseEvent>, node: SceneNode, side: HandleSide) => void
 }
 
-export default function NodeShape({
+function NodeShape({
   node,
   height,
   annotation,
@@ -69,10 +72,15 @@ export default function NodeShape({
   const labelY = showIcon ? iconY + NODE_ICON_SIZE + 1 : 6
   const showHandles = selected && singleSelected
   const tone = annotation ? annotationTone(tokens.primary) : null
+  // 引用注册回调按节点 id 稳定，memo 不会因 ref 变化而失效。
+  const setRef = useCallback(
+    (instance: Konva.Group | null) => registerRef(node.id, instance),
+    [node.id, registerRef],
+  )
 
   return (
     <Group
-      ref={registerRef}
+      ref={setRef}
       x={node.x}
       y={node.y}
       width={node.w}
@@ -176,3 +184,5 @@ export default function NodeShape({
     </Group>
   )
 }
+
+export default memo(NodeShape)

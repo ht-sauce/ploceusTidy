@@ -4,7 +4,7 @@
  * 会话指针位置记录在 ref 里，pointerup 时按会话值提交，
  * 不依赖 state 更新顺序，也不依赖指针是否还在画布内。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Dispatch, RefObject, SetStateAction } from 'react'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
@@ -33,6 +33,10 @@ interface UseCanvasInteractionsOptions {
   size: StageSize
   stageRef: RefObject<Konva.Stage | null>
   nodeGroupRefs: RefObject<Map<string, Konva.Group>>
+  /** 空间框/空间标题/箭头的图形引用：拖动期直接驱动图形，松手才提交状态。 */
+  groupBoxRefs: RefObject<Map<string, Konva.Rect>>
+  groupTitleRefs: RefObject<Map<string, Konva.Label>>
+  edgeRefs: RefObject<Map<string, Konva.Arrow>>
   viewportRef: RefObject<CanvasViewport>
   setViewport: Dispatch<SetStateAction<CanvasViewport>>
   zoomAt: (scale: number, anchorX: number, anchorY: number) => void
@@ -72,6 +76,9 @@ export function useCanvasInteractions({
   size,
   stageRef,
   nodeGroupRefs,
+  groupBoxRefs,
+  groupTitleRefs,
+  edgeRefs,
   viewportRef,
   setViewport,
   zoomAt,
@@ -115,6 +122,8 @@ export function useCanvasInteractions({
   } | null>(null)
   const dragSession = useRef<{
     items: { id: string; x: number; y: number; rect: Rect }[]
+    /** 拖动集合 id：用于落点判定与受影响连线的快速筛选。 */
+    idSet: Set<string>
     pointerX: number
     pointerY: number
     offsetX: number
@@ -138,8 +147,8 @@ export function useCanvasInteractions({
     appliedY: number
     box: Rect
     mode: 'title' | 'box'
-    /** 空间成员在按下时确定，拖动中作为障碍查询的排除集合（成员随空间一起动）。 */
-    memberIds: Set<string>
+    /** 按下时的成员快照：拖动期直接驱动成员图形，松手一次性提交（成员随空间一起动，不参与碰撞）。 */
+    members: { id: string; x: number; y: number }[]
   } | null>(null)
   const hoverTimer = useRef<number | null>(null)
 
@@ -201,10 +210,57 @@ export function useCanvasInteractions({
   }, [])
 
   /**
-   * 空间拖动：以按下时的矩形为基准做累积位移，先吸附再挡在其他空间之外，
-   * 最后把增量交给上层带动内部节点。标题拖动与框体拖动共用同一套约束。
-   * 节点障碍用 rbush 只查落点附近（对数级），不再逐帧扫描全量节点——
-   * 10 万对象时全量构建障碍数组会让空间拖动同样卡顿。
+   * 连线索引：节点 id → 关联的连线 id。拖动时只更新受影响的箭头几何——
+   * 之前每帧 `stage.find('Arrow')` 遍历全部图形再对每条箭头做 `edges.find`，
+   * 在 2000 条连线级别是每帧百万次比较，是拖动卡顿的主因之一。
+   */
+  const edgeIndex = useMemo(() => {
+    const byId = new Map(edges.map((edge) => [edge.id, edge]))
+    const byNode = new Map<string, string[]>()
+    edges.forEach((edge) => {
+      ;[edge.from, edge.to].forEach((id) => {
+        const list = byNode.get(id)
+        if (list) list.push(edge.id)
+        else byNode.set(id, [edge.id])
+      })
+    })
+    return { byId, byNode }
+  }, [edges])
+
+  /**
+   * 更新受影响连线的箭头几何：只遍历与 `activeIds` 相连的边，
+   * 端点为拖动中的空间时用调用方给出的实时盒子，避免读到未提交的旧坐标。
+   */
+  const updateEdgeShapes = useCallback(
+    (activeIds: Set<string>, groupBox?: { id: string; box: Box }) => {
+      const touched = new Set<string>()
+      activeIds.forEach((id) => {
+        const list = edgeIndex.byNode.get(id)
+        if (list) list.forEach((edgeId) => touched.add(edgeId))
+      })
+      if (touched.size === 0) return
+      touched.forEach((edgeId) => {
+        const edge = edgeIndex.byId.get(edgeId)
+        const shape = edgeRefs.current.get(edgeId)
+        if (!edge || !shape) return
+        const from = edge.from === groupBox?.id ? groupBox.box : boxOf(edge.from)
+        const to = edge.to === groupBox?.id ? groupBox.box : boxOf(edge.to)
+        if (!from || !to) return
+        shape.setAttr(
+          'points',
+          edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle)),
+        )
+      })
+    },
+    [boxOf, edgeIndex, edgeRefs],
+  )
+
+  /**
+   * 空间拖动：以按下时的矩形为基准做累积位移，先吸附再挡在其他空间之外。
+   * 标题拖动与框体拖动共用同一套约束。拖动期不提交状态：直接驱动空间框、
+   * 标题与成员节点的 Konva 图形，松手时一次性提交——逐帧 setNodes 会在
+   * 10 万对象下每帧全量重建数组并重渲染，表现为「拖不动」。
+   * 节点障碍用 rbush 只查落点附近（对数级），不逐帧扫描全量节点。
    */
   const moveGroupSession = (pointerX: number, pointerY: number) => {
     const session = groupDrag.current
@@ -215,6 +271,7 @@ export function useCanvasInteractions({
     const threshold = SNAP_THRESHOLD / scale
     // 候选位与落点最多相差一个吸附阈值，查询框按「吸附阈值 + 间距」外扩即可覆盖全部潜在障碍。
     const pad = threshold + LAYOUT_GAP
+    const memberIds = new Set(session.members.map((member) => member.id))
     const localNodes = nearbyRects(
       {
         x: session.box.x + desiredX - pad,
@@ -223,7 +280,7 @@ export function useCanvasInteractions({
         h: session.box.h + pad * 2,
       },
       pad,
-      session.memberIds,
+      memberIds,
     )
     const obstacles = [
       // 空间数量少，其他空间全量参与；空间不能压在非成员对象上。
@@ -249,8 +306,48 @@ export function useCanvasInteractions({
     if (Math.abs(stepX) < 0.4 && Math.abs(stepY) < 0.4) return
     session.appliedX = nextX
     session.appliedY = nextY
-    // 空间移动时内部节点由上层一起位移，连线跟着盒子走。
-    onMoveGroup(session.id, stepX, stepY)
+    // 视觉直驱：框、标题（框拖动模式下 Konva 不会自己动标题）、成员节点一起位移。
+    groupBoxRefs.current
+      .get(session.id)
+      ?.position({ x: session.box.x + nextX, y: session.box.y + nextY })
+    if (session.mode === 'box') {
+      groupTitleRefs.current
+        .get(session.id)
+        ?.position({ x: session.box.x + 8 + nextX, y: session.box.y - 15 + nextY })
+    }
+    session.members.forEach((member) => {
+      nodeGroupRefs.current.get(member.id)?.position({ x: member.x + nextX, y: member.y + nextY })
+    })
+    updateEdgeShapes(new Set([...memberIds, session.id]), {
+      id: session.id,
+      box: {
+        x: session.box.x + nextX,
+        y: session.box.y + nextY,
+        w: session.box.w,
+        h: session.box.h,
+      },
+    })
+  }
+
+  /** 空间拖动收尾：图形归位到最终坐标，位移非零时一次性提交给 store。 */
+  const commitGroupDrag = () => {
+    const session = groupDrag.current
+    groupDrag.current = null
+    setGuides(null)
+    if (!session) return
+    const finalX = session.box.x + session.appliedX
+    const finalY = session.box.y + session.appliedY
+    // 零位移时不会有重渲染来纠正图形，必须手动归位（标题拖动模式下标题被 Konva 拖走过）。
+    groupBoxRefs.current.get(session.id)?.position({ x: finalX, y: finalY })
+    groupTitleRefs.current.get(session.id)?.position({ x: finalX + 8, y: finalY - 15 })
+    session.members.forEach((member) => {
+      nodeGroupRefs.current
+        .get(member.id)
+        ?.position({ x: member.x + session.appliedX, y: member.y + session.appliedY })
+    })
+    if (session.appliedX !== 0 || session.appliedY !== 0) {
+      onMoveGroup(session.id, session.appliedX, session.appliedY)
+    }
   }
 
   /** Alt / Ctrl + 滚轮缩放；普通滚轮按 PS 习惯做纵向平移，避免误缩放。 */
@@ -407,19 +504,8 @@ export function useCanvasInteractions({
         if (!group) return
         group.position({ x: item.x + desiredX, y: item.y + desiredY })
       })
-      // 连线跟随拖动中的节点：Konva 的 className 不参与 find 选择器，按形状类型取。
-      stageRef.current?.find('Arrow').forEach((shape) => {
-        const edgeId = shape.getAttr('edgeId')
-        const edge = edges.find((item) => item.id === edgeId)
-        if (!edge) return
-        const from = boxOf(edge.from)
-        const to = boxOf(edge.to)
-        if (!from || !to) return
-        shape.setAttr(
-          'points',
-          edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle)),
-        )
-      })
+      // 连线跟随拖动中的节点：只更新受影响的箭头，不遍历画布全部图形。
+      updateEdgeShapes(session.idSet)
     }
   }
 
@@ -542,8 +628,7 @@ export function useCanvasInteractions({
     }
 
     panStart.current = null
-    groupDrag.current = null
-    setGuides(null)
+    commitGroupDrag()
   }
 
   // 指针在画布外释放时 Stage 收不到 pointerup，会话会残留；这里做一次兜底收尾。
@@ -553,7 +638,13 @@ export function useCanvasInteractions({
   })
   useEffect(() => {
     const finish = () => {
-      if (boxSession.current || dragSession.current || connectSession.current || panStart.current) {
+      if (
+        boxSession.current ||
+        dragSession.current ||
+        connectSession.current ||
+        groupDrag.current ||
+        panStart.current
+      ) {
         pointerUpRef.current()
       }
     }
@@ -590,6 +681,7 @@ export function useCanvasInteractions({
         const item = nodeById.get(id)
         return rect && item ? [{ id, x: item.x, y: item.y, rect }] : []
       }),
+      idSet: new Set(dragIds),
       pointerX: pointer.x,
       pointerY: pointer.y,
       offsetX: 0,
@@ -648,7 +740,9 @@ export function useCanvasInteractions({
       appliedY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'box',
-      memberIds: new Set(nodes.filter((item) => item.groupId === groupId).map((item) => item.id)),
+      members: nodes
+        .filter((item) => item.groupId === groupId)
+        .map((item) => ({ id: item.id, x: item.x, y: item.y })),
     }
   }
 
@@ -684,7 +778,9 @@ export function useCanvasInteractions({
       appliedY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'title',
-      memberIds: new Set(nodes.filter((item) => item.groupId === groupId).map((item) => item.id)),
+      members: nodes
+        .filter((item) => item.groupId === groupId)
+        .map((item) => ({ id: item.id, x: item.x, y: item.y })),
     }
   }
 
@@ -696,8 +792,7 @@ export function useCanvasInteractions({
   }
 
   const handleGroupTitleUp = () => {
-    groupDrag.current = null
-    setGuides(null)
+    commitGroupDrag()
   }
 
   const handleNodeMouseEnter = (node: SceneNode) => {

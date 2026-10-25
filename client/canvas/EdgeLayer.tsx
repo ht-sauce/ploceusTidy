@@ -1,8 +1,11 @@
 /**
  * 连线图层：有向箭头、连线标签、连线选中与右键。
  * 端点既可以是节点，也可以是空间，尺寸由调用方通过 `boxOf` 解析。
+ * memo 包装：选中/平移等无关重渲染不再逐条 diff 箭头（万级连线时这是主要卡点）。
  */
+import { memo } from 'react'
 import { Arrow, Group, Label, Tag, Text } from 'react-konva'
+import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { CanvasTokens } from './constants'
 import { asHandleSide, edgeColorOf, edgePoints } from './geometry'
@@ -21,17 +24,20 @@ interface EdgeLayerProps {
   tokens: CanvasTokens
   boxOf: (id: string) => Box | null
   surfaceColor: string
+  /** 注册箭头图形引用：拖动期由交互层直接更新受影响连线的几何。 */
+  registerRef: (id: string, instance: Konva.Arrow | null) => void
   onSelect: (id: string) => void
   onLabelEdit: (id: string) => void
   onContextMenu: (event: KonvaEventObject<MouseEvent>, id: string) => void
 }
 
-export default function EdgeLayer({
+function EdgeLayer({
   edges,
   selectedEdgeId,
   tokens,
   boxOf,
   surfaceColor,
+  registerRef,
   onSelect,
   onLabelEdit,
   onContextMenu,
@@ -56,6 +62,7 @@ export default function EdgeLayer({
         return (
           <Group key={edge.id}>
             <Arrow
+              ref={(instance) => registerRef(edge.id, instance)}
               name="edge-path"
               edgeId={edge.id}
               points={points}
@@ -97,3 +104,5 @@ export default function EdgeLayer({
     </>
   )
 }
+
+export default memo(EdgeLayer)

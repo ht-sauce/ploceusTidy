@@ -1,10 +1,12 @@
 /**
- * 顶部搜索：把场景里的对象、标注、空间与连线拍平成搜索结果，并按匹配质量排序。
- * 空间标题与连线标签与对象名同等参与匹配，名称都带拼音首字母。
+ * 顶部搜索：按需构建搜索条目并按匹配质量排序。
+ * 空查询不构建全量条目——10 万对象下每次场景变化（拖动落点、选中、校验）都要重建，
+ * 是选中与拖动「反应慢」的主因之一；此时只给前几条对象作为建议。
+ * 拼音首字母在空闲时分批预热，首个查询不会因全量转换而冻结。
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { SearchEntry, SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import { normalizeSearch, pinyinInitials, searchRank } from '@/domain/search'
+import { normalizeSearch, pinyinInitials, prepareSearch, preparedRank } from '@/domain/search'
 
 export function useSearch(
   query: string,
@@ -14,7 +16,12 @@ export function useSearch(
   annotations: SceneAnnotation[],
   nodeById: Map<string, SceneNode>,
 ) {
-  const entries = useMemo(() => {
+  const normalized = normalizeSearch(query)
+  const active = normalized.length > 0
+
+  // 条目懒构建 + 预归一化：只有真正查询时才付全量构建成本，每键只做字符串比较。
+  const prepared = useMemo(() => {
+    if (!active) return null
     const list: SearchEntry[] = []
     const groupCounts = new Map<string, number>()
     nodes.forEach((node) => {
@@ -75,19 +82,47 @@ export function useSearch(
         edgeId: edge.id,
       })
     })
-    return list
-  }, [annotations, edges, groups, nodeById, nodes])
+    return list.map(prepareSearch)
+  }, [active, annotations, edges, groups, nodeById, nodes])
 
   const results = useMemo(() => {
-    const normalized = normalizeSearch(query)
-    if (!normalized) return entries.slice(0, 6)
-    return entries
-      .map((entry) => ({ entry, rank: searchRank(entry, normalized) }))
-      .filter((item) => item.rank >= 0)
+    if (!prepared) {
+      // 空查询只展示前几个对象作为建议，不构建全量条目。
+      return nodes.slice(0, 6).map((node) => ({
+        nodeId: node.id,
+        type: node.kind,
+        title: node.name,
+        subtitle: node.path ?? node.url ?? node.subtitle,
+        icon: node.icon,
+        searchText: node.name,
+        pinyin: '',
+      }))
+    }
+    return prepared
+      .map((item) => ({ item, rank: preparedRank(item, normalized) }))
+      .filter((hit) => hit.rank >= 0)
       .sort((left, right) => left.rank - right.rank)
       .slice(0, 9)
-      .map((item) => item.entry)
-  }, [entries, query])
+      .map((hit) => hit.item.entry)
+  }, [nodes, normalized, prepared])
+
+  // 空闲预热拼音缓存：每批 2000 个、批间让出主线程，10 万对象也不会阻塞交互；
+  // 场景变化后从头走一遍，缓存命中时只是 Map 查询，代价可忽略。
+  useEffect(() => {
+    let index = 0
+    let cancelled = false
+    const warm = () => {
+      if (cancelled) return
+      const end = Math.min(index + 2000, nodes.length)
+      for (; index < end; index += 1) pinyinInitials(nodes[index].name)
+      if (index < nodes.length) window.setTimeout(warm, 16)
+    }
+    const timer = window.setTimeout(warm, 600)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [nodes])
 
   return { results }
 }

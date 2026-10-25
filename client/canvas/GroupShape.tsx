@@ -1,8 +1,11 @@
 /**
  * 空间（分组框）图形：彩色实线框 + 命中区域。
  * 颜色来自空间自身的 `color`（缺省回退主题主色），便于区分多个空间。
+ * memo 包装：无关重渲染不再重建空间框。
  */
+import { memo, useCallback } from 'react'
 import { Rect } from 'react-konva'
+import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { CanvasTokens } from './constants'
 import { groupTone, mixHex } from './geometry'
@@ -12,24 +15,32 @@ interface GroupShapeProps {
   group: SceneGroup
   active: boolean
   tokens: CanvasTokens
+  /** 稳定的引用注册器：按 id 存取 Konva.Rect，供拖动期直接驱动位置。 */
+  registerRef: (id: string, instance: Konva.Rect | null) => void
   onPointerDown: (event: KonvaEventObject<MouseEvent>, groupId: string) => void
   onClick: (event: KonvaEventObject<MouseEvent>, groupId: string) => void
   onContextMenu: (event: KonvaEventObject<MouseEvent>, groupId: string) => void
 }
 
-export default function GroupShape({
+function GroupShape({
   group,
   active,
   tokens,
+  registerRef,
   onPointerDown,
   onClick,
   onContextMenu,
 }: GroupShapeProps) {
   const color = group.color || tokens.primary
   const tone = groupTone(color)
+  const setRef = useCallback(
+    (instance: Konva.Rect | null) => registerRef(group.id, instance),
+    [group.id, registerRef],
+  )
 
   return (
     <Rect
+      ref={setRef}
       x={group.x}
       y={group.y}
       width={group.w}
@@ -50,3 +61,5 @@ export default function GroupShape({
     />
   )
 }
+
+export default memo(GroupShape)

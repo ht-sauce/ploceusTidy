@@ -140,7 +140,9 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       store.selectEdge(id)
       setPrompt({ kind: 'edge', id, text: edge?.label ?? '' })
     },
-    [store],
+    // 只依赖边数组与选中动作：store 每次渲染都是新对象，用它会瓦解下游 memo。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store.edges, store.selectEdge],
   )
 
   const openGroupTitle = useCallback(
@@ -150,7 +152,9 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       store.selectGroup(id)
       setPrompt({ kind: 'group', id, text: group.title })
     },
-    [store],
+    // 同 openEdgeLabel：按需收窄依赖，保持回调引用稳定。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [store.groupById, store.selectGroup],
   )
 
   const openGroupColor = useCallback(
@@ -164,7 +168,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         fallback: themeTokens.primary,
       })
     },
-    [store, themeTokens.primary],
+    [store.groupById, themeTokens.primary],
   )
 
   const openEdgeColor = useCallback(
