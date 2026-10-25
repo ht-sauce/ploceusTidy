@@ -1,8 +1,9 @@
 /**
- * 单个对象的桌面动作：打开、资源管理器定位、图片预览、缺失重连、双击激活。
- * 只依赖 IPC 封装，不持有场景数据；场景更新通过回调交回上层。
+ * 单个对象的桌面动作：打开、资源管理器定位、缺失重连、双击激活。
+ * 图片与视频一律走系统打开（不做内置预览），只依赖 IPC 封装，不持有场景数据；
+ * 场景更新通过回调交回上层。
  */
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
 import type { SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
@@ -22,41 +23,16 @@ export function useNodeActions({
   editText,
   select,
 }: NodeActionsOptions) {
-  const [preview, setPreview] = useState<{ open: boolean; src: string; title: string }>({
-    open: false,
-    src: '',
-    title: '',
-  })
-
-  const openImagePreview = useCallback(
-    async (node: SceneNode) => {
-      if (!isDesktopClient) {
-        message.info('演示：桌面客户端内用 Ant Design 图片预览')
-        return
-      }
-      try {
-        const src = await desktopApi.previewRef(node.id)
-        setPreview({ open: true, src, title: node.name })
-      } catch (error) {
-        message.error(`预览失败：${String(error)}`)
-      }
-    },
-    [message],
-  )
-
   const openNode = useCallback(
     async (node: SceneNode) => {
       if (node.kind === 'text') {
         editText(node.id)
         return
       }
-      if (node.kind === 'image') {
-        await openImagePreview(node)
-        return
-      }
 
       if (isDesktopClient) {
         try {
+          // 图片/视频/文件/文件夹/链接统一交给系统默认程序打开，无内置预览。
           await desktopApi.openRef(node.id)
           return
         } catch (error) {
@@ -75,7 +51,7 @@ export function useNodeActions({
         message.info(`演示：打开原文件 ${node.name}`)
       }
     },
-    [editText, message, openImagePreview],
+    [editText, message],
   )
 
   const reveal = useCallback(
@@ -133,9 +109,6 @@ export function useNodeActions({
   )
 
   return {
-    previewState: preview,
-    closePreview: () => setPreview({ open: false, src: '', title: '' }),
-    openImagePreview,
     openNode,
     reveal,
     relink,

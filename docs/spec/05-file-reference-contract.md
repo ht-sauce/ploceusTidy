@@ -35,7 +35,7 @@
 | 打开文件 | `tauri-plugin-opener::open_path` | 仅 `refId`；路径来自 DB |
 | 在资源管理器中定位 | `reveal_item_in_dir` | 仅 `refId`；路径来自 DB |
 | 打开 URL | `open_url` | 仅 `http/https`；URL 来自 DB |
-| 打开图片 | 内置图片查看器（Ant Design `Image` 预览） | asset/ref 路径来自 DB |
+| 打开图片 | 系统默认看图程序（与文件一致的 `open_ref`） | asset/ref 路径来自 DB |
 | 视频 | 系统默认播放器 | 仅 `refId` |
 
 - 文件缺失时卡片显示缺失徽标，并提示「重新关联」；打开/定位失败会带路径与原因提示，不静默处理。
@@ -46,10 +46,10 @@
 - Windows 使用系统 Shell：
   - `IShellItemImageFactory::GetImage` 获取与资源管理器一致的缩略图与图标。
   - 失败时返回空，由前端回退内置类型图标；不静默显示错误。
-  - EXE、文件夹、图片、视频、Office/PDF 等由系统提供者决定；不自建图标集。
+  - EXE、文件夹、图片、Office/PDF 等由系统提供者决定；不自建图标集；视频不取封面帧，统一显示系统视频图标。
 - 快捷方式（`.lnk`）：按可执行对象入库（`kind=file`、`icon=exe`），通过 Shell 取目标程序图标；旧节点在再次导入时刷新类型与图标。
 - 剪贴板图片按扩展名保存到 `assets/`，需要时由 Shell 生成缩略图。
-- 图片预览由 `preview_ref` 返回 data URL（≤24MB）；v1 明确不改为自定义协议，双击预览沿用该方案。
+- 图片预览与视频封面已砍：图片/视频一律用系统默认程序打开（`open_ref`），不保留内置预览对话框，也不引入自定义协议。
 - 仅对可见卡片请求缩略图；同屏并发受限。
 
 ## 6. 文件缺失

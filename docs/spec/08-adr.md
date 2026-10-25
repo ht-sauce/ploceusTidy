@@ -319,9 +319,10 @@
 
 | 事项 | 触发时机 | 说明 |
 | --- | --- | --- |
-| Tauri 剪贴板文件路径 spike | M0 | `clipboard-win::raw::get_file_list` 在目标 Windows 上验证；失败则用 `windows` crate 直读 `CF_HDROP` |
-| 画布 1 万/10 万基准 | M2/M4 | 验证视口裁剪、空间索引、缩略图节流与高清倍率的显存开销 |
+| Tauri 剪贴板文件路径 | 已完成 | Windows `CF_HDROP` 可用；macOS NSPasteboard、Linux wl-paste/xclip 已有实现 |
+| 画布 1 万/10 万基准 | 已完成 | 已实测（数字为性能优化前测得）；需要新数字时用 `PLOCEUS_BENCH_SEED` 重测 |
 | 搜索索引升级 | 5 万引用后 | 当前为内存子串匹配 + 拼音首字母缓存；届时评估 FTS5 trigram / 内存 n-gram 索引 |
 | 百万级画布 | 有真实需求时 | 渲染已按视口裁剪与总量无关；剩余一次性 O(N) 成本（rbush 重建、数组映射、整场景持久化）需改增量索引与增量写库 |
 | 多画布 | v2 评估 | 当前单画布 + 空间（分组框） |
-| macOS/Linux | 后续 | 剪贴板、Shell 缩略图、打包分别补平台实现 |
+| macOS/Linux | 后续 | 剪贴板已有；Shell 缩略图降级；打包（dmg/AppImage/deb）与真机验证未做 |
+| 代码签名 | 发布前 | NSIS 已验收；签名未做，不影响功能验证 |

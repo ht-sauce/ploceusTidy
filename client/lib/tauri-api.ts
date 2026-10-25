@@ -24,8 +24,6 @@ export const desktopApi = {
   /** 把粘贴的截图写入 dataWorkSpace/assets，返回落盘路径。 */
   saveClipboardImage: (data: string, ext: string) =>
     invoke<string>('save_clipboard_image', { data, ext }),
-  /** 返回图片 data URL；超过 24MB 由 Rust 侧拒绝。 */
-  previewRef: (nodeId: string) => invoke<string>('preview_ref', { nodeId }),
   workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
   /** 用 Windows Shell 生成缩略图；不可用时返回 null。 */
   thumbGet: (nodeId: string, size = 96) => invoke<string | null>('thumb_get', { nodeId, size }),

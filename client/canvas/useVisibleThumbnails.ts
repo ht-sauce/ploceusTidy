@@ -16,9 +16,9 @@ export function useVisibleThumbnails(visibleNodes: SceneNode[], active = true) {
       (node) =>
         node.isExists &&
         !THUMB_IMAGES.has(node.id) &&
-        // 图片与视频取 Windows Shell 缩略图（视频为系统生成的封面帧）；
-        // exe / 快捷方式取 Shell 图标，避免显示成通用文本图标。
-        (node.kind === 'image' || node.kind === 'video' || node.icon === 'exe'),
+        // 图片取 Windows Shell 缩略图；exe / 快捷方式取 Shell 图标。
+        // 视频不取封面帧（已列入非目标），统一显示系统视频图标。
+        (node.kind === 'image' || node.icon === 'exe'),
     )
     if (pending.length === 0) return
     const timer = window.setTimeout(() => {

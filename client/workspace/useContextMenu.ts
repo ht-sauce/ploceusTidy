@@ -140,7 +140,7 @@ export function useContextMenu({
       const items: ContextMenuEntry[] = []
       const hasNeighbor = edges.some((edge) => edge.from === node.id || edge.to === node.id)
       if (node.kind === 'text') items.push({ key: 'edit-text', label: '编辑文字' })
-      else if (node.kind === 'image') items.push({ key: 'open', label: '预览图片' })
+      else if (node.kind === 'image') items.push({ key: 'open', label: '打开图片' })
       else {
         items.push({
           key: 'open',

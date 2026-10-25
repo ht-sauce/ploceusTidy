@@ -106,39 +106,6 @@ fn save_clipboard_image(
     db::save_asset(&state, &bytes, &clean_ext)
 }
 
-/// 返回图片的 data URL；超过 24MB 直接拒绝，避免前端内存与 IPC 压力。
-#[tauri::command]
-fn preview_ref(state: State<'_, AppState>, node_id: String) -> Result<String, String> {
-    let (path, url) = db::node_target(&state, &node_id)?;
-    if let Some(url) = url {
-        return Ok(url);
-    }
-
-    let path = path.ok_or_else(|| "该对象没有可预览的文件".to_string())?;
-    let metadata =
-        std::fs::metadata(&path).map_err(|error| format!("读取文件信息失败：{error}"))?;
-    if metadata.len() > 24 * 1024 * 1024 {
-        return Err("图片超过 24MB，请用系统查看器打开".to_string());
-    }
-
-    let ext = std::path::Path::new(&path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        _ => "image/png",
-    };
-    let bytes = std::fs::read(&path).map_err(|error| format!("读取图片失败：{error}"))?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    Ok(format!("data:{mime};base64,{encoded}"))
-}
-
 /// 按 ID 读取单个节点，用于重复导入后的定位刷新。
 #[tauri::command]
 fn node_get(state: State<'_, AppState>, node_id: String) -> Result<Option<SceneNode>, String> {
@@ -321,7 +288,6 @@ pub fn run() {
             open_ref,
             reveal_ref,
             save_clipboard_image,
-            preview_ref,
             node_get,
             meta_get,
             meta_set,

@@ -42,8 +42,10 @@ ploceusTidy/
 │   ├── vite-env.d.ts
 │   ├── lib/
 │   │   ├── tauri-api.ts            # invoke 封装、isTauri
-│   │   ├── theme.ts                # 四套主题令牌与 applyTheme/normalizeTheme
-│   │   └── search.ts               # 搜索归一化、拼音首字母缓存与排序分级
+│   │   └── theme.ts                # 四套主题令牌与 applyTheme/normalizeTheme
+│   ├── domain/                     # 领域纯函数（布局与搜索，不依赖 React/Konva）
+│   │   ├── layout.ts               # 矩形碰撞、吸附参考线、空位查找、空间自动整理与贴合
+│   │   └── search.ts               # 搜索归一化、拼音首字母缓存与分级排序
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
 │   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
@@ -51,7 +53,7 @@ ploceusTidy/
 │   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 删除/撤销/标注/空间命令
 │   │   ├── useScenePersistence.ts  # 加载/保存/缺失校验/拖入监听
 │   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴
-│   │   ├── useNodeActions.ts       # 打开、定位、预览、重连、双击激活
+│   │   ├── useNodeActions.ts       # 打开、定位、重连、双击激活
 │   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作（含系统菜单入口）
 │   │   ├── useShortcuts.ts         # 全局快捷键映射
 │   │   ├── useWindowSuspended.ts   # 最小化/隐藏检测，驱动暂停渲染
@@ -67,7 +69,6 @@ ploceusTidy/
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
 │   │   ├── Minimap.tsx             # 迷你地图与点击定位
 │   │   ├── CanvasTextEditor.tsx    # 文字内联编辑
-│   │   ├── layout.ts              # 矩形碰撞、吸附参考线、空位查找、空间自动整理（纯函数）
 │   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
 │   │   ├── icons.tsx               # 系统图标与缩略图缓存
 │   │   ├── constants.ts            # 迷你地图、名称预算、空间调色板、渲染倍率等常量
@@ -82,7 +83,6 @@ ploceusTidy/
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器
 │   │   ├── NeighborPickerDialog.tsx # 一对多关联对象跳转选择
-│   │   ├── ImagePreviewDialog.tsx  # Ant Design 图片预览
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
 │   └── styles/global.css
 ├── desktop/                        # Tauri 2 桌面壳 / Rust 平台层（无移动端）
@@ -125,9 +125,9 @@ client/
 | 画布平移缩放、Konva 渲染、空间与锚点连线、不重叠与吸附（拖动期不校验、松手 rbush 判定落点）、自动整理、右键菜单、迷你地图 | `client/canvas/*`、`client/domain/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
 | 场景命令、选择、删除/撤销、标注、空间成员自动归属、空间/连线配色、空间自动整理 | `client/workspace/useSceneStore.ts` |
 | 加载/保存/缺失校验/拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts` |
-| 打开/定位/预览/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
+| 打开/定位/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
-| 搜索归一化、拼音首字母与排序 | `client/lib/search.ts`、`client/workspace/useSearch.ts` |
+| 搜索归一化、拼音首字母与排序 | `client/domain/search.ts`、`client/workspace/useSearch.ts` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/workspace/useImportClipboard.ts`、`useNodeActions.ts`、`client/lib/tauri-api.ts` |
 | 搜索、标注、设置 | `client/workspace/useSearch.ts`、`useContextMenu.ts`、`TitleBar.tsx`、`DetailsPanel.tsx`、`SettingsDialog.tsx` |
@@ -140,7 +140,7 @@ client/
 
 ## 5. 待补地图项
 
-- 视频封面、图片预览协议。
-- `client/domain`、`client/shared` 的实际文件与职责。
-- 1 万 / 10 万画布基准实测（Konva + rbush 已就位，需真实数据验证）。
-- NSIS 安装包验收（WebView2、数据路径、体积）。
+- 视频封面、图片预览已砍：一律系统打开，不再保留相关地图项。
+- `client/shared`（IPC 契约集中于 `tauri-api.ts`，暂未需要独立目录）。
+- 基准实测与 NSIS 安装验收已完成（基准数字为性能优化前测得，必要时重测）。
+- 代码签名（未做，不影响功能验证）。
