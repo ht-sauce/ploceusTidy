@@ -23,7 +23,7 @@
 ## 4. 构建与发布
 
 - 构建命令：前端 `pnpm build`，桌面安装包 `pnpm tauri:build`；仅导出 exe 可用 `pnpm tauri build --no-bundle`。
-- 安装包原始产物在 `desktop/target/release/bundle/nsis/`；`pnpm tauri:build` 完成后由 `scripts/collect-installer.mjs` 自动复制到项目根 `release/`（不入库），发布取包一律用 `release/` 下的最新安装包。
+- 安装包原始产物在 `desktop/target/release/bundle/nsis/`；`pnpm tauri:build` 完成后由 `scripts/collect-installer.mjs` 自动复制到项目根 `release/`（入库，README 直接链接最新安装包供下载），发布取包一律用 `release/` 下的最新安装包。
 - 不启用自动更新（v1）；手动安装包升级，保留 `dataWorkSpace`。
 - 单实例：`tauri-plugin-single-instance` 保证同时只有一个进程与窗口；重复启动把已有窗口恢复并聚焦，避免两个窗口写同一份 `dataWorkSpace`（ADR-024）。产品不做多画布。
 - 代码签名：使用本机自签名代码签名证书（`CN=ploceusTidy`，SHA256，有效期 5 年），由 Tauri 按 `desktop/tauri.windows.conf.json` 的 `certificateThumbprint` 自动调用 signtool 签名主程序、卸载器与安装包（该配置换机不同，不入库）。pfx 备份与密码在 `desktop/signing/`（不入库）。自签名证书不受系统信任，SmartScreen 提示依旧；正式 CA 证书待有真实分发需求时评估（见 `08-adr.md` §5）。

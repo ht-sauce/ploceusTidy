@@ -6,7 +6,6 @@ desktop/gen/
 desktop/signing/
 desktop/tauri.windows.conf.json
 dataWorkSpace/
-release/
 .screenshots/
 .trae-html-share-packages/
 *.local

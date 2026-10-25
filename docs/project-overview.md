@@ -30,7 +30,7 @@ ploceusTidy/
 ├── scripts/
 │   ├── check-spec.mjs             # 硬约束静态扫描（pnpm check-spec）
 │   └── collect-installer.mjs      # NSIS 安装包复制到项目根 release/（tauri:build 后自动执行）
-├── release/                        # 安装包固定产物地址（构建生成，不入库）
+├── release/                        # 安装包固定产物地址（入库，README 直链下载）
 ├── vite.config.ts                  # root: client，127.0.0.1:5173
 ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
 ├── eslint.config.js / prettier.config.cjs / .editorconfig

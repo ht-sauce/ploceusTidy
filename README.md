@@ -10,6 +10,15 @@
 
 > 当前为可运行的 Windows 桌面客户端：React 画布 + Tauri 2 + SQLite 已打通，导入、组织、连线、标注、搜索、打开/定位链路可用。
 
+## 下载
+
+| 渠道 | 地址 |
+| --- | --- |
+| 最新安装包（v0.1.1） | [release/络雀_0.1.1_x64-setup.exe](release/络雀_0.1.1_x64-setup.exe) |
+| GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
+
+安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。
+
 ## 当前状态
 
 | 项 | 状态 |
@@ -20,7 +29,7 @@
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间标题与连线标签 |
 | 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制 |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
-| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名），产物自动收集到项目根 `release/`，发布到 GitHub Releases |
+| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名），产物自动收集到项目根 `release/`（入库，可直接下载），同时发布到 GitHub Releases |
 
 ## 核心能力
 
