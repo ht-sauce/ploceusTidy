@@ -176,12 +176,19 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onScaleChange,
   })
 
-  const { visibleNodes, visibleEdges } = useVisibleScene({
+  /** 展示高度解析：索引、碰撞与渲染统一用它，标注节点才不会漏判底部区域。 */
+  const nodeHeightOf = useCallback(
+    (node: SceneNode) => nodeDisplayHeight(node, annotationByNode.has(node.id)),
+    [annotationByNode],
+  )
+
+  const { visibleNodes, visibleEdges, landingBlocked, nearbyRects } = useVisibleScene({
     nodes,
     edges,
     nodeById,
     groupById,
     viewport,
+    nodeHeightOf,
     size,
   })
 
@@ -240,6 +247,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     zoomAt,
     boxOf,
     nodeRectOf,
+    landingBlocked,
+    nearbyRects,
     onSelect,
     onBoxSelect,
     onClearSelection,

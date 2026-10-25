@@ -122,7 +122,7 @@ client/
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
 | 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
-| 画布平移缩放、Konva 渲染、空间与锚点连线、不重叠与吸附、自动整理、右键菜单、迷你地图 | `client/canvas/*`、`client/canvas/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
+| 画布平移缩放、Konva 渲染、空间与锚点连线、不重叠与吸附（拖动期不校验、松手 rbush 判定落点）、自动整理、右键菜单、迷你地图 | `client/canvas/*`、`client/domain/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
 | 场景命令、选择、删除/撤销、标注、空间成员自动归属、空间/连线配色、空间自动整理 | `client/workspace/useSceneStore.ts` |
 | 加载/保存/缺失校验/拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts` |
 | 打开/定位/预览/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |

@@ -13,7 +13,13 @@ import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import type { Rect } from '@/domain/layout'
 import type { HandleSide } from './constants'
 import { asHandleSide, edgePoints } from './geometry'
-import { constrainDrag, LAYOUT_GAP, SNAP_THRESHOLD, type SnapGuides } from '@/domain/layout'
+import {
+  constrainDrag,
+  LAYOUT_GAP,
+  SNAP_THRESHOLD,
+  snapOffset,
+  type SnapGuides,
+} from '@/domain/layout'
 
 type Box = { x: number; y: number; w: number; h: number }
 
@@ -33,6 +39,10 @@ interface UseCanvasInteractionsOptions {
   boxOf: (id: string) => Box | null
   /** 节点静态矩形（含标注高度），用于拖动碰撞与吸附；读取库值而非 Konva 实时位置。 */
   nodeRectOf: (id: string) => Rect | null
+  /** 松手落点判定：rbush 查询落点附近是否有非自身对象（O(log N)），拖动结束时一次性校验。 */
+  landingBlocked: (rect: Rect, movingIds: Set<string>) => boolean
+  /** 对齐吸附邻居查询：rbush 取矩形 pad 范围内的非移动对象矩形，替代逐帧全量扫描。 */
+  nearbyRects: (rect: Rect, pad: number, excludeIds: Set<string>) => Rect[]
   onSelect: (id: string, additive: boolean) => void
   onBoxSelect: (ids: string[], additive: boolean) => void
   onClearSelection: () => void
@@ -67,6 +77,8 @@ export function useCanvasInteractions({
   zoomAt,
   boxOf,
   nodeRectOf,
+  landingBlocked,
+  nearbyRects,
   onSelect,
   onBoxSelect,
   onClearSelection,
@@ -107,6 +119,9 @@ export function useCanvasInteractions({
     pointerY: number
     offsetX: number
     offsetY: number
+    /** 吸附前的裸偏移：吸附落点被拒时先退回裸偏移，再考虑整体回退。 */
+    rawOffsetX: number
+    rawOffsetY: number
     moving: boolean
   } | null>(null)
   const connectSession = useRef<{
@@ -123,6 +138,8 @@ export function useCanvasInteractions({
     appliedY: number
     box: Rect
     mode: 'title' | 'box'
+    /** 空间成员在按下时确定，拖动中作为障碍查询的排除集合（成员随空间一起动）。 */
+    memberIds: Set<string>
   } | null>(null)
   const hoverTimer = useRef<number | null>(null)
 
@@ -186,6 +203,8 @@ export function useCanvasInteractions({
   /**
    * 空间拖动：以按下时的矩形为基准做累积位移，先吸附再挡在其他空间之外，
    * 最后把增量交给上层带动内部节点。标题拖动与框体拖动共用同一套约束。
+   * 节点障碍用 rbush 只查落点附近（对数级），不再逐帧扫描全量节点——
+   * 10 万对象时全量构建障碍数组会让空间拖动同样卡顿。
    */
   const moveGroupSession = (pointerX: number, pointerY: number) => {
     const session = groupDrag.current
@@ -193,25 +212,34 @@ export function useCanvasInteractions({
     const scale = viewportRef.current.scale
     const desiredX = (pointerX - session.startX) / scale
     const desiredY = (pointerY - session.startY) / scale
-    const otherGroups = groups.filter((item) => item.id !== session.id)
+    const threshold = SNAP_THRESHOLD / scale
+    // 候选位与落点最多相差一个吸附阈值，查询框按「吸附阈值 + 间距」外扩即可覆盖全部潜在障碍。
+    const pad = threshold + LAYOUT_GAP
+    const localNodes = nearbyRects(
+      {
+        x: session.box.x + desiredX - pad,
+        y: session.box.y + desiredY - pad,
+        w: session.box.w + pad * 2,
+        h: session.box.h + pad * 2,
+      },
+      pad,
+      session.memberIds,
+    )
     const obstacles = [
-      ...otherGroups.map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
-      // 空间不能压在非成员对象上；成员随空间一起移动，不参与碰撞。
-      ...nodes
-        .filter((item) => item.groupId !== session.id)
-        .map((item) => nodeRectOf(item.id))
-        .filter((item): item is Rect => Boolean(item)),
+      // 空间数量少，其他空间全量参与；空间不能压在非成员对象上。
+      ...groups
+        .filter((item) => item.id !== session.id)
+        .map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
+      ...localNodes,
     ]
-    const snapTargets = obstacles
     const result = constrainDrag(
       [session.box],
       obstacles,
       desiredX,
       desiredY,
       LAYOUT_GAP,
-      // 吸附阈值按屏幕像素折算，缩小画布时仍然「够得着」。
-      SNAP_THRESHOLD / scale,
-      snapTargets,
+      threshold,
+      obstacles,
     )
     const nextX = Math.round(result.dx)
     const nextY = Math.round(result.dy)
@@ -331,35 +359,53 @@ export function useCanvasInteractions({
     if (dragSession.current) {
       const session = dragSession.current
       const scale = viewportRef.current.scale
-      const desiredX = (pointer.x - session.pointerX) / scale
-      const desiredY = (pointer.y - session.pointerY) / scale
-      const movingIds = new Set(session.items.map((item) => item.id))
-      const obstacles = nodes
-        .filter((item) => !movingIds.has(item.id))
-        .map((item) => nodeRectOf(item.id))
-        .filter((item): item is Rect => Boolean(item))
-      const snapTargets = [
-        ...obstacles,
-        ...groups.map((item) => ({ x: item.x, y: item.y, w: item.w, h: item.h })),
-      ]
-      const moving = session.items.map((item) => ({ ...item.rect, x: item.x, y: item.y }))
-      const result = constrainDrag(
-        moving,
-        obstacles,
-        desiredX,
-        desiredY,
-        LAYOUT_GAP,
-        SNAP_THRESHOLD / scale,
-        snapTargets,
-      )
-      session.offsetX = result.dx
-      session.offsetY = result.dy
-      if (Math.abs(result.dx) > 1 || Math.abs(result.dy) > 1) session.moving = true
-      applyGuides(result.guides)
+      let desiredX = (pointer.x - session.pointerX) / scale
+      let desiredY = (pointer.y - session.pointerY) / scale
+      session.rawOffsetX = desiredX
+      session.rawOffsetY = desiredY
+      if (Math.abs(desiredX) > 1 || Math.abs(desiredY) > 1) session.moving = true
+      // 拖动过程不校验碰撞（碰撞推迟到松手统一判定），但保留对齐吸附：
+      // 用 rbush 只查移动集合附近的邻居（对数级），替代逐帧全量扫描——
+      // 10 万对象时全量碰撞/吸附计算会让主线程饱和，表现为卡顿与「拖不动」。
+      if (session.items.length > 0) {
+        const threshold = SNAP_THRESHOLD / scale
+        const bounds = session.items.reduce(
+          (acc, item) => ({
+            minX: Math.min(acc.minX, item.rect.x),
+            minY: Math.min(acc.minY, item.rect.y),
+            maxX: Math.max(acc.maxX, item.rect.x + item.rect.w),
+            maxY: Math.max(acc.maxY, item.rect.y + item.rect.h),
+          }),
+          { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+        )
+        const movingIds = new Set(session.items.map((item) => item.id))
+        const neighbors = nearbyRects(
+          {
+            x: bounds.minX + desiredX - threshold,
+            y: bounds.minY + desiredY - threshold,
+            w: bounds.maxX - bounds.minX + threshold * 2,
+            h: bounds.maxY - bounds.minY + threshold * 2,
+          },
+          threshold,
+          movingIds,
+        )
+        const snapped = snapOffset(
+          session.items.map((item) => item.rect),
+          neighbors,
+          desiredX,
+          desiredY,
+          threshold,
+        )
+        desiredX = snapped.dx
+        desiredY = snapped.dy
+        applyGuides(snapped.guides)
+      }
+      session.offsetX = desiredX
+      session.offsetY = desiredY
       session.items.forEach((item) => {
         const group = nodeGroupRefs.current.get(item.id)
         if (!group) return
-        group.position({ x: item.x + result.dx, y: item.y + result.dy })
+        group.position({ x: item.x + desiredX, y: item.y + desiredY })
       })
       // 连线跟随拖动中的节点：Konva 的 className 不参与 find 选择器，按形状类型取。
       stageRef.current?.find('Arrow').forEach((shape) => {
@@ -462,11 +508,30 @@ export function useCanvasInteractions({
     if (dragSession.current) {
       const session = dragSession.current
       if (session.moving) {
+        // 松手时统一做一次落点判定（rbush 对数级）：吸附落点被压住时先退回裸偏移，
+        // 裸偏移也不行才整体回到拖动前的位置，避免压在别的对象上。
+        const movingIds = new Set(session.items.map((item) => item.id))
+        const isBlocked = (offsetX: number, offsetY: number) =>
+          session.items.some((item) =>
+            landingBlocked({ ...item.rect, x: item.x + offsetX, y: item.y + offsetY }, movingIds),
+          )
+        const accepted = isBlocked(session.offsetX, session.offsetY)
+          ? isBlocked(session.rawOffsetX, session.rawOffsetY)
+            ? { x: 0, y: 0 }
+            : { x: session.rawOffsetX, y: session.rawOffsetY }
+          : { x: session.offsetX, y: session.offsetY }
+        // 拖动中是直接改 Konva 位置；回退或退回裸偏移时库内坐标不变、不会触发重渲染，
+        // 这里把图形同步到最终接受的落点，避免残留在被拒绝的位置上。
+        session.items.forEach((item) => {
+          const group = nodeGroupRefs.current.get(item.id)
+          if (!group) return
+          group.position({ x: Math.round(item.x + accepted.x), y: Math.round(item.y + accepted.y) })
+        })
         onMoveNodes(
           session.items.map((item) => ({
             id: item.id,
-            x: Math.round(item.x + session.offsetX),
-            y: Math.round(item.y + session.offsetY),
+            x: Math.round(item.x + accepted.x),
+            y: Math.round(item.y + accepted.y),
           })),
         )
       } else {
@@ -529,6 +594,8 @@ export function useCanvasInteractions({
       pointerY: pointer.y,
       offsetX: 0,
       offsetY: 0,
+      rawOffsetX: 0,
+      rawOffsetY: 0,
       moving: false,
     }
   }
@@ -581,6 +648,7 @@ export function useCanvasInteractions({
       appliedY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'box',
+      memberIds: new Set(nodes.filter((item) => item.groupId === groupId).map((item) => item.id)),
     }
   }
 
@@ -616,6 +684,7 @@ export function useCanvasInteractions({
       appliedY: 0,
       box: { x: group.x, y: group.y, w: group.w, h: group.h },
       mode: 'title',
+      memberIds: new Set(nodes.filter((item) => item.groupId === groupId).map((item) => item.id)),
     }
   }
 
