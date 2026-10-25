@@ -2,7 +2,8 @@
  * 通用文本输入弹窗：连线标签、空间标题等单行文本编辑共用。
  * 通过 `open` 控制显示，调用方用 key 重建以带入初始值。
  */
-import { Input, Modal } from 'antd'
+import Input from 'antd/es/input'
+import Modal from 'antd/es/modal'
 import { useState } from 'react'
 
 interface TextPromptDialogProps {

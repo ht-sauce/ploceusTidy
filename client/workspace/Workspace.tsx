@@ -3,7 +3,7 @@
  * 这里是唯一把「领域能力」接到「界面」上的地方，App 只负责主题壳。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App as AntApp } from 'antd'
+import AntApp from 'antd/es/app'
 import type { SceneNode, SearchEntry, ThemeId } from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/canvas/CanvasBoard'
 import { GROUP_PALETTE } from '@/canvas/constants'

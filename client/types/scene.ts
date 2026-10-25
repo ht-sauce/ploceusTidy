@@ -100,6 +100,21 @@ export interface SceneData {
   annotations: SceneAnnotation[]
 }
 
+/**
+ * 场景增量：按对象引用对比上次成功保存的基线自动求差（不可变更新保证
+ * 未变对象引用不变），只传新增/变化的行与显式删除的 ID。
+ */
+export interface SceneDelta {
+  nodes: SceneNode[]
+  removedNodeIds: string[]
+  groups: SceneGroup[]
+  removedGroupIds: string[]
+  edges: SceneEdge[]
+  removedEdgeIds: string[]
+  annotations: SceneAnnotation[]
+  removedAnnotationIds: string[]
+}
+
 /** 单个导入失败项；`reason` 必须能让用户定位原因（HC-14）。 */
 export interface ImportError {
   path: string

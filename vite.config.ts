@@ -13,6 +13,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // 分包后仅剩 antd 这一个 500KB+ 的 vendor chunk（758KB，属预期），上调阈值消掉构建噪声。
+    chunkSizeWarningLimit: 800,
     // 手动分包：antd / 拼音 / 画布引擎拆成独立 chunk，首屏脚本变小且可并行加载、独立缓存。
     rolldownOptions: {
       output: {

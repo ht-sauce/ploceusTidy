@@ -4,8 +4,11 @@
  */
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Button, Input, Popover, Tooltip } from 'antd'
-import type { InputRef } from 'antd'
+import Button from 'antd/es/button'
+import Input from 'antd/es/input'
+import type { InputRef } from 'antd/es/input'
+import Popover from 'antd/es/popover'
+import Tooltip from 'antd/es/tooltip'
 import {
   BorderOutlined,
   CloseOutlined,

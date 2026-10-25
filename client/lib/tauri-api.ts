@@ -4,7 +4,18 @@
  */
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ImportResult, RefStatus, RelinkResult, SceneData, WorkspaceInfo } from '@/types/scene'
+import type {
+  ImportResult,
+  RefStatus,
+  RelinkResult,
+  SceneAnnotation,
+  SceneData,
+  SceneDelta,
+  SceneEdge,
+  SceneGroup,
+  SceneNode,
+  WorkspaceInfo,
+} from '@/types/scene'
 
 /** 浏览器调试模式下为 false，用于跳过桌面专属逻辑。 */
 export const isDesktopClient = isTauri()
@@ -46,13 +57,117 @@ function stringifyScene(scene: SceneData): Promise<string> {
   }
 }
 
+/**
+ * 保存增量协议：基线按对象引用对比——不可变更新保证未变对象引用不变，
+ * diff 不可能遗漏；常规保存只序列化/传输变化与删除的行（量级通常是个位数对象），
+ * 10 万画布的常规保存不再序列化整场景，也就不需要为克隆付主线程成本。
+ * 每 `FULL_SAVE_INTERVAL` 次与失败后的首存强制全量对账，防增量链路缺陷累积漂移。
+ */
+interface SaveBaseline {
+  nodes: Map<string, SceneNode>
+  groups: Map<string, SceneGroup>
+  edges: Map<string, SceneEdge>
+  annotations: Map<string, SceneAnnotation>
+}
+
+const FULL_SAVE_INTERVAL = 20
+let saveBaseline: SaveBaseline | null = null
+let saveSequence = 0
+/** 保存串行链：防抖窗口重叠时也不并发写库，基线更新严格有序。 */
+let saveChain: Promise<void> = Promise.resolve()
+
+function toBaseline(scene: SceneData): SaveBaseline {
+  return {
+    nodes: new Map(scene.nodes.map((item) => [item.id, item])),
+    groups: new Map(scene.groups.map((item) => [item.id, item])),
+    edges: new Map(scene.edges.map((item) => [item.id, item])),
+    annotations: new Map(scene.annotations.map((item) => [item.id, item])),
+  }
+}
+
+/** 按引用求差：引用相同即未变；上次有、本次无即删除。 */
+function diffScene(scene: SceneData, baseline: SaveBaseline): SceneDelta {
+  const delta: SceneDelta = {
+    nodes: [],
+    removedNodeIds: [],
+    groups: [],
+    removedGroupIds: [],
+    edges: [],
+    removedEdgeIds: [],
+    annotations: [],
+    removedAnnotationIds: [],
+  }
+  const collect = <T extends { id: string }>(
+    current: T[],
+    previous: Map<string, T>,
+    changed: T[],
+    removed: string[],
+  ) => {
+    const seen = new Set<string>()
+    current.forEach((item) => {
+      seen.add(item.id)
+      if (previous.get(item.id) !== item) changed.push(item)
+    })
+    previous.forEach((_value, id) => {
+      if (!seen.has(id)) removed.push(id)
+    })
+  }
+  collect(scene.nodes, baseline.nodes, delta.nodes, delta.removedNodeIds)
+  collect(scene.groups, baseline.groups, delta.groups, delta.removedGroupIds)
+  collect(scene.edges, baseline.edges, delta.edges, delta.removedEdgeIds)
+  collect(scene.annotations, baseline.annotations, delta.annotations, delta.removedAnnotationIds)
+  return delta
+}
+
+function deltaIsEmpty(delta: SceneDelta): boolean {
+  return (
+    delta.nodes.length === 0 &&
+    delta.removedNodeIds.length === 0 &&
+    delta.groups.length === 0 &&
+    delta.removedGroupIds.length === 0 &&
+    delta.edges.length === 0 &&
+    delta.removedEdgeIds.length === 0 &&
+    delta.annotations.length === 0 &&
+    delta.removedAnnotationIds.length === 0
+  )
+}
+
+async function doSave(scene: SceneData): Promise<void> {
+  // 先快照基线引用：模块级变量在 await 间可能被清空，diff 只认本次读到的基线。
+  const baseline = saveBaseline
+  const full = !baseline || saveSequence % FULL_SAVE_INTERVAL === 0
+  try {
+    if (full) {
+      // 全量：整场景序列化走 Worker；Rust 侧按指纹只写变化行。
+      const json = await stringifyScene(scene).catch(() => JSON.stringify(scene))
+      await invoke<void>('scene_save', { scene: json })
+    } else {
+      const delta = diffScene(scene, baseline)
+      if (deltaIsEmpty(delta)) return
+      // 增量通常是个位数对象：直接主线程 stringify，不值得付 Worker 往返。
+      await invoke<void>('scene_save_delta', { delta: JSON.stringify(delta) })
+    }
+  } catch (error) {
+    // 失败清基线：下一次强制全量对账，防基线与库内状态错位。
+    saveBaseline = null
+    throw error
+  }
+  saveBaseline = toBaseline(scene)
+  saveSequence += 1
+}
+
+function saveScene(scene: SceneData): Promise<void> {
+  saveChain = saveChain.then(
+    () => doSave(scene),
+    () => doSave(scene),
+  )
+  return saveChain
+}
+
 export const desktopApi = {
   loadScene: () => invoke<SceneData>('scene_load'),
-  // Rust 侧接收 JSON 字符串并在运行时线程解析（异步命令），主线程不参与序列化。
-  saveScene: (scene: SceneData) =>
-    stringifyScene(scene)
-      .catch(() => JSON.stringify(scene))
-      .then((json) => invoke<void>('scene_save', { scene: json })),
+  // 常规为增量保存（只传变化行）；全量与失败恢复见上方增量协议说明。
+  saveScene,
   /** 批量导入绝对路径；去重与失败明细由 Rust 侧统一处理。 */
   importPaths: (paths: string[], x: number, y: number) =>
     invoke<ImportResult>('import_paths', { request: { paths, x, y } }),

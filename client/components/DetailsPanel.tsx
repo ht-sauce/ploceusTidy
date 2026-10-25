@@ -3,7 +3,9 @@
  * 标注编辑复用同一块面板；面板由用户主动打开，不随选择自动出现。
  */
 import { useState } from 'react'
-import { App as AntApp, Button, Input } from 'antd'
+import AntApp from 'antd/es/app'
+import Button from 'antd/es/button'
+import Input from 'antd/es/input'
 import { CloseOutlined, LinkOutlined } from '@ant-design/icons'
 import type { SceneAnnotation, SceneNode } from '@/types/scene'
 import SystemIcon from './SystemIcon'

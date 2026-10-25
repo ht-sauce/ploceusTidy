@@ -1,7 +1,8 @@
 /**
  * 底部状态栏：保存状态、对象数量、选中数量与画布操作按钮。
  */
-import { Button, Tooltip } from 'antd'
+import Button from 'antd/es/button'
+import Tooltip from 'antd/es/tooltip'
 import {
   ApartmentOutlined,
   AppstoreAddOutlined,

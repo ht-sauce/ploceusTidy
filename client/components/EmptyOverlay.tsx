@@ -1,7 +1,7 @@
 /**
  * 空画布引导：首次使用或清空场景后，提示可用的导入方式。
  */
-import { Button } from 'antd'
+import Button from 'antd/es/button'
 
 interface EmptyOverlayProps {
   onDismiss: () => void

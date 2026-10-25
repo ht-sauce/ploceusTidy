@@ -15,13 +15,20 @@ use tauri_plugin_opener::OpenerExt;
 
 use db::AppState;
 use models::{
-    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneNode, WorkspaceInfo,
+    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneDelta, SceneNode,
+    WorkspaceInfo,
 };
 
 /// 返回工作空间路径、数据库路径与节点数量，供设置面板展示。
+/// 异步命令：占用统计要递归扫描整个工作空间目录，属磁盘 IO，不能占主线程。
 #[tauri::command]
-fn workspace_get(state: State<'_, AppState>) -> Result<WorkspaceInfo, String> {
-    db::workspace_info(&state)
+async fn workspace_get(app: AppHandle) -> Result<WorkspaceInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::workspace_info(&state)
+    })
+    .await
+    .map_err(|error| format!("读取工作空间信息任务失败：{error}"))?
 }
 
 /// 读取完整场景；首屏一次性加载，缩略图等重数据后续按需补充。
@@ -48,6 +55,21 @@ async fn scene_save(app: AppHandle, scene: String) -> Result<(), String> {
     })
     .await
     .map_err(|error| format!("保存场景任务失败：{error}"))?
+}
+
+/// 增量保存：前端按对象引用对比上次成功保存的基线自动求差，只传变化与显式删除的行；
+/// 传输量正比于变更量，10 万画布的常规保存不再序列化整场景。
+/// 每 20 次与失败后的首存由前端强制走全量 `scene_save` 对账，防增量链路缺陷漂移。
+#[tauri::command]
+async fn scene_save_delta(app: AppHandle, delta: String) -> Result<(), String> {
+    let parsed: SceneDelta =
+        serde_json::from_str(&delta).map_err(|error| format!("解析增量失败：{error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::scene_save_delta(&state, &parsed)
+    })
+    .await
+    .map_err(|error| format!("保存增量任务失败：{error}"))?
 }
 
 /// 批量导入绝对路径：Rust 侧负责规范化、符号链接校验与去重，失败项带路径与原因返回。
@@ -222,15 +244,27 @@ fn workspace_open(app: AppHandle, state: State<'_, AppState>) -> Result<(), Stri
 }
 
 /// 重建工作空间：清空索引，保留截图副本；原文件永远不动。
+/// 异步命令：批量删除 + VACUUM 是磁盘重活，放阻塞线程池执行。
 #[tauri::command]
-fn workspace_rebuild(state: State<'_, AppState>) -> Result<(), String> {
-    db::workspace_rebuild(&state)
+async fn workspace_rebuild(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::workspace_rebuild(&state)
+    })
+    .await
+    .map_err(|error| format!("重建工作空间任务失败：{error}"))?
 }
 
 /// 迁移工作空间到新目录；复制校验成功后切换，失败保留原目录。
+/// 异步命令：整目录复制可能是长时间磁盘 IO，不能占用主线程。
 #[tauri::command]
-fn workspace_migrate(state: State<'_, AppState>, target: String) -> Result<WorkspaceInfo, String> {
-    db::workspace_migrate(&state, Path::new(&target))
+async fn workspace_migrate(app: AppHandle, target: String) -> Result<WorkspaceInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::workspace_migrate(&state, Path::new(&target))
+    })
+    .await
+    .map_err(|error| format!("迁移工作空间任务失败：{error}"))?
 }
 
 /// 选择一个文件用于重新关联；取消时返回 `None`，不产生任何写入。
@@ -310,6 +344,7 @@ pub fn run() {
             workspace_get,
             scene_load,
             scene_save,
+            scene_save_delta,
             import_paths,
             read_clipboard_files,
             open_devtools,

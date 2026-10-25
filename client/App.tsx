@@ -3,7 +3,10 @@
  * 业务编排在工作空间容器，画布在 CanvasBoard，场景领域在 workspace/useSceneStore。
  */
 import { useCallback, useEffect, useState } from 'react'
-import { App as AntApp, ConfigProvider, theme as antdTheme } from 'antd'
+// 按需引入：只拉用到的组件模块，配合分包把 antd vendor chunk 压到最小。
+import AntApp from 'antd/es/app'
+import ConfigProvider from 'antd/es/config-provider'
+import antdTheme from 'antd/es/theme'
 import Workspace from '@/workspace/Workspace'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 import { DEFAULT_THEME, applyTheme, normalizeTheme, themeById } from '@/lib/theme'

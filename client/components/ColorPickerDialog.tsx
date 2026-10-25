@@ -2,7 +2,8 @@
  * 取色器弹窗：空间主色与连线颜色共用。
  * 颜色直接写回场景数据，用于区分多个空间与多条关系。
  */
-import { ColorPicker, Modal } from 'antd'
+import ColorPicker from 'antd/es/color-picker'
+import Modal from 'antd/es/modal'
 import { useState } from 'react'
 
 interface ColorPickerDialogProps {

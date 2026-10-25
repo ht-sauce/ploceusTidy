@@ -83,6 +83,21 @@ pub struct SceneData {
     pub annotations: Vec<SceneAnnotation>,
 }
 
+/// 场景增量：前端按对象引用对比上次成功保存的基线自动求差，
+/// 只传新增/变化的行与显式删除的 ID（删除不依赖全量快照的「快照外清理」）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneDelta {
+    pub nodes: Vec<SceneNode>,
+    pub removed_node_ids: Vec<String>,
+    pub groups: Vec<SceneGroup>,
+    pub removed_group_ids: Vec<String>,
+    pub edges: Vec<SceneEdge>,
+    pub removed_edge_ids: Vec<String>,
+    pub annotations: Vec<SceneAnnotation>,
+    pub removed_annotation_ids: Vec<String>,
+}
+
 /// 批量导入请求：`paths` 为绝对路径，`x` / `y` 为落点中心。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

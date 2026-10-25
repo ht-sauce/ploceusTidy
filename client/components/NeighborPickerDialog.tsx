@@ -1,7 +1,7 @@
 /**
  * 关联对象选择器：一个对象连了多个目标时，让用户选择要跳转到哪一个。
  */
-import { Modal } from 'antd'
+import Modal from 'antd/es/modal'
 import type { CanvasContextTarget } from '@/canvas/types'
 
 export interface NeighborOption {

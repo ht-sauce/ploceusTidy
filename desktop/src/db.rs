@@ -16,8 +16,8 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::models::{
-    ImportError, ImportRequest, ImportResult, RefStatus, SceneAnnotation, SceneData, SceneEdge,
-    SceneNode, WorkspaceInfo,
+    ImportError, ImportRequest, ImportResult, RefStatus, SceneAnnotation, SceneData, SceneDelta,
+    SceneEdge, SceneNode, WorkspaceInfo,
 };
 use crate::platform::{
     clean_path, file_icon_and_kind, normalize_path_key, now_ms, subtitle_for_path,
@@ -545,10 +545,182 @@ fn read_ref_fingerprints(
     Ok(map)
 }
 
+/// 引用行是否与节点派生字段一致（字段与 `upsert_ref_for_node` 同源）。
+fn ref_matches(fingerprint: &RefFingerprint, node: &SceneNode) -> bool {
+    let kind = ref_kind(node);
+    let path = node.path.clone();
+    let url = node.url.clone();
+    let dedupe_key = path
+        .as_ref()
+        .filter(|_| kind == "file" || kind == "folder")
+        .map(|value| normalize_path_key(Path::new(value)));
+    let ext = ext_of(path.as_ref());
+    let search_text = format!(
+        "{} {} {}",
+        node.name,
+        path.clone().unwrap_or_default(),
+        node.subtitle
+    );
+    fingerprint.0 == kind
+        && fingerprint.1.as_deref() == dedupe_key.as_deref()
+        && fingerprint.2.as_deref() == path.as_deref()
+        && fingerprint.3.as_deref() == url.as_deref()
+        && fingerprint.4 == node.name
+        && fingerprint.5.as_deref() == ext.as_deref()
+        && fingerprint.6 == search_text
+}
+
 fn ext_of(path: Option<&String>) -> Option<String> {
     path.and_then(|value| Path::new(value).extension())
         .and_then(|value| value.to_str())
         .map(|value| value.to_lowercase())
+}
+
+// ---------- 保存语句（全量快照与增量共用，避免两处 SQL 漂移） ----------
+// refs 的 size / mtime / is_exists / thumb_key 由导入与校验维护：UPDATE 永不覆盖这些列。
+
+const REF_UPSERT_SQL: &str = r#"
+    INSERT INTO refs
+        (id, kind, dedupe_key, path, url, name, ext, size, mtime,
+         is_exists, thumb_key, search_text, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, 1, NULL, ?8, ?9, ?9)
+    ON CONFLICT(id) DO UPDATE SET
+        kind = excluded.kind,
+        dedupe_key = excluded.dedupe_key,
+        path = excluded.path,
+        url = excluded.url,
+        name = excluded.name,
+        ext = excluded.ext,
+        search_text = excluded.search_text,
+        updated_at = excluded.updated_at
+"#;
+
+const NODE_UPSERT_SQL: &str = r#"
+    INSERT INTO nodes
+        (id, type, icon, name, subtitle, body, ref_id, group_id,
+         z, parent_node_id, data_json, x, y, w, h, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
+    ON CONFLICT(id) DO UPDATE SET
+        type = excluded.type,
+        icon = excluded.icon,
+        name = excluded.name,
+        subtitle = excluded.subtitle,
+        body = excluded.body,
+        ref_id = excluded.ref_id,
+        group_id = excluded.group_id,
+        z = excluded.z,
+        parent_node_id = excluded.parent_node_id,
+        data_json = excluded.data_json,
+        x = excluded.x,
+        y = excluded.y,
+        w = excluded.w,
+        h = excluded.h,
+        updated_at = excluded.updated_at
+"#;
+
+const GROUP_UPSERT_SQL: &str = r#"
+    INSERT INTO groups (id, title, color, x, y, w, h, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+    ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        color = excluded.color,
+        x = excluded.x,
+        y = excluded.y,
+        w = excluded.w,
+        h = excluded.h,
+        updated_at = excluded.updated_at
+"#;
+
+const EDGE_UPSERT_SQL: &str = r#"
+    INSERT INTO edges
+        (id, from_node, to_node, from_handle, to_handle, label, style_json, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    ON CONFLICT(id) DO UPDATE SET
+        from_node = excluded.from_node,
+        to_node = excluded.to_node,
+        from_handle = excluded.from_handle,
+        to_handle = excluded.to_handle,
+        label = excluded.label,
+        style_json = excluded.style_json
+"#;
+
+const ANNOTATION_UPSERT_SQL: &str = r#"
+    INSERT INTO annotations (id, color, text, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?4)
+    ON CONFLICT(id) DO UPDATE SET
+        color = excluded.color,
+        text = excluded.text,
+        updated_at = excluded.updated_at
+"#;
+
+const TARGET_CLEAR_SQL: &str = "DELETE FROM annotation_targets WHERE annotation_id = ?1";
+const TARGET_ADD_SQL: &str =
+    "INSERT OR IGNORE INTO annotation_targets (annotation_id, node_id) VALUES (?1, ?2)";
+
+/// 按节点的引用信息写 refs 行；无 path/url 的纯画布对象（文字）不产生引用。
+fn upsert_ref_for_node(
+    statement: &mut rusqlite::Statement<'_>,
+    node: &SceneNode,
+    timestamp: i64,
+) -> rusqlite::Result<()> {
+    let kind = ref_kind(node);
+    let path = node.path.clone();
+    let url = node.url.clone();
+    let dedupe_key = path
+        .as_ref()
+        .filter(|_| kind == "file" || kind == "folder")
+        .map(|value| normalize_path_key(Path::new(value)));
+    let ext = ext_of(path.as_ref());
+    let search_text = format!(
+        "{} {} {}",
+        node.name,
+        path.clone().unwrap_or_default(),
+        node.subtitle
+    );
+    statement.execute(params![
+        &node.id,
+        kind,
+        &dedupe_key,
+        &path,
+        &url,
+        &node.name,
+        &ext,
+        &search_text,
+        timestamp
+    ])?;
+    Ok(())
+}
+
+/// 按节点写 nodes 行；`ref_id` 与 refs 的存在性保持一致（有 path/url 才指向引用）。
+fn upsert_node_row(
+    statement: &mut rusqlite::Statement<'_>,
+    node: &SceneNode,
+    timestamp: i64,
+) -> rusqlite::Result<()> {
+    let ref_id = if node.path.is_some() || node.url.is_some() {
+        Some(node.id.clone())
+    } else {
+        None
+    };
+    statement.execute(params![
+        &node.id,
+        &node.kind,
+        &node.icon,
+        &node.name,
+        &node.subtitle,
+        &node.body,
+        &ref_id,
+        &node.group_id,
+        node.z,
+        &node.parent_node_id,
+        &node.data_json,
+        node.x,
+        node.y,
+        node.w,
+        node.h,
+        timestamp
+    ])?;
+    Ok(())
 }
 
 /// 增量保存完整场景：按 ID upsert，事务内只清理本次快照里已不存在的对象。
@@ -580,49 +752,10 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
 
     {
         let mut upsert_ref = transaction
-            .prepare(
-                r#"
-                INSERT INTO refs
-                    (id, kind, dedupe_key, path, url, name, ext, size, mtime,
-                     is_exists, thumb_key, search_text, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, NULL, 1, NULL, ?8, ?9, ?9)
-                ON CONFLICT(id) DO UPDATE SET
-                    kind = excluded.kind,
-                    dedupe_key = excluded.dedupe_key,
-                    path = excluded.path,
-                    url = excluded.url,
-                    name = excluded.name,
-                    ext = excluded.ext,
-                    search_text = excluded.search_text,
-                    updated_at = excluded.updated_at
-                "#,
-            )
+            .prepare(REF_UPSERT_SQL)
             .map_err(|error| format!("准备保存引用失败：{error}"))?;
         let mut upsert_node = transaction
-            .prepare(
-                r#"
-                INSERT INTO nodes
-                    (id, type, icon, name, subtitle, body, ref_id, group_id,
-                     z, parent_node_id, data_json, x, y, w, h, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
-                ON CONFLICT(id) DO UPDATE SET
-                    type = excluded.type,
-                    icon = excluded.icon,
-                    name = excluded.name,
-                    subtitle = excluded.subtitle,
-                    body = excluded.body,
-                    ref_id = excluded.ref_id,
-                    group_id = excluded.group_id,
-                    z = excluded.z,
-                    parent_node_id = excluded.parent_node_id,
-                    data_json = excluded.data_json,
-                    x = excluded.x,
-                    y = excluded.y,
-                    w = excluded.w,
-                    h = excluded.h,
-                    updated_at = excluded.updated_at
-                "#,
-            )
+            .prepare(NODE_UPSERT_SQL)
             .map_err(|error| format!("准备保存节点失败：{error}"))?;
         let mut keep_node = transaction
             .prepare("INSERT OR IGNORE INTO keep_nodes (id) VALUES (?1)")
@@ -637,76 +770,25 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
             .map_err(|error| format!("读取现有引用失败：{error}"))?;
 
         for node in &scene.nodes {
-            let has_ref = node.path.is_some() || node.url.is_some();
-            let ref_id = if has_ref { Some(node.id.clone()) } else { None };
             let unchanged = existing_nodes
                 .get(&node.id)
                 .is_some_and(|fingerprint| node_matches(fingerprint, node));
 
             if !unchanged {
-                upsert_node
-                    .execute(params![
-                        &node.id,
-                        &node.kind,
-                        &node.icon,
-                        &node.name,
-                        &node.subtitle,
-                        &node.body,
-                        &ref_id,
-                        &node.group_id,
-                        node.z,
-                        &node.parent_node_id,
-                        &node.data_json,
-                        node.x,
-                        node.y,
-                        node.w,
-                        node.h,
-                        timestamp
-                    ])
+                upsert_node_row(&mut upsert_node, node, timestamp)
                     .map_err(|error| format!("保存节点失败：{error}"))?;
             }
             keep_node
                 .execute(params![&node.id])
                 .map_err(|error| format!("记录节点失败：{error}"))?;
 
-            if let Some(ref id) = ref_id {
-                let kind = ref_kind(node);
-                let path = node.path.clone();
-                let url = node.url.clone();
-                let dedupe_key = path
-                    .as_ref()
-                    .filter(|_| kind == "file" || kind == "folder")
-                    .map(|value| normalize_path_key(Path::new(value)));
-                let ext = ext_of(path.as_ref());
-                let search_text = format!(
-                    "{} {} {}",
-                    node.name,
-                    path.clone().unwrap_or_default(),
-                    node.subtitle
-                );
+            if node.path.is_some() || node.url.is_some() {
                 // 引用字段与节点同源：节点没变时引用通常也没变，缺失才补写。
-                let ref_same = existing_refs.get(id).is_some_and(|fingerprint| {
-                    fingerprint.0 == kind
-                        && fingerprint.1.as_deref() == dedupe_key.as_deref()
-                        && fingerprint.2.as_deref() == path.as_deref()
-                        && fingerprint.3.as_deref() == url.as_deref()
-                        && fingerprint.4 == node.name
-                        && fingerprint.5.as_deref() == ext.as_deref()
-                        && fingerprint.6 == search_text
-                });
+                let ref_same = existing_refs
+                    .get(&node.id)
+                    .is_some_and(|fingerprint| ref_matches(fingerprint, node));
                 if !ref_same {
-                    upsert_ref
-                        .execute(params![
-                            &id,
-                            kind,
-                            &dedupe_key,
-                            &path,
-                            &url,
-                            &node.name,
-                            &ext,
-                            &search_text,
-                            timestamp
-                        ])
+                    upsert_ref_for_node(&mut upsert_ref, node, timestamp)
                         .map_err(|error| format!("保存引用失败：{error}"))?;
                 }
             }
@@ -715,20 +797,7 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
 
     {
         let mut upsert_group = transaction
-            .prepare(
-                r#"
-                INSERT INTO groups (id, title, color, x, y, w, h, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-                ON CONFLICT(id) DO UPDATE SET
-                    title = excluded.title,
-                    color = excluded.color,
-                    x = excluded.x,
-                    y = excluded.y,
-                    w = excluded.w,
-                    h = excluded.h,
-                    updated_at = excluded.updated_at
-                "#,
-            )
+            .prepare(GROUP_UPSERT_SQL)
             .map_err(|error| format!("准备保存分组失败：{error}"))?;
         let mut keep_group = transaction
             .prepare("INSERT OR IGNORE INTO keep_groups (id) VALUES (?1)")
@@ -755,20 +824,7 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
 
     {
         let mut upsert_edge = transaction
-            .prepare(
-                r#"
-                INSERT INTO edges
-                    (id, from_node, to_node, from_handle, to_handle, label, style_json, created_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                ON CONFLICT(id) DO UPDATE SET
-                    from_node = excluded.from_node,
-                    to_node = excluded.to_node,
-                    from_handle = excluded.from_handle,
-                    to_handle = excluded.to_handle,
-                    label = excluded.label,
-                    style_json = excluded.style_json
-                "#,
-            )
+            .prepare(EDGE_UPSERT_SQL)
             .map_err(|error| format!("准备保存连线失败：{error}"))?;
         let mut keep_edge = transaction
             .prepare("INSERT OR IGNORE INTO keep_edges (id) VALUES (?1)")
@@ -795,27 +851,16 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
 
     {
         let mut upsert_annotation = transaction
-            .prepare(
-                r#"
-                INSERT INTO annotations (id, color, text, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?4)
-                ON CONFLICT(id) DO UPDATE SET
-                    color = excluded.color,
-                    text = excluded.text,
-                    updated_at = excluded.updated_at
-                "#,
-            )
+            .prepare(ANNOTATION_UPSERT_SQL)
             .map_err(|error| format!("准备保存标注失败：{error}"))?;
         let mut keep_annotation = transaction
             .prepare("INSERT OR IGNORE INTO keep_annotations (id) VALUES (?1)")
             .map_err(|error| format!("准备保存标注清单失败：{error}"))?;
         let mut clear_targets = transaction
-            .prepare("DELETE FROM annotation_targets WHERE annotation_id = ?1")
+            .prepare(TARGET_CLEAR_SQL)
             .map_err(|error| format!("准备清理标注目标失败：{error}"))?;
         let mut add_target = transaction
-            .prepare(
-                "INSERT OR IGNORE INTO annotation_targets (annotation_id, node_id) VALUES (?1, ?2)",
-            )
+            .prepare(TARGET_ADD_SQL)
             .map_err(|error| format!("准备保存标注目标失败：{error}"))?;
 
         for annotation in &scene.annotations {
@@ -866,6 +911,162 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
     transaction
         .commit()
         .map_err(|error| format!("提交场景失败：{error}"))?;
+    Ok(())
+}
+
+/// 增量保存：只 upsert 传入的行、按 ID 删除显式移除的行。
+/// 与全量快照的「快照外清理」互补——删除靠前端显式 ID 列表；收尾对 refs 与
+/// 悬空边/标注目标做一次兜底清理（仅在真有删除时执行），防前端遗漏造成数据漂移。
+pub fn scene_save_delta(state: &AppState, delta: &SceneDelta) -> Result<(), String> {
+    let mut connection = state.db.lock().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开启事务失败：{error}"))?;
+    let timestamp = now_ms();
+
+    {
+        let mut upsert_ref = transaction
+            .prepare(REF_UPSERT_SQL)
+            .map_err(|error| format!("准备保存引用失败：{error}"))?;
+        let mut upsert_node = transaction
+            .prepare(NODE_UPSERT_SQL)
+            .map_err(|error| format!("准备保存节点失败：{error}"))?;
+        let mut delete_node = transaction
+            .prepare("DELETE FROM nodes WHERE id = ?1")
+            .map_err(|error| format!("准备删除节点失败：{error}"))?;
+
+        for node in &delta.nodes {
+            if node.path.is_some() || node.url.is_some() {
+                upsert_ref_for_node(&mut upsert_ref, node, timestamp)
+                    .map_err(|error| format!("保存引用失败：{error}"))?;
+            }
+            upsert_node_row(&mut upsert_node, node, timestamp)
+                .map_err(|error| format!("保存节点失败：{error}"))?;
+        }
+        for id in &delta.removed_node_ids {
+            delete_node
+                .execute(params![id])
+                .map_err(|error| format!("删除节点失败：{error}"))?;
+        }
+    }
+
+    {
+        let mut upsert_group = transaction
+            .prepare(GROUP_UPSERT_SQL)
+            .map_err(|error| format!("准备保存分组失败：{error}"))?;
+        let mut delete_group = transaction
+            .prepare("DELETE FROM groups WHERE id = ?1")
+            .map_err(|error| format!("准备删除分组失败：{error}"))?;
+
+        for group in &delta.groups {
+            upsert_group
+                .execute(params![
+                    &group.id,
+                    &group.title,
+                    &group.color,
+                    group.x,
+                    group.y,
+                    group.w,
+                    group.h,
+                    timestamp
+                ])
+                .map_err(|error| format!("保存分组失败：{error}"))?;
+        }
+        for id in &delta.removed_group_ids {
+            delete_group
+                .execute(params![id])
+                .map_err(|error| format!("删除分组失败：{error}"))?;
+        }
+    }
+
+    {
+        let mut upsert_edge = transaction
+            .prepare(EDGE_UPSERT_SQL)
+            .map_err(|error| format!("准备保存连线失败：{error}"))?;
+        let mut delete_edge = transaction
+            .prepare("DELETE FROM edges WHERE id = ?1")
+            .map_err(|error| format!("准备删除连线失败：{error}"))?;
+
+        for edge in &delta.edges {
+            upsert_edge
+                .execute(params![
+                    &edge.id,
+                    &edge.from,
+                    &edge.to,
+                    &edge.from_handle,
+                    &edge.to_handle,
+                    &edge.label,
+                    &edge.style_json,
+                    timestamp
+                ])
+                .map_err(|error| format!("保存连线失败：{error}"))?;
+        }
+        for id in &delta.removed_edge_ids {
+            delete_edge
+                .execute(params![id])
+                .map_err(|error| format!("删除连线失败：{error}"))?;
+        }
+    }
+
+    {
+        let mut upsert_annotation = transaction
+            .prepare(ANNOTATION_UPSERT_SQL)
+            .map_err(|error| format!("准备保存标注失败：{error}"))?;
+        let mut clear_targets = transaction
+            .prepare(TARGET_CLEAR_SQL)
+            .map_err(|error| format!("准备清理标注目标失败：{error}"))?;
+        let mut add_target = transaction
+            .prepare(TARGET_ADD_SQL)
+            .map_err(|error| format!("准备保存标注目标失败：{error}"))?;
+        let mut delete_annotation = transaction
+            .prepare("DELETE FROM annotations WHERE id = ?1")
+            .map_err(|error| format!("准备删除标注失败：{error}"))?;
+
+        for annotation in &delta.annotations {
+            upsert_annotation
+                .execute(params![
+                    &annotation.id,
+                    &annotation.color,
+                    &annotation.text,
+                    timestamp
+                ])
+                .map_err(|error| format!("保存标注失败：{error}"))?;
+            // 目标集合可能缩小，先清空再写入本次快照的目标。
+            clear_targets
+                .execute(params![&annotation.id])
+                .map_err(|error| format!("清理标注目标失败：{error}"))?;
+            for node_id in &annotation.node_ids {
+                add_target
+                    .execute(params![&annotation.id, node_id])
+                    .map_err(|error| format!("保存标注目标失败：{error}"))?;
+            }
+        }
+        for id in &delta.removed_annotation_ids {
+            delete_annotation
+                .execute(params![id])
+                .map_err(|error| format!("删除标注失败：{error}"))?;
+        }
+    }
+
+    // 兜底清理只在真有删除时执行（全表扫描有成本）：删除的节点会带出悬空 refs、
+    // 边与标注目标；前端删除逻辑已同步处理，这里防遗漏漂移。
+    if !delta.removed_node_ids.is_empty() {
+        transaction
+            .execute_batch(
+                r#"
+                DELETE FROM refs WHERE id NOT IN (SELECT ref_id FROM nodes WHERE ref_id IS NOT NULL);
+                DELETE FROM edges
+                WHERE from_node NOT IN (SELECT id FROM nodes)
+                   OR to_node NOT IN (SELECT id FROM nodes);
+                DELETE FROM annotation_targets WHERE node_id NOT IN (SELECT id FROM nodes);
+                "#,
+            )
+            .map_err(|error| format!("增量清理失败：{error}"))?;
+    }
+
+    transaction
+        .commit()
+        .map_err(|error| format!("提交增量失败：{error}"))?;
     Ok(())
 }
 

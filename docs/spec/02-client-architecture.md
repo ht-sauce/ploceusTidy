@@ -83,6 +83,7 @@ sequenceDiagram
 | `workspace_get` | 无 | dataWorkSpace 路径、DB 路径、节点数、占用大小 |
 | `scene_load` | 无 | 全部节点/分组/边/标注（异步命令，运行时线程查询与序列化） |
 | `scene_save` | 场景 JSON 字符串（前端 Worker 序列化） | 成功/失败；按 ID 增量 upsert，事务内清理快照外的对象（异步命令，运行时线程解析与写库） |
+| `scene_save_delta` | 场景增量 JSON 字符串（变化行 + 显式删除 ID） | 只写增量；refs/悬空边兜底清理；每 20 次与失败后首存由前端强制走全量对账（异步命令） |
 | `import_paths` | 路径数组、x/y | created / existing / errors |
 | `read_clipboard_files` | 无 | Windows CF_HDROP 文件路径数组 |
 | `save_clipboard_image` | base64、扩展名 | 本地 asset 路径 |
@@ -104,6 +105,7 @@ sequenceDiagram
 - 前端只传 `nodeId` 给打开/定位命令，路径由 Rust 查库；不暴露任意路径。
 - `scene_save` 不暴露 SQL；前端只提交结构化场景。
 - 重命令（`scene_load` / `scene_save` / `import_paths` / `ref_check` / `thumb_get`）为异步命令：查询、JSON 解析、文件 IO 与 base64 都在 `spawn_blocking` 线程池执行，主线程（UI）永不等待数据库；场景序列化在前端 Web Worker 完成（`client/lib/sceneSerialize.worker.ts`），不可用时回退主线程。
+- 保存传输是增量协议（`tauri-api.ts`）：按对象引用对比上次成功保存的基线自动求差，常规保存只序列化/传输变化与删除的行（`scene_save_delta`，量级通常是个位数对象）；每 20 次与失败后的首存强制走全量 `scene_save` 对账。
 - 缩略图已实现（`thumb_get`）；图片与视频一律用系统默认程序打开，无内置预览对话框与视频封面（`preview_ref` 已移除），也不新增自定义协议；搜索索引在 5 万引用后再评估。
 
 ## 7. 源码分层（已建）

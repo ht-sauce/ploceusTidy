@@ -3,7 +3,10 @@
  * 所有开关写入 `app_meta`；迁移与重建都带二次确认，失败保留旧状态。
  */
 import { useEffect, useState } from 'react'
-import { App as AntApp, Button, Modal, Switch } from 'antd'
+import AntApp from 'antd/es/app'
+import Button from 'antd/es/button'
+import Modal from 'antd/es/modal'
+import Switch from 'antd/es/switch'
 import { FolderOpenOutlined } from '@ant-design/icons'
 import type { ThemeId, WorkspaceInfo } from '@/types/scene'
 import { THEMES, normalizeTheme } from '@/lib/theme'
