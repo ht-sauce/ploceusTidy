@@ -20,7 +20,7 @@
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间标题与连线标签 |
 | 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制 |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
-| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`，产物自动收集到项目根 `release/`（安装往返验收已完成） |
+| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名），产物自动收集到项目根 `release/`，发布到 GitHub Releases |
 
 ## 核心能力
 
@@ -96,4 +96,4 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 代码签名；自动更新不在 v1。（1 万/10 万画布基准与 NSIS 安装往返验收已完成，数字为性能优化前测得。）
+- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收与 v0.1.0 发布已完成。）
