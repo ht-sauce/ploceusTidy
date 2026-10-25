@@ -3,6 +3,8 @@ dist/
 client/dist/
 desktop/target/
 desktop/gen/
+desktop/signing/
+desktop/tauri.windows.conf.json
 dataWorkSpace/
 release/
 .screenshots/
