@@ -571,6 +571,22 @@ button {
   font-weight: 600;
 }
 
+.details-datajson {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.details-datajson > span {
+  color: var(--faint);
+  font-size: 8.5px;
+}
+
+.details-datajson .ant-input {
+  font-size: 9.5px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
 .details-actions {
   display: flex;
   flex-direction: column;

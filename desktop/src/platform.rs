@@ -145,9 +145,81 @@ pub fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(files)
 }
 
-#[cfg(not(windows))]
+/// macOS 剪贴板文件路径：读取 `NSPasteboard` 的 `NSFilenamesPboardType`，
+/// 返回 plist 数组里的文件绝对路径。空剪贴板或无文件时返回空列表。
+#[cfg(target_os = "macos")]
 pub fn read_clipboard_files() -> Result<Vec<String>, String> {
-    Err("当前版本仅支持 Windows 剪贴板文件读取".to_string())
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::{NSArray, NSString};
+
+    let pasteboard = unsafe { NSPasteboard::generalPasteboard() };
+    let types = unsafe { pasteboard.types() };
+    let filenames_type = NSString::from_str("NSFilenamesPboardType");
+    let has_files = types
+        .map(|types| unsafe { types.containsObject(&filenames_type) })
+        .unwrap_or(false);
+    if !has_files {
+        return Ok(Vec::new());
+    }
+
+    let property_list = unsafe { pasteboard.propertyListForType(&filenames_type) };
+    let Some(array) = (unsafe { property_list.downcast_ref::<NSArray<NSString>>() }) else {
+        return Ok(Vec::new());
+    };
+    let count = unsafe { array.count() };
+    let mut files = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        if let Some(path) = unsafe { array.objectAtIndex(index) } {
+            files.push(unsafe { path.to_string() }.to_string());
+        }
+    }
+    Ok(files)
+}
+
+/// Linux 剪贴板文件路径：读取 X11 剪贴板的 `text/uri-list`（每行一个 file:// URI），
+/// 解码后转为本地绝对路径。Wayland 下走 `wl-paste`，均无结果时返回空列表。
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn read_clipboard_files() -> Result<Vec<String>, String> {
+    use std::process::Command;
+
+    let output = Command::new("wl-paste")
+        .args(["--list", "--no-newline"])
+        .output()
+        .or_else(|_| {
+            Command::new("xclip")
+                .args(["-selection", "clipboard", "-t", "text/uri-list", "-o"])
+                .output()
+        })
+        .map_err(|error| format!("读取剪贴板失败（需要 wl-clipboard 或 xclip）：{error}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("file://"))
+        .filter_map(|encoded| percent_decode(encoded))
+        .collect())
+}
+
+/// 解码 `file://` URI 里的百分号编码；非法 UTF-8 序列按原样保留。
+#[cfg(all(unix, not(target_os = "macos")))]
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 /// 用 Windows Shell 的 `IShellItemImageFactory` 生成缩略图并编码为 PNG。
@@ -257,9 +329,18 @@ pub fn shell_thumbnail(path: &str, size: u32) -> Result<Vec<u8>, String> {
     result
 }
 
-#[cfg(not(windows))]
+/// macOS 缩略图：`NSWorkspace` 图标栅格化到 PNG 涉及较多 AppKit 绑定，
+/// 尚未在目标平台验证；v1 先返回空，由前端回退系统类型图标。
+#[cfg(target_os = "macos")]
 pub fn shell_thumbnail(_path: &str, _size: u32) -> Result<Vec<u8>, String> {
-    Err("当前版本仅支持 Windows Shell 缩略图".to_string())
+    Err("macOS 暂不生成缩略图，回退类型图标".to_string())
+}
+
+/// Linux 缩略图：调用 `gio`/`xdg-mime`/`ffmpeg` 都不稳定，v1 统一返回空，
+/// 由前端回退系统类型图标（与 `useVisibleThumbnails` 的既有降级一致）。
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn shell_thumbnail(_path: &str, _size: u32) -> Result<Vec<u8>, String> {
+    Err("Linux 暂不生成缩略图，回退类型图标".to_string())
 }
 
 /// 桌面常驻：把窗口压到普通窗口之下，取消时恢复普通层级。

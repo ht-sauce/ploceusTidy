@@ -5,7 +5,7 @@
 import { Arrow, Group, Label, Tag, Text } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { CanvasTokens } from './constants'
-import { edgeColorOf, edgePoints } from './geometry'
+import { asHandleSide, edgeColorOf, edgePoints } from './geometry'
 import type { SceneEdge } from '@/types/scene'
 
 interface Box {
@@ -42,7 +42,12 @@ export default function EdgeLayer({
         const from = boxOf(edge.from)
         const to = boxOf(edge.to)
         if (!from || !to) return null
-        const points = edgePoints(from, to)
+        const points = edgePoints(
+          from,
+          to,
+          asHandleSide(edge.fromHandle),
+          asHandleSide(edge.toHandle),
+        )
         const midX = (points[0] + points[6]) / 2
         const midY = (points[1] + points[7]) / 2
         const active = edge.id === selectedEdgeId

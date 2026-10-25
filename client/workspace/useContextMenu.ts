@@ -97,6 +97,8 @@ export function useContextMenu({
       else if (key === 'edit-text' && node) editText(node.id)
       else if (key === 'annotate' && node) addAnnotation([node.id])
       else if (key === 'details' && node) openDetails(node.id)
+      else if (key === 'layer-top' && node) store.raiseNode(node.id, 'top')
+      else if (key === 'layer-bottom' && node) store.raiseNode(node.id, 'bottom')
       else if (key === 'locate-neighbor' && node) locateNeighbor(node.id)
       else if (key === 'locate-neighbor') locateNeighbor(target.id)
       else if (key === 'edge-label') editEdgeLabel(target.id)
@@ -124,6 +126,7 @@ export function useContextMenu({
       pickGroupColor,
       renameGroup,
       reveal,
+      store,
     ],
   )
 
@@ -155,6 +158,8 @@ export function useContextMenu({
       if (hasNeighbor) items.push({ key: 'locate-neighbor', label: '跳转到关联对象' })
       items.push({ key: 'annotate', label: '添加标注' })
       items.push({ key: 'details', label: '属性' })
+      items.push({ key: 'layer-top', label: '置于顶层' })
+      items.push({ key: 'layer-bottom', label: '置于底层' })
       items.push({ key: 'divider-1', label: '', divider: true })
       if (node.kind !== 'text' && node.kind !== 'link') {
         items.push({ key: 'system-menu', label: '系统右键菜单…' })

@@ -505,6 +505,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
               store.removeAnnotation()
               message.success('标注已删除')
             }}
+            onSaveDataJson={(id, dataJson) => {
+              store.updateNodeDataJson(id, dataJson)
+              return true
+            }}
           />
         ) : null}
 

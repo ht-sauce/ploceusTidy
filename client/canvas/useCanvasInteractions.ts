@@ -12,7 +12,7 @@ import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import type { Rect } from '@/domain/layout'
 import type { HandleSide } from './constants'
-import { edgePoints } from './geometry'
+import { asHandleSide, edgePoints } from './geometry'
 import { constrainDrag, LAYOUT_GAP, SNAP_THRESHOLD, type SnapGuides } from '@/domain/layout'
 
 type Box = { x: number; y: number; w: number; h: number }
@@ -369,7 +369,10 @@ export function useCanvasInteractions({
         const from = boxOf(edge.from)
         const to = boxOf(edge.to)
         if (!from || !to) return
-        shape.setAttr('points', edgePoints(from, to))
+        shape.setAttr(
+          'points',
+          edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle)),
+        )
       })
     }
   }
