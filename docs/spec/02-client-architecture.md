@@ -129,7 +129,8 @@ ploceusTidy/
 │   ├── vite-env.d.ts
 │   ├── lib/tauri-api.ts         # invoke 封装、isTauri
 │   ├── lib/theme.ts             # 四套主题语义令牌
-│   ├── lib/search.ts            # 搜索归一化、拼音首字母与排序
+│   ├── lib/sceneSerialize.worker.ts # 场景 JSON 序列化 Worker（保存出主线程）
+│   ├── domain/                  # 领域纯函数：layout（碰撞/吸附/整理/贴合）+ search（归一化/拼音/排序）
 │   ├── types/scene.ts
 │   ├── workspace/               # 编排层：场景命令、持久化、导入、动作、快捷键、菜单
 │   │   ├── Workspace.tsx
@@ -152,7 +153,6 @@ ploceusTidy/
 │   │   ├── EdgeLayer.tsx
 │   │   ├── Minimap.tsx
 │   │   ├── CanvasTextEditor.tsx
-│   │   ├── layout.ts            # 矩形碰撞、吸附、空位与空间自动整理
 │   │   ├── geometry.ts
 │   │   ├── icons.tsx
 │   │   ├── constants.ts
@@ -210,6 +210,7 @@ ploceusTidy/
 ## 9. 性能预算
 
 - 1 万引用：冷启动加载 ≤ 1s；搜索 ≤ 100ms；平移缩放 ≥ 50fps。
-- 10 万引用：冷启动加载 ≤ 3s；搜索 ≤ 300ms（后续 FTS5/内存索引）；同屏绘制 ≤ 2k 对象。
+- 10 万引用：冷启动加载 ≤ 3s；搜索 ≤ 300ms（后续 FTS5/内存索引）；同屏绘制 ≤ 2k 对象；选中拖动超过 2000 个降级为包围盒 ghost（见 ADR-021）。
+- 主线程不等磁盘与大 JSON：保存序列化在 Web Worker，重命令（加载/保存/导入/校验/缩略图/工作空间占用/迁移/重建）在阻塞线程池执行（见 ADR-022）。
 - 缩略图：仅可见节点；单次并发 ≤ 4；失败不阻塞。
 - 渲染：窗口不可见时停止 RAF；无交互动画时不重绘。
