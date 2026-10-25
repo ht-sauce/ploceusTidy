@@ -393,14 +393,14 @@ unsafe fn show_system_context_menu_blocking(
     use std::mem::size_of;
     use windows::core::{HSTRING, PCSTR};
     use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
     use windows::Win32::System::Com::{
         CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Shell::{
-        IContextMenu, IShellFolder, SHBindToParent, SHParseDisplayName, CMINVOKECOMMANDINFO,
-        CMINVOKECOMMANDINFOEX, CMF_EXTENDEDVERBS, CMF_NORMAL,
+        IContextMenu, IShellFolder, SHBindToParent, SHParseDisplayName, CMF_EXTENDEDVERBS,
+        CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX,
     };
-    use windows::Win32::Graphics::Gdi::ClientToScreen;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreatePopupMenu, DestroyMenu, PostMessageW, SetForegroundWindow, TrackPopupMenuEx,
         TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN, WM_NULL,
@@ -436,13 +436,7 @@ unsafe fn show_system_context_menu_blocking(
         };
         let hmenu = CreatePopupMenu().map_err(|error| format!("创建菜单失败：{error}"))?;
 
-        let query = menu.QueryContextMenu(
-            hmenu,
-            0,
-            1,
-            0x7FFF,
-            CMF_NORMAL | CMF_EXTENDEDVERBS,
-        );
+        let query = menu.QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXTENDEDVERBS);
         if query.is_err() {
             let _ = DestroyMenu(hmenu);
             cleanup(pidl);
@@ -465,7 +459,12 @@ unsafe fn show_system_context_menu_blocking(
         )
         .0;
         // 菜单关闭后补一条空消息，避免窗口停留在菜单模式。
-        let _ = PostMessageW(Some(window), WM_NULL, Default::default(), Default::default());
+        let _ = PostMessageW(
+            Some(window),
+            WM_NULL,
+            Default::default(),
+            Default::default(),
+        );
 
         if command != 0 {
             // 菜单命令 ID 从 1 开始，转换回 Shell 约定的 0 起偏移。
@@ -502,11 +501,6 @@ unsafe fn show_system_context_menu_blocking(
 }
 
 #[cfg(not(windows))]
-pub fn show_system_context_menu(
-    _hwnd: isize,
-    _path: &str,
-    _x: i32,
-    _y: i32,
-) -> Result<(), String> {
+pub fn show_system_context_menu(_hwnd: isize, _path: &str, _x: i32, _y: i32) -> Result<(), String> {
     Err("当前版本仅支持 Windows 系统右键菜单".to_string())
 }

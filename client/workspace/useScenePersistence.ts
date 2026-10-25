@@ -68,7 +68,8 @@ export function useScenePersistence({
     return () => window.clearTimeout(timer)
   }, [annotations, edges, groups, hydrated, message, nodes])
 
-  // 启动后空闲分批校验引用：每批 400 个，批间让出主线程。
+  // 启动后空闲分批校验引用：每批 400 个，批间让出主线程并等待空闲帧——
+  // 校验是写操作（每批一个事务），不能与拖动/平移等视图操作同时进行。
   useEffect(() => {
     if (!isDesktopClient || !hydrated) return
     let cancelled = false
@@ -77,8 +78,23 @@ export function useScenePersistence({
       .map((node) => node.id)
     if (pathIds.length === 0) return
 
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
+    }
+    const waitForIdle = () =>
+      new Promise<void>((resolve) => {
+        if (typeof idleWindow.requestIdleCallback === 'function') {
+          idleWindow.requestIdleCallback(() => resolve(), { timeout: 800 })
+        } else {
+          window.setTimeout(resolve, 120)
+        }
+      })
+
     const run = async () => {
       for (let index = 0; index < pathIds.length; index += 400) {
+        if (cancelled) return
+        // 先等空闲再发起本批：用户正在操作画布时校验主动靠边。
+        await waitForIdle()
         if (cancelled) return
         const batch = pathIds.slice(index, index + 400)
         try {
@@ -93,7 +109,6 @@ export function useScenePersistence({
         } catch {
           return
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 120))
       }
     }
 

@@ -255,6 +255,31 @@ export function nodeRect(node: SceneNode, hasAnnotation: boolean): Rect {
   return { x: node.x, y: node.y, w: node.w, h: nodeDisplayHeight(node, hasAnnotation) }
 }
 
+/**
+ * 空间随成员自动扩缩：按成员展示矩形的包围盒 + 既定留白反推空间框，
+ * 与 `arrangeGroupMembers` 使用同一套尺度（顶部标题区 + 四周内边距）。
+ * 成员变化（拖入/拖出/删除/标注改变高度）后调用；空空间返回 null，保持现状作为可拖入的容器。
+ */
+export function fitGroupToMembers(
+  members: SceneNode[],
+  hasAnnotation: (node: SceneNode) => boolean = () => false,
+): Rect | null {
+  if (members.length === 0) return null
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  members.forEach((node) => {
+    minX = Math.min(minX, node.x)
+    minY = Math.min(minY, node.y)
+    maxX = Math.max(maxX, node.x + node.w)
+    maxY = Math.max(maxY, node.y + nodeDisplayHeight(node, hasAnnotation(node)))
+  })
+  const x = minX - GROUP_PADDING
+  const y = minY - GROUP_HEADER
+  return { x, y, w: maxX + GROUP_PADDING - x, h: maxY + GROUP_PADDING - y }
+}
+
 export interface ArrangeResult {
   positions: { id: string; x: number; y: number }[]
   width: number

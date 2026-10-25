@@ -19,10 +19,12 @@ dataWorkSpace/
 
 ## 2. SQLite 约定
 
-- `PRAGMA journal_mode=WAL`；`foreign_keys=ON`；`busy_timeout=5000`。
-- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行；当前 `SCHEMA_VERSION = 2`（增量补列：`groups.color`）。
-- 每条命令一个事务；失败整体回滚。
-- `scene_save` 按 ID 增量 upsert，只清理本次快照之外的对象；`refs` 的 `size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验流程维护，保存流程不覆盖。
+- `PRAGMA journal_mode=WAL`；`foreign_keys=ON`；`busy_timeout=5000`；`synchronous=NORMAL`（WAL 下安全，省掉逐次 fsync）；`temp_store=MEMORY`；`cache_size=-8000`；`mmap_size=256MB`。
+- 读写分离：写连接由 `Mutex` 串行化；读（场景加载、配置、单节点、缩略图元信息）走同一文件的独立只读连接，WAL 下读走快照、不等待写事务提交。场景加载一次性拿完，不在操作过程中按需查库。
+- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行；当前 `SCHEMA_VERSION = 3`（新增 `edges(from_node)` / `edges(to_node)` / `annotation_targets(node_id)` 索引）。
+- 每条命令一个事务；失败整体回滚。视图操作（拖动/框选/平移）不触发数据库写入；写集中在操作结束后的防抖保存（350ms），启动引用校验按空闲分批执行（每批一个短事务，批间等待空闲帧）。
+- `scene_save` 按 ID 增量 upsert：先读现有 `nodes` / `refs` 的可变字段指纹，只写真正变化的行（10 万画布的常规保存从约 20 万次 upsert 降到个位数）；只清理本次快照之外的对象。`refs` 的 `size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验流程维护，保存流程不覆盖。
+- 缩略图元信息（path / is_exists / thumb_key）走进程内缓存：每个节点只在首次请求时查一次库，缓存文件命中时完全不碰数据库；重关联与引用校验后按 id 失效。
 - 不在数据库中存文件内容；只存路径、URL、文本、标注与画布坐标。
 
 ## 3. 表

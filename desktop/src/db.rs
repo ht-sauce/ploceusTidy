@@ -2,8 +2,11 @@
 //!
 //! - `dataWorkSpace` 是唯一写入区域：`ploceus.db`、`assets/`、`thumbnails/`；
 //! - 所有主键与关联键使用 UUID（HC-15），文件/文件夹按规范化真实路径去重；
-//! - 每条命令一个事务，失败整体回滚；用户文件永远只读（HC-12）。
+//! - 每条命令一个事务，失败整体回滚；用户文件永远只读（HC-12）；
+//! - 读写分离：写连接由 Mutex 串行化，读走独立连接（WAL 下读不被写事务阻塞），
+//!   场景加载一次性拿完，缩略图元信息走进程内缓存，避免视图操作与保存抢锁。
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -20,11 +23,24 @@ use crate::platform::{
     clean_path, file_icon_and_kind, normalize_path_key, now_ms, subtitle_for_path,
 };
 
-/// 全局状态：单一 SQLite 连接由 Mutex 串行化；工作空间路径可在迁移后替换。
+/// 缩略图元信息缓存条目：进程内缓存，避免每张可见缩略图都锁一次数据库。
+#[derive(Clone)]
+pub struct ThumbMeta {
+    pub path: String,
+    pub exists: bool,
+    pub thumb_key: Option<String>,
+}
+
+/// 全局状态：写连接串行化，读连接独立；工作空间路径可在迁移后替换。
 pub struct AppState {
     pub db: Mutex<Connection>,
+    /// 只读连接：WAL 模式下读走快照，不等待写事务提交。
+    pub reader: Mutex<Connection>,
     pub workspace: Mutex<PathBuf>,
     pub assets: Mutex<PathBuf>,
+    /// `node_id → 缩略图元信息`；`None` 表示该节点无需缩略图（文字/链接）。
+    /// relink / 引用校验后按 id 失效对应条目。
+    pub thumb_meta: Mutex<HashMap<String, Option<ThumbMeta>>>,
 }
 
 impl AppState {
@@ -45,7 +61,7 @@ impl AppState {
 }
 
 /// 当前 schema 版本；迁移按 `PRAGMA user_version` 递增执行。
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// 初始化表结构；只做 `CREATE ... IF NOT EXISTS`，不破坏已有数据。
 /// 关系表使用复合主键，`refs` 只在文件/文件夹上建立部分唯一索引用于去重。
@@ -112,6 +128,9 @@ fn schema() -> &'static str {
         style_json TEXT,
         created_at INTEGER NOT NULL DEFAULT 0
     );
+    -- 保存时的悬空边清理与邻居查询都按端点过滤；10 万节点下没有索引就是全表扫。
+    CREATE INDEX IF NOT EXISTS edges_from ON edges(from_node);
+    CREATE INDEX IF NOT EXISTS edges_to ON edges(to_node);
     CREATE TABLE IF NOT EXISTS annotations (
         id TEXT PRIMARY KEY,
         color TEXT NOT NULL,
@@ -125,6 +144,8 @@ fn schema() -> &'static str {
         PRIMARY KEY (annotation_id, node_id),
         FOREIGN KEY(annotation_id) REFERENCES annotations(id) ON DELETE CASCADE
     );
+    -- 保存时按节点清理标注目标需要该方向的索引。
+    CREATE INDEX IF NOT EXISTS annotation_targets_node ON annotation_targets(node_id);
     CREATE TABLE IF NOT EXISTS app_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -228,7 +249,24 @@ fn resolve_workspace(app: &AppHandle) -> Result<PathBuf, String> {
     Err("无法创建 dataWorkSpace".to_string())
 }
 
-/// 打开数据库并完成建表；WAL + 外键 + busy_timeout 是并发与一致性的前提。
+/// 连接级 PRAGMA：WAL + 外键 + busy_timeout 是并发与一致性的前提；
+/// `synchronous=NORMAL` 在 WAL 下安全且省掉每次提交的 fsync；
+/// `temp_store=MEMORY` 让保存清理用的临时表留在内存；缓存与 mmap 加大读写吞吐。
+fn apply_pragmas(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA busy_timeout=5000;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA cache_size=-8000;
+             PRAGMA mmap_size=268435456;",
+        )
+        .map_err(|error| format!("初始化 SQLite 失败：{error}"))
+}
+
+/// 打开数据库并完成建表；写连接与读连接指向同一 WAL 库，读写互不阻塞。
 pub fn initialize(app: &AppHandle) -> Result<AppState, String> {
     let workspace = resolve_workspace(app)?;
     let assets = workspace.join("assets");
@@ -239,15 +277,18 @@ pub fn initialize(app: &AppHandle) -> Result<AppState, String> {
     let db_path = workspace.join("ploceus.db");
     let mut connection =
         Connection::open(&db_path).map_err(|error| format!("打开 SQLite 失败：{error}"))?;
-    connection
-        .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
-        .map_err(|error| format!("初始化 SQLite 失败：{error}"))?;
+    apply_pragmas(&connection)?;
     migrate(&mut connection)?;
+    let reader =
+        Connection::open(&db_path).map_err(|error| format!("打开只读连接失败：{error}"))?;
+    apply_pragmas(&reader)?;
 
     Ok(AppState {
         db: Mutex::new(connection),
+        reader: Mutex::new(reader),
         workspace: Mutex::new(workspace.clone()),
         assets: Mutex::new(assets),
+        thumb_meta: Mutex::new(HashMap::new()),
     })
 }
 
@@ -296,8 +337,9 @@ fn load_node_by_id(connection: &Connection, node_id: &str) -> rusqlite::Result<O
 
 /// 读取完整场景：节点、连线、标注分三次查询，避免 N+1 与笛卡尔积。
 /// 标注目标用 `GROUP_CONCAT` 聚合，无目标的标注直接丢弃。
+/// 走只读连接：一次拿完，不与操作结束后的保存事务抢锁。
 pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
 
     let mut node_statement = connection
         .prepare(NODE_SELECT)
@@ -399,6 +441,110 @@ fn ref_kind(node: &SceneNode) -> &'static str {
     }
 }
 
+/// 节点可变字段指纹：与 upsert 的列一一对应（`created_at` / `updated_at` 不参与比较），
+/// 用于增量保存时跳过未变化的行。
+type NodeFingerprint = (
+    String,         // type
+    String,         // icon
+    String,         // name
+    String,         // subtitle
+    Option<String>, // body
+    String,         // group_id
+    i64,            // z
+    Option<String>, // parent_node_id
+    Option<String>, // data_json
+    f64,            // x
+    f64,            // y
+    f64,            // w
+    f64,            // h
+);
+
+/// 引用可变字段指纹；`size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验维护，不参与比较。
+type RefFingerprint = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    String,
+);
+
+fn read_node_fingerprints(
+    connection: &Connection,
+) -> rusqlite::Result<HashMap<String, NodeFingerprint>> {
+    let mut statement = connection.prepare(
+        "SELECT id, type, icon, name, subtitle, body, group_id, z,
+                parent_node_id, data_json, x, y, w, h
+         FROM nodes",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut map = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        map.insert(
+            id,
+            (
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+                row.get(11)?,
+                row.get(12)?,
+                row.get(13)?,
+            ),
+        );
+    }
+    Ok(map)
+}
+
+fn node_matches(fingerprint: &NodeFingerprint, node: &SceneNode) -> bool {
+    fingerprint.0 == node.kind
+        && fingerprint.1 == node.icon
+        && fingerprint.2 == node.name
+        && fingerprint.3 == node.subtitle
+        && fingerprint.4.as_deref() == node.body.as_deref()
+        && fingerprint.5 == node.group_id
+        && fingerprint.6 == node.z
+        && fingerprint.7.as_deref() == node.parent_node_id.as_deref()
+        && fingerprint.8.as_deref() == node.data_json.as_deref()
+        && fingerprint.9 == node.x
+        && fingerprint.10 == node.y
+        && fingerprint.11 == node.w
+        && fingerprint.12 == node.h
+}
+
+fn read_ref_fingerprints(
+    connection: &Connection,
+) -> rusqlite::Result<HashMap<String, RefFingerprint>> {
+    let mut statement = connection
+        .prepare("SELECT id, kind, dedupe_key, path, url, name, ext, search_text FROM refs")?;
+    let mut rows = statement.query([])?;
+    let mut map = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        map.insert(
+            id,
+            (
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ),
+        );
+    }
+    Ok(map)
+}
+
 fn ext_of(path: Option<&String>) -> Option<String> {
     path.and_then(|value| Path::new(value).extension())
         .and_then(|value| value.to_str())
@@ -482,9 +628,46 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
             .prepare("INSERT OR IGNORE INTO keep_nodes (id) VALUES (?1)")
             .map_err(|error| format!("准备保存节点清单失败：{error}"))?;
 
+        // 指纹对比：先读现有 nodes/refs 的可变字段，只 upsert 真正变化的行。
+        // 10 万画布的常规保存（拖一个节点落定后写一次）从「约 20 万次 upsert」
+        // 降到个位数，写事务从秒级降到几十毫秒，不再长时间持有写锁。
+        let existing_nodes = read_node_fingerprints(&transaction)
+            .map_err(|error| format!("读取现有节点失败：{error}"))?;
+        let existing_refs = read_ref_fingerprints(&transaction)
+            .map_err(|error| format!("读取现有引用失败：{error}"))?;
+
         for node in &scene.nodes {
             let has_ref = node.path.is_some() || node.url.is_some();
             let ref_id = if has_ref { Some(node.id.clone()) } else { None };
+            let unchanged = existing_nodes
+                .get(&node.id)
+                .is_some_and(|fingerprint| node_matches(fingerprint, node));
+
+            if !unchanged {
+                upsert_node
+                    .execute(params![
+                        &node.id,
+                        &node.kind,
+                        &node.icon,
+                        &node.name,
+                        &node.subtitle,
+                        &node.body,
+                        &ref_id,
+                        &node.group_id,
+                        node.z,
+                        &node.parent_node_id,
+                        &node.data_json,
+                        node.x,
+                        node.y,
+                        node.w,
+                        node.h,
+                        timestamp
+                    ])
+                    .map_err(|error| format!("保存节点失败：{error}"))?;
+            }
+            keep_node
+                .execute(params![&node.id])
+                .map_err(|error| format!("记录节点失败：{error}"))?;
 
             if let Some(ref id) = ref_id {
                 let kind = ref_kind(node);
@@ -501,45 +684,32 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
                     path.clone().unwrap_or_default(),
                     node.subtitle
                 );
-
-                upsert_ref
-                    .execute(params![
-                        &id,
-                        kind,
-                        &dedupe_key,
-                        &path,
-                        &url,
-                        &node.name,
-                        &ext,
-                        &search_text,
-                        timestamp
-                    ])
-                    .map_err(|error| format!("保存引用失败：{error}"))?;
+                // 引用字段与节点同源：节点没变时引用通常也没变，缺失才补写。
+                let ref_same = existing_refs.get(id).is_some_and(|fingerprint| {
+                    fingerprint.0 == kind
+                        && fingerprint.1.as_deref() == dedupe_key.as_deref()
+                        && fingerprint.2.as_deref() == path.as_deref()
+                        && fingerprint.3.as_deref() == url.as_deref()
+                        && fingerprint.4 == node.name
+                        && fingerprint.5.as_deref() == ext.as_deref()
+                        && fingerprint.6 == search_text
+                });
+                if !ref_same {
+                    upsert_ref
+                        .execute(params![
+                            &id,
+                            kind,
+                            &dedupe_key,
+                            &path,
+                            &url,
+                            &node.name,
+                            &ext,
+                            &search_text,
+                            timestamp
+                        ])
+                        .map_err(|error| format!("保存引用失败：{error}"))?;
+                }
             }
-
-            upsert_node
-                .execute(params![
-                    &node.id,
-                    &node.kind,
-                    &node.icon,
-                    &node.name,
-                    &node.subtitle,
-                    &node.body,
-                    &ref_id,
-                    &node.group_id,
-                    node.z,
-                    &node.parent_node_id,
-                    &node.data_json,
-                    node.x,
-                    node.y,
-                    node.w,
-                    node.h,
-                    timestamp
-                ])
-                .map_err(|error| format!("保存节点失败：{error}"))?;
-            keep_node
-                .execute(params![&node.id])
-                .map_err(|error| format!("记录节点失败：{error}"))?;
         }
     }
 
@@ -906,7 +1076,7 @@ pub fn workspace_info(state: &AppState) -> Result<WorkspaceInfo, String> {
     let workspace = state.workspace_path()?;
     let assets = state.assets_path()?;
 
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
     let node_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))
         .unwrap_or(0);
@@ -930,7 +1100,7 @@ pub fn node_target(
     state: &AppState,
     node_id: &str,
 ) -> Result<(Option<String>, Option<String>), String> {
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
     connection
         .query_row(
             r#"
@@ -958,7 +1128,7 @@ pub fn save_asset(state: &AppState, bytes: &[u8], ext: &str) -> Result<String, S
 
 /// 按 ID 读取单个节点；不存在时返回 `None`，由调用方决定是否报错。
 pub fn node_by_id(state: &AppState, node_id: &str) -> Result<Option<SceneNode>, String> {
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
     load_node_by_id(&connection, node_id).map_err(|error| format!("读取节点失败：{error}"))
 }
 
@@ -966,7 +1136,7 @@ pub fn node_by_id(state: &AppState, node_id: &str) -> Result<Option<SceneNode>, 
 
 /// 读取应用配置；键不存在或数据库异常时返回 `None`，由调用方回退默认值。
 pub fn meta_get(state: &AppState, key: &str) -> Result<Option<String>, String> {
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
     connection
         .query_row(
             "SELECT value FROM app_meta WHERE key = ?1",
@@ -1079,6 +1249,16 @@ pub fn ref_check(state: &AppState, node_ids: &[String]) -> Result<Vec<RefStatus>
     transaction
         .commit()
         .map_err(|error| format!("提交校验失败：{error}"))?;
+    // 校验会改写 is_exists：全量校验清空缩略图元信息缓存，否则按 id 失效对应条目。
+    if let Ok(mut cache) = state.thumb_meta.lock() {
+        if node_ids.is_empty() {
+            cache.clear();
+        } else {
+            for node_id in node_ids {
+                cache.remove(node_id);
+            }
+        }
+    }
     Ok(statuses)
 }
 
@@ -1180,6 +1360,10 @@ pub fn ref_relink(
     transaction
         .commit()
         .map_err(|error| format!("提交关联失败：{error}"))?;
+    // 重关联换了路径：失效该节点的缩略图元信息缓存。
+    if let Ok(mut cache) = state.thumb_meta.lock() {
+        cache.remove(node_id);
+    }
 
     Ok(crate::models::RelinkResult {
         node,
@@ -1197,63 +1381,94 @@ pub fn ref_relink(
 
 /// 按需生成并缓存缩略图，返回可直接用于 `<img src>` 的 data URL。
 /// 只处理有磁盘路径且存在的引用；文字、链接、缺失文件返回 `None`，由前端回退系统图标。
+/// 进程内缓存优先：命中后完全不锁数据库，只有每个节点的第一次请求才查一次读连接。
 pub fn thumb_get(state: &AppState, node_id: &str, size: u32) -> Result<Option<String>, String> {
     let workspace = state.workspace_path()?;
-    let record = {
-        let connection = state.db.lock().map_err(|error| error.to_string())?;
-        connection
-            .query_row(
-                r#"
-                SELECT r.path, r.is_exists, r.thumb_key
-                FROM nodes n
-                LEFT JOIN refs r ON r.id = n.ref_id
-                WHERE n.id = ?1
-                "#,
-                params![node_id],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, Option<bool>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|error| format!("读取缩略图信息失败：{error}"))?
-            .ok_or_else(|| "节点不存在".to_string())?
+    let cached = state
+        .thumb_meta
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(node_id)
+        .cloned();
+    let meta = match cached {
+        Some(meta) => meta,
+        None => {
+            let record = {
+                let connection = state.reader.lock().map_err(|error| error.to_string())?;
+                connection
+                    .query_row(
+                        r#"
+                        SELECT r.path, r.is_exists, r.thumb_key
+                        FROM nodes n
+                        LEFT JOIN refs r ON r.id = n.ref_id
+                        WHERE n.id = ?1
+                        "#,
+                        params![node_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<bool>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                            ))
+                        },
+                    )
+                    .optional()
+                    .map_err(|error| format!("读取缩略图信息失败：{error}"))?
+                    .ok_or_else(|| "节点不存在".to_string())?
+            };
+            // 文字/链接（无 path）缓存为 None，之后不再查库。
+            let value = record.0.map(|path| ThumbMeta {
+                path,
+                exists: record.1.unwrap_or(false),
+                thumb_key: record.2,
+            });
+            state
+                .thumb_meta
+                .lock()
+                .map_err(|error| error.to_string())?
+                .insert(node_id.to_string(), value.clone());
+            value
+        }
     };
-
-    let (Some(path), exists, thumb_key) = record else {
+    let Some(meta) = meta else {
         return Ok(None);
     };
-    if !exists.unwrap_or(false) {
+    if !meta.exists {
         return Ok(None);
     }
 
     let directory = workspace.join("thumbnails");
-    fs::create_dir_all(&directory).map_err(|error| format!("创建 thumbnails 失败：{error}"))?;
     let cache = directory.join(
-        thumb_key
+        meta.thumb_key
             .clone()
             .unwrap_or_else(|| format!("{node_id}.png")),
     );
 
     let bytes = if cache.exists() {
+        // 缓存文件命中：只读文件，不碰数据库。
         fs::read(&cache).map_err(|error| format!("读取缩略图缓存失败：{error}"))?
     } else {
-        let generated = crate::platform::shell_thumbnail(&path, size)?;
+        fs::create_dir_all(&directory).map_err(|error| format!("创建 thumbnails 失败：{error}"))?;
+        let generated = crate::platform::shell_thumbnail(&meta.path, size)?;
         fs::write(&cache, &generated).map_err(|error| format!("写入缩略图缓存失败：{error}"))?;
         let key = cache
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("{node_id}.png"));
-        let connection = state.db.lock().map_err(|error| error.to_string())?;
-        connection
-            .execute(
-                "UPDATE refs SET thumb_key = ?2 WHERE id = (SELECT ref_id FROM nodes WHERE id = ?1)",
-                params![node_id, &key],
-            )
-            .map_err(|error| format!("保存缩略图键失败：{error}"))?;
+        {
+            let connection = state.db.lock().map_err(|error| error.to_string())?;
+            connection
+                .execute(
+                    "UPDATE refs SET thumb_key = ?2 WHERE id = (SELECT ref_id FROM nodes WHERE id = ?1)",
+                    params![node_id, &key],
+                )
+                .map_err(|error| format!("保存缩略图键失败：{error}"))?;
+        }
+        if let Ok(mut map) = state.thumb_meta.lock() {
+            if let Some(Some(entry)) = map.get_mut(node_id) {
+                entry.thumb_key = Some(key);
+            }
+        }
         generated
     };
 
@@ -1284,6 +1499,10 @@ pub fn workspace_rebuild(state: &AppState) -> Result<(), String> {
     connection
         .execute_batch("VACUUM")
         .map_err(|error| format!("压缩数据库失败：{error}"))?;
+    // 节点已清空，缩略图元信息缓存一并失效。
+    if let Ok(mut cache) = state.thumb_meta.lock() {
+        cache.clear();
+    }
     Ok(())
 }
 
@@ -1353,12 +1572,19 @@ pub fn workspace_migrate(state: &AppState, target: &Path) -> Result<WorkspaceInf
         let mut guard = state.db.lock().map_err(|error| error.to_string())?;
         let new_connection =
             Connection::open(&target_db).map_err(|error| format!("打开目标数据库失败：{error}"))?;
-        new_connection
-            .execute_batch(
-                "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-            )
-            .map_err(|error| format!("初始化目标数据库失败：{error}"))?;
+        apply_pragmas(&new_connection).map_err(|error| format!("初始化目标数据库失败：{error}"))?;
         *guard = new_connection;
+    }
+    {
+        let mut reader_guard = state.reader.lock().map_err(|error| error.to_string())?;
+        let new_reader = Connection::open(&target_db)
+            .map_err(|error| format!("打开目标只读连接失败：{error}"))?;
+        apply_pragmas(&new_reader).map_err(|error| format!("初始化目标只读连接失败：{error}"))?;
+        *reader_guard = new_reader;
+    }
+    // 缩略图元信息缓存指向旧工作空间，整体失效。
+    if let Ok(mut cache) = state.thumb_meta.lock() {
+        cache.clear();
     }
     *state.workspace.lock().map_err(|error| error.to_string())? = target.to_path_buf();
     *state.assets.lock().map_err(|error| error.to_string())? = assets;

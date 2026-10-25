@@ -12,6 +12,7 @@ import { withEdgeColor } from '@/canvas/geometry'
 import {
   arrangeGroupMembers,
   findFreeOffset,
+  fitGroupToMembers,
   LAYOUT_GAP,
   nodeDisplayHeight,
   nodeRect,
@@ -136,6 +137,43 @@ export function useSceneStore(): SceneStore {
   const activeAnnotation = activeAnnotationId
     ? (annotations.find((annotation) => annotation.id === activeAnnotationId) ?? null)
     : null
+
+  /**
+   * 成员变化后让空间框贴合内容：拖入/新增即扩大，拖出/删除即缩小。
+   * 只重算受影响的空间；尺寸与位置都没变时保持原引用，避免无谓的重渲染与保存。
+   * `hasAnnotationOverride` 供标注增删场景覆盖高度判定（此时 annotatedIds 尚未更新）。
+   */
+  const refitGroupsOf = useCallback(
+    (
+      nextNodes: SceneNode[],
+      groupIds: Set<string>,
+      hasAnnotationOverride?: (node: SceneNode) => boolean,
+    ) => {
+      if (groupIds.size === 0) return
+      const has = hasAnnotationOverride ?? ((node: SceneNode) => annotatedIds.has(node.id))
+      setGroups((previous) => {
+        let changed = false
+        const next = previous.map((group) => {
+          if (!groupIds.has(group.id)) return group
+          const members = nextNodes.filter((node) => node.groupId === group.id)
+          const fit = fitGroupToMembers(members, has)
+          if (!fit) return group
+          if (
+            Math.abs(fit.x - group.x) < 0.5 &&
+            Math.abs(fit.y - group.y) < 0.5 &&
+            Math.abs(fit.w - group.w) < 0.5 &&
+            Math.abs(fit.h - group.h) < 0.5
+          ) {
+            return group
+          }
+          changed = true
+          return { ...group, ...fit }
+        })
+        return changed ? next : previous
+      })
+    },
+    [annotatedIds],
+  )
   const annotationTargets = useMemo(
     () =>
       activeAnnotation
@@ -216,53 +254,60 @@ export function useSceneStore(): SceneStore {
       const base = { ...node, x: Math.round(node.x + offset.dx), y: Math.round(node.y + offset.dy) }
       const placed = base.groupId ? base : { ...base, groupId: membershipOf(base, groups) }
       setNodes((previous) => [...previous, placed])
+      // 新对象落进空间时框随之扩大。
+      if (placed.groupId) refitGroupsOf([...nodes, placed], new Set([placed.groupId]))
       setSelectedIds([placed.id])
       setActiveAnnotationId(null)
       setDetailsMode('details')
     },
-    [annotatedIds, groups, nodes],
+    [annotatedIds, groups, nodes, refitGroupsOf],
   )
 
   const moveNodes = useCallback(
     (moves: { id: string; x: number; y: number }[]) => {
       const byId = new Map(moves.map((move) => [move.id, move]))
-      setNodes((previous) => {
-        // 已挂载的子节点不直接拖动，但要跟随父节点的世界位移，保持相对位置。
-        // 按 id 建一次索引：在全量数组上逐个 find 在多选拖动时是 O(M×N)。
-        const prevById = new Map(previous.map((node) => [node.id, node]))
-        const delta = new Map<string, { dx: number; dy: number }>()
-        moves.forEach((move) => {
-          const node = prevById.get(move.id)
-          if (!node) return
-          delta.set(node.id, { dx: move.x - node.x, dy: move.y - node.y })
-        })
-        // 多级挂载：父再有父时，子按最上层拖动者的总位移跟随（按层级逐轮归并）。
-        for (let round = 0; round < previous.length; round += 1) {
-          let changed = false
-          previous.forEach((node) => {
-            if (!node.parentNodeId || delta.has(node.id)) return
-            const parentDelta = delta.get(node.parentNodeId)
-            if (!parentDelta) return
-            delta.set(node.id, parentDelta)
-            changed = true
-          })
-          if (!changed) break
-        }
-        return previous.map((node) => {
-          const move = byId.get(node.id)
-          const follow = delta.get(node.id)
-          if (!move && !follow) return node
-          const moved = {
-            ...node,
-            x: move ? move.x : node.x + (follow?.dx ?? 0),
-            y: move ? move.y : node.y + (follow?.dy ?? 0),
-          }
-          // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
-          return { ...moved, groupId: membershipOf(moved, groups) }
-        })
+      // 已挂载的子节点不直接拖动，但要跟随父节点的世界位移，保持相对位置。
+      // 按 id 建一次索引：在全量数组上逐个 find 在多选拖动时是 O(M×N)。
+      const prevById = new Map(nodes.map((node) => [node.id, node]))
+      const delta = new Map<string, { dx: number; dy: number }>()
+      moves.forEach((move) => {
+        const node = prevById.get(move.id)
+        if (!node) return
+        delta.set(node.id, { dx: move.x - node.x, dy: move.y - node.y })
       })
+      // 多级挂载：父再有父时，子按最上层拖动者的总位移跟随（按层级逐轮归并）。
+      for (let round = 0; round < nodes.length; round += 1) {
+        let changed = false
+        nodes.forEach((node) => {
+          if (!node.parentNodeId || delta.has(node.id)) return
+          const parentDelta = delta.get(node.parentNodeId)
+          if (!parentDelta) return
+          delta.set(node.id, parentDelta)
+          changed = true
+        })
+        if (!changed) break
+      }
+      // 移动过的节点涉及的空间（旧归属 + 新归属）都要重新贴合内容。
+      const affected = new Set<string>()
+      const next = nodes.map((node) => {
+        const move = byId.get(node.id)
+        const follow = delta.get(node.id)
+        if (!move && !follow) return node
+        if (node.groupId) affected.add(node.groupId)
+        const moved = {
+          ...node,
+          x: move ? move.x : node.x + (follow?.dx ?? 0),
+          y: move ? move.y : node.y + (follow?.dy ?? 0),
+        }
+        // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
+        const groupId = membershipOf(moved, groups)
+        if (groupId) affected.add(groupId)
+        return { ...moved, groupId }
+      })
+      setNodes(next)
+      refitGroupsOf(next, affected)
     },
-    [groups],
+    [groups, nodes, refitGroupsOf],
   )
 
   /** 叠放层级：置顶取当前最大 z + 1，置底取最小 z - 1，保持相对次序。 */
@@ -522,10 +567,18 @@ export function useSceneStore(): SceneStore {
           }))
           .filter((annotation) => annotation.nodeIds.length > 0),
       )
+      // 成员被删后空间框随之缩小。
+      const removedGroupId = nodes.find((node) => node.id === target.id)?.groupId
+      if (removedGroupId) {
+        refitGroupsOf(
+          nodes.filter((node) => !ids.has(node.id)),
+          new Set([removedGroupId]),
+        )
+      }
       setSelectedIds([])
       setDetailsNodeId((current) => (current === target.id ? null : current))
     },
-    [annotations, edges, groups, nodes],
+    [annotations, edges, groups, nodes, refitGroupsOf],
   )
 
   /** 按当前选择删除；返回是否真的删了东西（空选择时返回 false）。 */
@@ -541,6 +594,12 @@ export function useSceneStore(): SceneStore {
     if (selectedIds.length === 0) return false
     undoRef.current = { nodes, groups, edges, annotations }
     const ids = new Set(selectedIds)
+    // 被删成员涉及的空间都要重新贴合。
+    const affectedGroups = new Set<string>()
+    selectedIds.forEach((id) => {
+      const groupId = nodeById.get(id)?.groupId
+      if (groupId) affectedGroups.add(groupId)
+    })
     setNodes((previous) =>
       previous
         .filter((node) => !ids.has(node.id))
@@ -558,6 +617,10 @@ export function useSceneStore(): SceneStore {
         }))
         .filter((annotation) => annotation.nodeIds.length > 0),
     )
+    refitGroupsOf(
+      nodes.filter((node) => !ids.has(node.id)),
+      affectedGroups,
+    )
     setSelectedIds([])
     setActiveAnnotationId(null)
     setDetailsMode('details')
@@ -568,7 +631,9 @@ export function useSceneStore(): SceneStore {
     deleteTarget,
     edges,
     groups,
+    nodeById,
     nodes,
+    refitGroupsOf,
     selectedEdgeId,
     selectedGroupId,
     selectedIds,
@@ -615,11 +680,20 @@ export function useSceneStore(): SceneStore {
         text: '补充说明：把关键结论或下一步动作写在这里。',
       }
       setAnnotations((previous) => [...previous, annotation])
+      // 标注让成员变高，涉及空间重新贴合；annotatedIds 尚未包含新标注，用覆盖判定。
+      const annotated = new Set(targetIds)
+      refitGroupsOf(
+        nodes,
+        new Set(
+          targetIds.map((id) => nodeById.get(id)?.groupId ?? '').filter((groupId) => groupId),
+        ),
+        (node) => annotatedIds.has(node.id) || annotated.has(node.id),
+      )
       setSelectedIds([...targetIds])
       setActiveAnnotationId(annotation.id)
       setDetailsMode('annotation')
     },
-    [annotations, openAnnotation, selectedIds],
+    [annotations, annotatedIds, nodeById, nodes, openAnnotation, refitGroupsOf, selectedIds],
   )
 
   const saveAnnotation = useCallback(
@@ -641,24 +715,48 @@ export function useSceneStore(): SceneStore {
     setAnnotations((previous) =>
       previous.filter((annotation) => annotation.id !== activeAnnotation.id),
     )
+    // 标注移除后成员变矮，涉及空间重新贴合；被移除的成员按无标注算高度。
+    const removed = new Set(activeAnnotation.nodeIds)
+    refitGroupsOf(
+      nodes,
+      new Set(
+        activeAnnotation.nodeIds
+          .map((id) => nodeById.get(id)?.groupId ?? '')
+          .filter((groupId) => groupId),
+      ),
+      (node) => !removed.has(node.id) && annotatedIds.has(node.id),
+    )
     setActiveAnnotationId(null)
     setDetailsMode('details')
-  }, [activeAnnotation])
+  }, [activeAnnotation, annotatedIds, nodeById, nodes, refitGroupsOf])
 
   /**
    * 文字卡片在画布上直接编辑：`live` 为真时只同步显示，收尾时才判定是否保存。
    * 空内容视为放弃修改，保留原文，避免误删。
    */
-  const commitText = useCallback((id: string, text: string, live = false) => {
-    setNodes((previous) =>
-      previous.map((node) => {
-        if (node.id !== id) return node
-        if (!live && (text.trim() === '' || text.trim() === (node.body ?? ''))) return node
+  const commitText = useCallback(
+    (id: string, text: string, live = false) => {
+      setNodes((previous) =>
+        previous.map((node) => {
+          if (node.id !== id) return node
+          if (!live && (text.trim() === '' || text.trim() === (node.body ?? ''))) return node
+          const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
+          return { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
+        }),
+      )
+      // 收尾保存时名称可能改变行数 → 成员高度变化，所属空间重新贴合。
+      const node = nodes.find((item) => item.id === id)
+      if (!live && node?.groupId && text.trim() !== '' && text.trim() !== (node.body ?? '')) {
         const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
-        return { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
-      }),
-    )
-  }, [])
+        const changed = { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
+        refitGroupsOf(
+          nodes.map((item) => (item.id === id ? changed : item)),
+          new Set([node.groupId]),
+        )
+      }
+    },
+    [nodes, refitGroupsOf],
+  )
 
   const toggleEdgeLabel = useCallback((id: string, label: string) => {
     setEdges((previous) =>
