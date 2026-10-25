@@ -8,6 +8,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
+import { nodeDisplayHeight, withEdgeColor } from '@/canvas/geometry'
 
 /** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
 interface SceneSnapshot {
@@ -15,6 +16,23 @@ interface SceneSnapshot {
   groups: SceneGroup[]
   edges: SceneEdge[]
   annotations: SceneAnnotation[]
+}
+
+/** 点是否落在空间内；多个空间重叠时取最上层（数组靠后）的那个。 */
+function groupIdAt(groups: SceneGroup[], x: number, y: number) {
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    const group = groups[index]
+    if (x >= group.x && x <= group.x + group.w && y >= group.y && y <= group.y + group.h) {
+      return group.id
+    }
+  }
+  return ''
+}
+
+/** 对象归属空间按中心点判定：拖入即加入，拖出即脱离。 */
+function membershipOf(node: SceneNode, groups: SceneGroup[]) {
+  const height = nodeDisplayHeight(node)
+  return groupIdAt(groups, node.x + node.w / 2, node.y + height / 2)
 }
 
 /** 合并导入结果：已有节点按 id 覆盖，重复导入不会产生第二张卡片。 */
@@ -60,7 +78,10 @@ export interface SceneStore {
   moveNodes: (moves: { id: string; x: number; y: number }[]) => void
   moveGroup: (id: string, dx: number, dy: number) => void
   connect: (from: string, to: string) => void
-  createGroup: (label: string) => SceneGroup | null
+  createGroup: (label: string, color?: string) => SceneGroup | null
+  renameGroup: (id: string, title: string) => void
+  setGroupColor: (id: string, color: string) => void
+  setEdgeColor: (id: string, color: string) => void
   deleteSelection: () => boolean
   deleteTarget: (target: { kind: 'node' | 'group' | 'edge'; id: string }) => void
   undo: () => boolean
@@ -163,22 +184,33 @@ export function useSceneStore(): SceneStore {
 
   // ---------- 场景改动 ----------
 
-  const addNode = useCallback((node: SceneNode) => {
-    setNodes((previous) => [...previous, node])
-    setSelectedIds([node.id])
-    setActiveAnnotationId(null)
-    setDetailsMode('details')
-  }, [])
+  const addNode = useCallback(
+    (node: SceneNode) => {
+      // 新对象落点已在某个空间内时自动成为成员，与拖入行为一致。
+      const placed = node.groupId ? node : { ...node, groupId: membershipOf(node, groups) }
+      setNodes((previous) => [...previous, placed])
+      setSelectedIds([placed.id])
+      setActiveAnnotationId(null)
+      setDetailsMode('details')
+    },
+    [groups],
+  )
 
-  const moveNodes = useCallback((moves: { id: string; x: number; y: number }[]) => {
-    const byId = new Map(moves.map((move) => [move.id, move]))
-    setNodes((previous) =>
-      previous.map((node) => {
-        const move = byId.get(node.id)
-        return move ? { ...node, x: move.x, y: move.y } : node
-      }),
-    )
-  }, [])
+  const moveNodes = useCallback(
+    (moves: { id: string; x: number; y: number }[]) => {
+      const byId = new Map(moves.map((move) => [move.id, move]))
+      setNodes((previous) =>
+        previous.map((node) => {
+          const move = byId.get(node.id)
+          if (!move) return node
+          const moved = { ...node, x: move.x, y: move.y }
+          // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
+          return { ...moved, groupId: membershipOf(moved, groups) }
+        }),
+      )
+    },
+    [groups],
+  )
 
   /** 移动空间时带动内部节点，保持相对位置不变。 */
   const moveGroup = useCallback((id: string, dx: number, dy: number) => {
@@ -210,7 +242,7 @@ export function useSceneStore(): SceneStore {
 
   /** 用当前选中对象的包围盒创建持久空间，并把对象归入该空间。 */
   const createGroup = useCallback(
-    (label: string) => {
+    (label: string, color?: string) => {
       const targets = selectedIds
         .map((id) => nodeById.get(id))
         .filter((node): node is SceneNode => Boolean(node))
@@ -219,10 +251,12 @@ export function useSceneStore(): SceneStore {
       const minX = Math.min(...targets.map((node) => node.x)) - 16
       const minY = Math.min(...targets.map((node) => node.y)) - 32
       const maxX = Math.max(...targets.map((node) => node.x + node.w)) + 16
-      const maxY = Math.max(...targets.map((node) => node.y + node.h)) + 16
+      const maxY =
+        Math.max(...targets.map((node) => node.y + nodeDisplayHeight(node))) + 16
       const group: SceneGroup = {
         id: `group-${crypto.randomUUID()}`,
         title: label,
+        color,
         x: minX,
         y: minY,
         w: maxX - minX,
@@ -241,6 +275,30 @@ export function useSceneStore(): SceneStore {
     },
     [nodeById, selectedIds],
   )
+
+  /** 空间标题即空间标注，重命名后立即显示在空间框上。 */
+  const renameGroup = useCallback((id: string, title: string) => {
+    const next = title.trim()
+    if (!next) return
+    setGroups((previous) =>
+      previous.map((group) => (group.id === id ? { ...group, title: next } : group)),
+    )
+  }, [])
+
+  const setGroupColor = useCallback((id: string, color: string) => {
+    setGroups((previous) =>
+      previous.map((group) => (group.id === id ? { ...group, color } : group)),
+    )
+  }, [])
+
+  /** 连线颜色写进 `styleJson`，与已有样式字段合并。 */
+  const setEdgeColor = useCallback((id: string, color: string) => {
+    setEdges((previous) =>
+      previous.map((edge) =>
+        edge.id === id ? { ...edge, styleJson: withEdgeColor(edge.styleJson, color) } : edge,
+      ),
+    )
+  }, [])
 
   /** 删除按目标执行：节点连带边与标注，空间只删框，连线只删边。返回是否执行。 */
   const deleteTarget = useCallback(
@@ -446,6 +504,9 @@ export function useSceneStore(): SceneStore {
     moveGroup,
     connect,
     createGroup,
+    renameGroup,
+    setGroupColor,
+    setEdgeColor,
     deleteSelection,
     deleteTarget,
     undo,

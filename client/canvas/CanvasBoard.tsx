@@ -25,7 +25,7 @@ import {
   useState,
 } from 'react'
 import Konva from 'konva'
-import { Arrow, Circle, Layer, Rect, Stage, Text } from 'react-konva'
+import { Arrow, Circle, Layer, Label, Rect, Stage, Tag, Text } from 'react-konva'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode, ThemeId } from '@/types/scene'
 import { themeById } from '@/lib/theme'
 import CanvasTextEditor from './CanvasTextEditor'
@@ -33,15 +33,18 @@ import EdgeLayer from './EdgeLayer'
 import GroupShape from './GroupShape'
 import Minimap from './Minimap'
 import NodeShape from './NodeShape'
-import { MINIMAP_MIN_H, MINIMAP_MIN_W } from './constants'
+import { MINIMAP_MIN_H, MINIMAP_MIN_W, STAGE_PIXEL_RATIO } from './constants'
 import type { CanvasTokens, HandleSide } from './constants'
-import { handlePoint } from './geometry'
+import { groupTone, handlePoint, nodeDisplayHeight } from './geometry'
 import { ICON_IMAGES, THUMB_IMAGES, cssVar, startIconLoad } from './icons'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import { useCanvasInteractions } from './useCanvasInteractions'
 import { useCanvasViewport } from './useCanvasViewport'
 import { useVisibleScene } from './useVisibleScene'
 import { useVisibleThumbnails } from './useVisibleThumbnails'
+
+// Konva 的 Layer 画布只读全局倍率；统一提高分辨率，低 DPI 屏上文字也保持锐利。
+Konva.pixelRatio = STAGE_PIXEL_RATIO
 
 interface CanvasBoardProps {
   themeId: ThemeId
@@ -66,12 +69,16 @@ interface CanvasBoardProps {
   onActivate: (id: string) => void
   onTextCommit: (id: string, text: string, live?: boolean) => void
   onScaleChange: (scale: number) => void
+  /** 双击空间标题：进入重命名。 */
+  onGroupTitleEdit: (id: string) => void
   /** 右键菜单由工作空间渲染，画布只上报目标与屏幕坐标。 */
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
 }
 
 export interface CanvasBoardHandle {
   locateNode: (id: string) => void
+  /** 定位节点或空间，供连线邻居跳转使用。 */
+  locateTarget: (id: string) => void
   fitView: () => void
   zoomBy: (factor: number) => void
   getCenterWorld: () => { x: number; y: number }
@@ -102,6 +109,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onActivate,
     onTextCommit,
     onScaleChange,
+    onGroupTitleEdit,
     onContextMenu,
   },
   ref,
@@ -147,21 +155,26 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     viewportRef,
     setViewport,
     zoomAt,
-    locateNode,
+    locateTarget,
     fitView,
     zoomBy,
     getCenterWorld,
     pulseId,
-  } = useCanvasViewport({ nodes, groups, nodeById, size, detailsOpen, onScaleChange })
+  } = useCanvasViewport({
+    nodes,
+    groups,
+    nodeById,
+    groupById,
+    size,
+    detailsOpen,
+    onScaleChange,
+  })
 
-  const { visibleNodes, visibleEdges, lod, compact } = useVisibleScene({
+  const { visibleNodes, visibleEdges } = useVisibleScene({
     nodes,
     edges,
     nodeById,
     groupById,
-    selectedSet,
-    selectedGroupId,
-    selectedEdgeId,
     viewport,
     size,
   })
@@ -169,19 +182,25 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   useVisibleThumbnails(visibleNodes)
 
   /**
-   * 统一解析「节点或空间」的矩形。拖动中的节点以 Konva Group 的实时位置为准。
+   * 统一解析「节点或空间」的矩形。拖动中的节点以 Konva Group 的实时位置为准；
+   * 节点高度按名称行数与标注自适应。
    */
   const boxOf = useCallback(
     (id: string) => {
       const node = nodeById.get(id)
       if (node) {
         const live = nodeGroupRefs.current.get(id)
-        return { x: live ? live.x() : node.x, y: live ? live.y() : node.y, w: node.w, h: node.h }
+        return {
+          x: live ? live.x() : node.x,
+          y: live ? live.y() : node.y,
+          w: node.w,
+          h: nodeDisplayHeight(node, annotationByNode.has(id)),
+        }
       }
       const group = groupById.get(id)
       return group ? { x: group.x, y: group.y, w: group.w, h: group.h } : null
     },
-    [groupById, nodeById],
+    [annotationByNode, groupById, nodeById],
   )
 
   const interactions = useCanvasInteractions({
@@ -191,7 +210,6 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     selectedIds,
     selectedSet,
     nodeById,
-    lod,
     size,
     stageRef,
     nodeGroupRefs,
@@ -212,8 +230,15 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
 
   useImperativeHandle(
     ref,
-    () => ({ locateNode, fitView, zoomBy, getCenterWorld, editText: interactions.editText }),
-    [fitView, getCenterWorld, interactions.editText, locateNode, zoomBy],
+    () => ({
+      locateNode: locateTarget,
+      locateTarget,
+      fitView,
+      zoomBy,
+      getCenterWorld,
+      editText: interactions.editText,
+    }),
+    [fitView, getCenterWorld, interactions.editText, locateTarget, zoomBy],
   )
 
   // 定位后的脉冲高亮：只对当前定位对象做一次淡出，不持续渲染。
@@ -306,6 +331,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         ref={stageRef}
         width={size.width}
         height={size.height}
+        pixelRatio={STAGE_PIXEL_RATIO}
         scaleX={viewport.scale}
         scaleY={viewport.scale}
         x={viewport.x}
@@ -346,35 +372,48 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         </Layer>
 
         <Layer>
-          {groups.map((group) => (
-            <Text
-              key={`title-${group.id}`}
-              x={group.x + 10}
-              y={group.y - 8}
-              text={group.title}
-              fontSize={9}
-              fill={selectedGroupId === group.id ? tokens.primary : tokens.textSecondary}
-              fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
-              padding={1}
-              draggable
-              onDragStart={(event) => interactions.handleGroupTitleDown(event, group.id)}
-              onDragMove={interactions.handleGroupTitleMove}
-              onDragEnd={interactions.handleGroupTitleUp}
-              onContextMenu={(event) => interactions.handleGroupContextMenu(event, group.id)}
-            />
-          ))}
+          {/* 空间标题就是空间的标注：带底色文字牌，可重命名、改色、拖动。 */}
+          {groups.map((group) => {
+            const color = group.color || tokens.primary
+            const tone = groupTone(color)
+            return (
+              <Label
+                key={`title-${group.id}`}
+                x={group.x + 8}
+                y={group.y - 15}
+                draggable
+                onDragStart={(event) => interactions.handleGroupTitleDown(event, group.id)}
+                onDragMove={interactions.handleGroupTitleMove}
+                onDragEnd={interactions.handleGroupTitleUp}
+                onDblClick={(event) => {
+                  event.cancelBubble = true
+                  onGroupTitleEdit(group.id)
+                }}
+                onContextMenu={(event) => interactions.handleGroupContextMenu(event, group.id)}
+              >
+                <Tag fill={tone.fill} stroke={color} strokeWidth={1} cornerRadius={3} />
+                <Text
+                  text={group.title}
+                  fontSize={10}
+                  fontStyle="bold"
+                  padding={3}
+                  fill={tone.ink}
+                  fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+                />
+              </Label>
+            )
+          })}
 
           {visibleNodes.map((node) => (
             <NodeShape
               key={node.id}
               node={node}
+              height={nodeDisplayHeight(node, annotationByNode.has(node.id))}
               annotation={annotationByNode.get(node.id)}
               icon={ICON_IMAGES.get(node.icon)}
               thumb={node.thumbKey || node.kind === 'image' ? THUMB_IMAGES.get(node.id) : null}
               selected={selectedSet.has(node.id)}
               singleSelected={selectedSet.size === 1}
-              lod={lod}
-              compact={compact}
               tokens={tokens}
               registerRef={(instance) => {
                 if (instance) nodeGroupRefs.current.set(node.id, instance)
@@ -392,7 +431,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           ))}
 
           {/* 选中空间时同样给出四向锚点：空间可以和文件一样连线。 */}
-          {activeGroup && !lod
+          {activeGroup
             ? Array.from({ length: 4 }).map((_, index) => {
                 const side = (['top', 'right', 'bottom', 'left'] as HandleSide[])[index]
                 const point = handlePoint(activeGroup, side)
@@ -426,7 +465,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
                     x={node.x - 4}
                     y={node.y - 4}
                     width={node.w + 8}
-                    height={node.h + 8}
+                    height={nodeDisplayHeight(node, annotationByNode.has(node.id)) + 8}
                     stroke={tokens.primary}
                     strokeWidth={2}
                     cornerRadius={8}

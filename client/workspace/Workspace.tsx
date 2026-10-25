@@ -6,11 +6,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { App as AntApp } from 'antd'
 import type { SceneNode, SearchEntry, ThemeId } from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/canvas/CanvasBoard'
+import { GROUP_PALETTE } from '@/canvas/constants'
+import { edgeColorOf } from '@/canvas/geometry'
+import { themeById } from '@/lib/theme'
 import TitleBar, { type TitleBarHandle } from '@/components/TitleBar'
 import DetailsPanel from '@/components/DetailsPanel'
 import SettingsDialog from '@/components/SettingsDialog'
 import ImagePreviewDialog from '@/components/ImagePreviewDialog'
-import EdgeLabelDialog from '@/components/EdgeLabelDialog'
+import TextPromptDialog from '@/components/TextPromptDialog'
+import ColorPickerDialog from '@/components/ColorPickerDialog'
+import NeighborPickerDialog from '@/components/NeighborPickerDialog'
+import type { NeighborOption } from '@/components/NeighborPickerDialog'
 import ContextMenu from '@/components/ContextMenu'
 import StatusBar from '@/components/StatusBar'
 import EmptyOverlay from '@/components/EmptyOverlay'
@@ -36,7 +42,19 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   // 空态由「场景是否为空」派生，避免在 effect 里同步 state。
   const [emptyDismissed, setEmptyDismissed] = useState(false)
   const [scale, setScale] = useState(0.82)
-  const [edgeLabel, setEdgeLabel] = useState<{ id: string; text: string } | null>(null)
+  /** 单行文本弹窗：连线标签与空间标题共用。 */
+  const [prompt, setPrompt] = useState<{
+    kind: 'edge' | 'group'
+    id: string
+    text: string
+  } | null>(null)
+  const [colorPicker, setColorPicker] = useState<{
+    kind: 'group' | 'edge'
+    id: string
+    value?: string
+    fallback: string
+  } | null>(null)
+  const [neighbors, setNeighbors] = useState<{ options: NeighborOption[] } | null>(null)
 
   const canvasRef = useRef<CanvasBoardHandle>(null)
   const titleBarRef = useRef<TitleBarHandle>(null)
@@ -79,25 +97,104 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     onImportPaths,
   })
 
-  // ---------- 右键菜单 ----------
+  // ---------- 右键菜单动作 ----------
+
+  const themeTokens = themeById(themeId)
+
+  const openEdgeLabel = useCallback((id: string) => {
+    const edge = store.edges.find((item) => item.id === id)
+    store.selectEdge(id)
+    setPrompt({ kind: 'edge', id, text: edge?.label ?? '' })
+  }, [store])
+
+  const openGroupTitle = useCallback(
+    (id: string) => {
+      const group = store.groupById.get(id)
+      if (!group) return
+      store.selectGroup(id)
+      setPrompt({ kind: 'group', id, text: group.title })
+    },
+    [store],
+  )
+
+  const openGroupColor = useCallback(
+    (id: string) => {
+      const group = store.groupById.get(id)
+      if (!group) return
+      setColorPicker({
+        kind: 'group',
+        id,
+        value: group.color,
+        fallback: themeTokens.primary,
+      })
+    },
+    [store, themeTokens.primary],
+  )
+
+  const openEdgeColor = useCallback(
+    (id: string) => {
+      const edge = store.edges.find((item) => item.id === id)
+      if (!edge) return
+      setColorPicker({
+        kind: 'edge',
+        id,
+        value: edgeColorOf(edge, themeTokens.primary),
+        fallback: themeTokens.primary,
+      })
+    },
+    [store.edges, themeTokens.primary],
+  )
+
+  /** 跳跃式导航：一个对象连了多个目标时先让用户选，只有一个时直接跳。 */
+  const locateNeighbor = useCallback(
+    (nodeId: string) => {
+      const options = new Map<string, NeighborOption>()
+      store.edges.forEach((edge) => {
+        if (edge.from !== nodeId && edge.to !== nodeId) return
+        const otherId = edge.from === nodeId ? edge.to : edge.from
+        if (options.has(otherId)) return
+        const node = store.nodeById.get(otherId)
+        const group = store.groupById.get(otherId)
+        if (node) options.set(otherId, { id: otherId, label: node.name, kind: 'node' })
+        else if (group) options.set(otherId, { id: otherId, label: group.title, kind: 'group' })
+      })
+      const list = Array.from(options.values())
+      if (list.length === 0) {
+        message.info('该对象还没有关联连线')
+        return
+      }
+      if (list.length === 1) {
+        const only = list[0]
+        canvasRef.current?.locateTarget(only.id)
+        if (only.kind === 'group') store.selectGroup(only.id)
+        else store.selectNode(only.id, false)
+        return
+      }
+      setNeighbors({ options: list })
+    },
+    [message, store],
+  )
 
   const contextMenu = useContextMenu({
     store,
-    message,
     openNode: (node) => void actions.openNode(node),
     reveal: (node) => void actions.reveal(node),
     editText: (id) => canvasRef.current?.editText(id),
-    editEdgeLabel: (id) => {
-      const edge = store.edges.find((item) => item.id === id)
-      store.selectEdge(id)
-      setEdgeLabel({ id, text: edge?.label ?? '' })
-    },
+    editEdgeLabel: openEdgeLabel,
+    renameGroup: openGroupTitle,
+    pickGroupColor: openGroupColor,
+    pickEdgeColor: openEdgeColor,
+    locateNeighbor,
   })
 
   // ---------- 场景命令（带提示） ----------
 
   const createSpace = useCallback(() => {
-    const group = store.createGroup('新空间')
+    // 自动编号 + 调色板轮换，多个空间无需手动改名也能区分。
+    const group = store.createGroup(
+      `空间 ${store.groups.length + 1}`,
+      GROUP_PALETTE[store.groups.length % GROUP_PALETTE.length],
+    )
     if (!group) message.info('先框选或选中要放进空间的对象')
     else message.success('已创建空间：拖动空间可整体移动，四向圆点可连线')
   }, [message, store])
@@ -141,14 +238,44 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     setEmptyDismissed(true)
   }, [showEmpty, store])
 
-  const handleEdgeLabelSave = useCallback(
+  const handlePromptSave = useCallback(
     (text: string) => {
-      if (!edgeLabel) return
-      store.toggleEdgeLabel(edgeLabel.id, text)
-      setEdgeLabel(null)
-      message.success(text.trim() ? '连线标签已保存' : '连线标签已清除')
+      if (!prompt) return
+      if (prompt.kind === 'edge') {
+        store.toggleEdgeLabel(prompt.id, text)
+        message.success(text.trim() ? '连线标签已保存' : '连线标签已清除')
+      } else {
+        store.renameGroup(prompt.id, text)
+        message.success('空间标题已更新')
+      }
+      setPrompt(null)
     },
-    [edgeLabel, message, store],
+    [message, prompt, store],
+  )
+
+  const handleColorSave = useCallback(
+    (color: string) => {
+      if (!colorPicker) return
+      if (colorPicker.kind === 'group') {
+        store.setGroupColor(colorPicker.id, color)
+        message.success('空间颜色已更新')
+      } else {
+        store.setEdgeColor(colorPicker.id, color)
+        message.success('连线颜色已更新')
+      }
+      setColorPicker(null)
+    },
+    [colorPicker, message, store],
+  )
+
+  const pickNeighbor = useCallback(
+    (id: string) => {
+      canvasRef.current?.locateTarget(id)
+      if (store.groupById.has(id)) store.selectGroup(id)
+      else store.selectNode(id, false)
+      setNeighbors(null)
+    },
+    [store],
   )
 
   // ---------- 快捷键 ----------
@@ -270,11 +397,8 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           onMoveGroup={store.moveGroup}
           onMoveNodes={store.moveNodes}
           onSelectEdge={store.selectEdge}
-          onEdgeLabelEdit={(id) => {
-            const edge = store.edges.find((item) => item.id === id)
-            store.selectEdge(id)
-            setEdgeLabel({ id, text: edge?.label ?? '' })
-          }}
+          onEdgeLabelEdit={openEdgeLabel}
+          onGroupTitleEdit={openGroupTitle}
           onConnect={store.connect}
           onAnnotation={store.openAnnotation}
           onActivate={(id) => {
@@ -359,12 +483,30 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         title={actions.previewState.title}
         onClose={actions.closePreview}
       />
-      <EdgeLabelDialog
-        key={edgeLabel?.id ?? 'no-edge'}
-        edgeId={edgeLabel?.id ?? null}
-        initialText={edgeLabel?.text ?? ''}
-        onCancel={() => setEdgeLabel(null)}
-        onSave={handleEdgeLabelSave}
+      <TextPromptDialog
+        key={prompt ? `${prompt.kind}-${prompt.id}` : 'no-prompt'}
+        open={Boolean(prompt)}
+        title={prompt?.kind === 'group' ? '重命名空间' : '连线标签'}
+        placeholder={prompt?.kind === 'group' ? '给空间一个能区分的名字' : '留空则清除标签'}
+        initialText={prompt?.text ?? ''}
+        maxLength={prompt?.kind === 'group' ? 20 : 24}
+        onCancel={() => setPrompt(null)}
+        onSave={handlePromptSave}
+      />
+      <ColorPickerDialog
+        key={colorPicker ? `${colorPicker.kind}-${colorPicker.id}` : 'no-color'}
+        open={Boolean(colorPicker)}
+        title={colorPicker?.kind === 'group' ? '空间颜色' : '连线颜色'}
+        value={colorPicker?.value}
+        fallback={colorPicker?.fallback ?? themeTokens.primary}
+        onCancel={() => setColorPicker(null)}
+        onSave={handleColorSave}
+      />
+      <NeighborPickerDialog
+        open={Boolean(neighbors)}
+        options={neighbors?.options ?? []}
+        onCancel={() => setNeighbors(null)}
+        onPick={pickNeighbor}
       />
     </div>
   )

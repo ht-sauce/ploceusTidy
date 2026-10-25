@@ -5,7 +5,7 @@
 import { Arrow, Group, Label, Tag, Text } from 'react-konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { CanvasTokens } from './constants'
-import { edgePoints } from './geometry'
+import { edgeColorOf, edgePoints } from './geometry'
 import type { SceneEdge } from '@/types/scene'
 
 interface Box {
@@ -46,6 +46,8 @@ export default function EdgeLayer({
         const midX = (points[0] + points[6]) / 2
         const midY = (points[1] + points[7]) / 2
         const active = edge.id === selectedEdgeId
+        // 连线颜色可由用户取色；未设置时跟随主题主色，保证在浅色背景上足够明显。
+        const color = edgeColorOf(edge, tokens.primary)
         return (
           <Group key={edge.id}>
             <Arrow
@@ -53,10 +55,10 @@ export default function EdgeLayer({
               edgeId={edge.id}
               points={points}
               bezier
-              stroke={active ? tokens.primary : tokens.textSecondary}
-              fill={active ? tokens.primary : tokens.textSecondary}
-              strokeWidth={active ? 2.6 : 1.8}
-              hitStrokeWidth={14}
+              stroke={color}
+              fill={color}
+              strokeWidth={active ? 3 : 2.2}
+              hitStrokeWidth={16}
               onClick={(event) => {
                 event.cancelBubble = true
                 onSelect(edge.id)

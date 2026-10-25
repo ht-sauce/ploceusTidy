@@ -22,7 +22,6 @@ interface UseCanvasInteractionsOptions {
   selectedIds: string[]
   selectedSet: Set<string>
   nodeById: Map<string, SceneNode>
-  lod: boolean
   size: StageSize
   stageRef: RefObject<Konva.Stage | null>
   nodeGroupRefs: RefObject<Map<string, Konva.Group>>
@@ -56,7 +55,6 @@ export function useCanvasInteractions({
   selectedIds,
   selectedSet,
   nodeById,
-  lod,
   size,
   stageRef,
   nodeGroupRefs,
@@ -421,10 +419,6 @@ export function useCanvasInteractions({
       onSelect(node.id, true)
       return
     }
-    if (lod) {
-      onSelect(node.id, false)
-      return
-    }
 
     const dragIds = selectedSet.has(node.id) ? selectedIds : [node.id]
     dragSession.current = {
@@ -525,7 +519,6 @@ export function useCanvasInteractions({
   }
 
   const handleNodeMouseEnter = (node: SceneNode) => {
-    if (lod) return
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current)
     hoverTimer.current = window.setTimeout(() => {
       const pointer = stageRef.current?.getPointerPosition()

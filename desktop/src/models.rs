@@ -40,7 +40,11 @@ pub struct SceneNode {
 #[serde(rename_all = "camelCase")]
 pub struct SceneGroup {
     pub id: String,
+    /// 空间标题即空间标注。
     pub title: String,
+    /// 空间主色（#RRGGBB）；为空时前端回退主题主色。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     pub x: f64,
     pub y: f64,
     pub w: f64,

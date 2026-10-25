@@ -2,8 +2,16 @@
  * 画布纯函数：坐标换算、名称截断、类型色、连线路径。
  * 无 React、无 Konva 实例依赖，便于单测与复用。
  */
-import { NAME_LINE_BUDGET, type HandleSide } from './constants'
-import type { SceneNode } from '@/types/scene'
+import {
+  NAME_LINE_BUDGET,
+  NODE_ANNOTATION_HEIGHT,
+  NODE_ICON_SIZE,
+  NODE_ICON_TOP,
+  NODE_LINE_HEIGHT,
+  NODE_PADDING_BOTTOM,
+  type HandleSide,
+} from './constants'
+import type { SceneEdge, SceneNode } from '@/types/scene'
 
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
@@ -39,42 +47,86 @@ export function displayName(name: string) {
   return `${base.slice(0, NAME_LINE_BUDGET - 1)}…\n${extLine}`
 }
 
-/** 远景色点颜色：按文件类型区分，与资源管理器语义一致，不随主题变化。 */
-export function lodColor(node: SceneNode) {
-  switch (node.icon) {
-    case 'folder':
-      return '#d8b04a'
-    case 'pdf':
-      return '#b65a53'
-    case 'docx':
-    case 'dwg':
-    case 'link':
-      return '#587c9d'
-    case 'xlsx':
-      return '#5a8065'
-    case 'exe':
-      return '#6b757d'
-    case 'image':
-      return '#799683'
-    case 'video':
-      return '#707982'
-    default:
-      return '#9a9d97'
+/**
+ * 卡片展示高度：按名称行数自适应（最多两行），有标注时再让出一条标注高度。
+ * 不改变持久化尺寸，只影响渲染与命中框。
+ */
+export function nodeDisplayHeight(node: SceneNode, hasAnnotation = false) {
+  const name = displayName(node.name)
+  const lines = name.includes('\n')
+    ? 2
+    : Math.min(2, Math.ceil(Array.from(name).length / NAME_LINE_BUDGET))
+  return (
+    NODE_ICON_TOP +
+    NODE_ICON_SIZE +
+    1 +
+    lines * NODE_LINE_HEIGHT +
+    NODE_PADDING_BOTTOM +
+    (hasAnnotation ? NODE_ANNOTATION_HEIGHT : 0)
+  )
+}
+
+/** #RGB / #RRGGBB 解析；非法值回退到 fallback。 */
+function parseHex(value: string, fallback: [number, number, number]) {
+  const raw = value.trim().replace('#', '')
+  if (raw.length === 3) {
+    const r = Number.parseInt(raw[0] + raw[0], 16)
+    const g = Number.parseInt(raw[1] + raw[1], 16)
+    const b = Number.parseInt(raw[2] + raw[2], 16)
+    return Number.isNaN(r + g + b) ? fallback : [r, g, b]
+  }
+  if (raw.length === 6) {
+    const r = Number.parseInt(raw.slice(0, 2), 16)
+    const g = Number.parseInt(raw.slice(2, 4), 16)
+    const b = Number.parseInt(raw.slice(4, 6), 16)
+    return Number.isNaN(r + g + b) ? fallback : [r, g, b]
+  }
+  return fallback
+}
+
+/** 两个颜色按比例混合，`ratio` 为第二个颜色的占比（0–1）。 */
+export function mixHex(base: string, target: string, ratio: number) {
+  const [r1, g1, b1] = parseHex(base, [0, 0, 0])
+  const [r2, g2, b2] = parseHex(target, [255, 255, 255])
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * ratio)
+  return `#${[mix(r1, r2), mix(g1, g2), mix(b1, b2)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/** 空间相关的浅色底与深色字，都从空间主色派生。 */
+export function groupTone(color: string) {
+  return { fill: mixHex(color, '#ffffff', 0.88), ink: mixHex(color, '#000000', 0.12) }
+}
+
+/** 标注文字牌跟随主题主色：浅底深字，换主题即换色。 */
+export function annotationTone(primary: string) {
+  return { fill: mixHex(primary, '#ffffff', 0.86), ink: mixHex(primary, '#000000', 0.18) }
+}
+
+/** 连线颜色存在 `styleJson` 里，缺省回退主题主色。 */
+export function edgeColorOf(edge: SceneEdge, fallback: string) {
+  if (!edge.styleJson) return fallback
+  try {
+    const parsed = JSON.parse(edge.styleJson) as { color?: unknown }
+    return typeof parsed.color === 'string' && parsed.color ? parsed.color : fallback
+  } catch {
+    return fallback
   }
 }
 
-/** 标注配色：浅底 + 深字，四套浅色主题下都不刺眼，也不与卡片底色冲突。 */
-export function annotationTone(color: string) {
-  switch (color) {
-    case 'amber':
-      return { fill: '#F4E7CC', ink: '#8A6420' }
-    case 'red':
-      return { fill: '#F7E3E2', ink: '#A0443C' }
-    case 'blue':
-      return { fill: '#E2EAF2', ink: '#3F6285' }
-    default:
-      return { fill: '#E0EBE7', ink: '#356B5B' }
+/** 保留已有样式字段，只更新颜色。 */
+export function withEdgeColor(styleJson: string | undefined, color: string) {
+  let base: Record<string, unknown> = {}
+  if (styleJson) {
+    try {
+      const parsed = JSON.parse(styleJson) as unknown
+      if (parsed && typeof parsed === 'object') base = parsed as Record<string, unknown>
+    } catch {
+      base = {}
+    }
   }
+  return JSON.stringify({ ...base, color })
 }
 
 interface Box {

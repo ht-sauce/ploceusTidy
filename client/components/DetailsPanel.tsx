@@ -60,7 +60,7 @@ export default function DetailsPanel({
         </div>
 
         <div className="annotation-target">
-          <span className={`annotation-color ${annotation.color}`} />
+          <span className="annotation-color" />
           <span>{targetLabel}</span>
         </div>
 

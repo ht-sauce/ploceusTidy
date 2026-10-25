@@ -11,6 +11,7 @@ interface UseCanvasViewportOptions {
   nodes: SceneNode[]
   groups: SceneGroup[]
   nodeById: Map<string, SceneNode>
+  groupById: Map<string, SceneGroup>
   size: StageSize
   detailsOpen: boolean
   onScaleChange: (scale: number) => void
@@ -20,6 +21,7 @@ export function useCanvasViewport({
   nodes,
   groups,
   nodeById,
+  groupById,
   size,
   detailsOpen,
   onScaleChange,
@@ -58,21 +60,24 @@ export function useCanvasViewport({
     })
   }, [])
 
-  /** 把指定对象居中；属性面板打开时按剩余可用宽度居中。 */
-  const locateNode = useCallback(
+  /** 把指定对象或空间居中；属性面板打开时按剩余可用宽度居中。 */
+  const locateTarget = useCallback(
     (id: string) => {
       const node = nodeById.get(id)
-      if (!node) return
+      const group = node ? null : groupById.get(id)
+      const box = node ?? group
+      if (!box) return
       const scale = Math.max(viewportRef.current.scale, 0.92)
       const availableWidth = Math.max(240, size.width - (detailsOpen ? 300 : 0))
-      const x = availableWidth / 2 - (node.x + node.w / 2) * scale
-      const y = size.height / 2 - (node.y + node.h / 2) * scale
+      const x = availableWidth / 2 - (box.x + box.w / 2) * scale
+      const y = size.height / 2 - (box.y + box.h / 2) * scale
       setViewport({ x, y, scale })
+      if (!node) return
       setPulseId(id)
       if (pulseTimer.current) window.clearTimeout(pulseTimer.current)
       pulseTimer.current = window.setTimeout(() => setPulseId(null), 1600)
     },
-    [detailsOpen, nodeById, size.height, size.width],
+    [detailsOpen, groupById, nodeById, size.height, size.width],
   )
 
   const fitView = useCallback(() => {
@@ -117,7 +122,7 @@ export function useCanvasViewport({
     viewportRef,
     setViewport,
     zoomAt,
-    locateNode,
+    locateTarget,
     fitView,
     zoomBy,
     getCenterWorld,

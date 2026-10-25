@@ -2,7 +2,6 @@
  * 画布右键菜单：只保存菜单目标与坐标，动作转交给场景 store 与对象动作。
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { MessageInstance } from 'antd/es/message/interface'
 import type { CanvasContextTarget } from '@/canvas/types'
 import type { SceneNode } from '@/types/scene'
 import type { SceneStore } from './useSceneStore'
@@ -16,20 +15,27 @@ export interface ContextMenuEntry {
 
 interface ContextMenuOptions {
   store: SceneStore
-  message: MessageInstance
   openNode: (node: SceneNode) => void
   reveal: (node: SceneNode) => void
   editText: (id: string) => void
   editEdgeLabel: (id: string) => void
+  renameGroup: (id: string) => void
+  pickGroupColor: (id: string) => void
+  pickEdgeColor: (id: string) => void
+  /** 跳转到当前对象/空间的关联对象；一对多时由调用方弹出选择。 */
+  locateNeighbor: (targetId: string) => void
 }
 
 export function useContextMenu({
   store,
-  message,
   openNode,
   reveal,
   editText,
   editEdgeLabel,
+  renameGroup,
+  pickGroupColor,
+  pickEdgeColor,
+  locateNeighbor,
 }: ContextMenuOptions) {
   const [menu, setMenu] = useState<{
     target: CanvasContextTarget
@@ -41,6 +47,7 @@ export function useContextMenu({
     nodeById,
     groupById,
     nodes,
+    edges,
     selectNode,
     selectGroup,
     selectEdge,
@@ -80,21 +87,28 @@ export function useContextMenu({
       else if (key === 'edit-text' && node) editText(node.id)
       else if (key === 'annotate' && node) addAnnotation([node.id])
       else if (key === 'details' && node) openDetails(node.id)
+      else if (key === 'locate-neighbor' && node) locateNeighbor(node.id)
+      else if (key === 'locate-neighbor') locateNeighbor(target.id)
       else if (key === 'edge-label') editEdgeLabel(target.id)
-      else if (key === 'group-info') message.info('空间暂不支持标注，可对其中的文件添加')
+      else if (key === 'edge-color') pickEdgeColor(target.id)
+      else if (key === 'group-rename') renameGroup(target.id)
+      else if (key === 'group-color') pickGroupColor(target.id)
       else if (key === 'delete') deleteTarget(target)
     },
     [
       addAnnotation,
       deleteTarget,
       editEdgeLabel,
+      editText,
+      locateNeighbor,
       menu,
-      message,
       nodeById,
       openDetails,
       openNode,
+      pickEdgeColor,
+      pickGroupColor,
+      renameGroup,
       reveal,
-      editText,
     ],
   )
 
@@ -106,6 +120,7 @@ export function useContextMenu({
       const node = nodeById.get(target.id)
       if (!node) return []
       const items: ContextMenuEntry[] = []
+      const hasNeighbor = edges.some((edge) => edge.from === node.id || edge.to === node.id)
       if (node.kind === 'text') items.push({ key: 'edit-text', label: '编辑文字' })
       else if (node.kind === 'image') items.push({ key: 'open', label: '预览图片' })
       else {
@@ -122,6 +137,7 @@ export function useContextMenu({
       if (node.kind !== 'text' && node.kind !== 'link') {
         items.push({ key: 'reveal', label: '在资源管理器中定位' })
       }
+      if (hasNeighbor) items.push({ key: 'locate-neighbor', label: '跳转到关联对象' })
       items.push({ key: 'annotate', label: '添加标注' })
       items.push({ key: 'details', label: '属性' })
       items.push({ key: 'divider-1', label: '', divider: true })
@@ -131,15 +147,25 @@ export function useContextMenu({
     if (target.kind === 'edge') {
       return [
         { key: 'edge-label', label: '编辑连线标签' },
+        { key: 'edge-color', label: '连线颜色' },
         { key: 'divider-1', label: '', divider: true },
         { key: 'delete', label: '删除连线', danger: true },
       ]
     }
     const group = groupById.get(target.id)
     const count = group ? nodes.filter((item) => item.groupId === group.id).length : 0
+    const hasNeighbor = edges.some(
+      (edge) => edge.from === target.id || edge.to === target.id,
+    )
     return [
-      { key: 'group-info', label: `空间内 ${count} 个对象` },
+      { key: 'group-rename', label: '重命名空间' },
+      { key: 'group-color', label: '空间颜色' },
+      ...(hasNeighbor
+        ? [{ key: 'locate-neighbor', label: '跳转到关联对象' }]
+        : []),
       { key: 'divider-1', label: '', divider: true },
+      { key: 'group-info', label: `空间内 ${count} 个对象` },
+      { key: 'divider-2', label: '', divider: true },
       { key: 'delete', label: '删除空间（保留对象）', danger: true },
     ]
   })()

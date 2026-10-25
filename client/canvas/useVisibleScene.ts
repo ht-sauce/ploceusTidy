@@ -1,12 +1,11 @@
 /**
- * 可见性：rbush 视口裁剪 + LOD 档位 + 连线筛选。
- * 只输出“当前该画什么”，不持有交互状态。
+ * 可见性：rbush 视口裁剪 + 连线有效性过滤。
+ * 不做远景色点降级——任何缩放都渲染完整对象，只是更小。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import RBush from 'rbush'
 import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasViewport, StageSize } from './types'
-import { LOD_COMPACT, LOD_DOT } from './constants'
 
 interface BoundsItem {
   minX: number
@@ -21,9 +20,6 @@ interface UseVisibleSceneOptions {
   edges: SceneEdge[]
   nodeById: Map<string, SceneNode>
   groupById: Map<string, SceneGroup>
-  selectedSet: Set<string>
-  selectedGroupId: string | null
-  selectedEdgeId: string | null
   viewport: CanvasViewport
   size: StageSize
 }
@@ -33,9 +29,6 @@ export function useVisibleScene({
   edges,
   nodeById,
   groupById,
-  selectedSet,
-  selectedGroupId,
-  selectedEdgeId,
   viewport,
   size,
 }: UseVisibleSceneOptions) {
@@ -75,45 +68,11 @@ export function useVisibleScene({
     }
   }, [nodes, rbush, size.height, size.width, viewport])
 
-  const lod = viewport.scale < LOD_DOT
-  const compact = !lod && viewport.scale < LOD_COMPACT
-
+  // 连线数量远小于对象，全部保留：缩小后仍能看到完整关系网。
   const visibleEdges = useMemo(() => {
     const exists = (id: string) => nodeById.has(id) || groupById.has(id)
-    const valid = edges.filter((edge) => exists(edge.from) && exists(edge.to))
-    // 低缩放时线条会淹没色点：有选中就只画相关连线，没选中全部隐藏。
-    if (viewport.scale < 0.62) {
-      if (selectedSet.size === 0 && !selectedEdgeId && !selectedGroupId) return []
-      return valid.filter(
-        (edge) =>
-          selectedSet.has(edge.from) ||
-          selectedSet.has(edge.to) ||
-          edge.from === selectedGroupId ||
-          edge.to === selectedGroupId ||
-          edge.id === selectedEdgeId,
-      )
-    }
-    // 正常缩放下始终画全部连线，避免「选中一个对象后其他连线凭空消失」。
-    const visibleIds = new Set(visibleNodes.map((node) => node.id))
-    return valid.filter(
-      (edge) =>
-        visibleIds.has(edge.from) ||
-        visibleIds.has(edge.to) ||
-        selectedSet.has(edge.from) ||
-        selectedSet.has(edge.to) ||
-        edge.from === selectedGroupId ||
-        edge.to === selectedGroupId,
-    )
-  }, [
-    edges,
-    groupById,
-    nodeById,
-    selectedEdgeId,
-    selectedGroupId,
-    selectedSet,
-    viewport.scale,
-    visibleNodes,
-  ])
+    return edges.filter((edge) => exists(edge.from) && exists(edge.to))
+  }, [edges, groupById, nodeById])
 
-  return { visibleNodes, visibleEdges, lod, compact }
+  return { visibleNodes, visibleEdges }
 }

@@ -1,24 +1,31 @@
 /**
- * 单个画布对象的图形：图标格 / 远景色点、名称、缺失徽标、标注条、四向连线锚点。
- * 只负责绘制与事件上报，不持有场景状态。
+ * 单个画布对象的图形：图标格、名称、缺失徽标、标注条、四向连线锚点。
+ * 任何缩放级别都渲染完整对象，不做远景色点降级；只负责绘制与事件上报。
  */
 import { Circle, Group, Image as KonvaImage, Label, Rect, Tag, Text } from 'react-konva'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import type { HandleSide, CanvasTokens } from './constants'
-import { HANDLE_SIDES } from './constants'
-import { annotationTone, displayName, handlePoint, lodColor } from './geometry'
+import {
+  HANDLE_SIDES,
+  NAME_LINE_BUDGET,
+  NODE_ANNOTATION_HEIGHT,
+  NODE_ICON_SIZE,
+  NODE_ICON_TOP,
+  NODE_LINE_HEIGHT,
+} from './constants'
+import { annotationTone, displayName, handlePoint } from './geometry'
 import type { SceneAnnotation, SceneNode } from '@/types/scene'
 
 interface NodeShapeProps {
   node: SceneNode
+  /** 展示高度：按名称行数与标注自适应，来自 `nodeDisplayHeight`。 */
+  height: number
   annotation?: SceneAnnotation
   icon?: HTMLImageElement
   thumb?: HTMLImageElement | null
   selected: boolean
   singleSelected: boolean
-  lod: boolean
-  compact: boolean
   tokens: CanvasTokens
   registerRef: (instance: Konva.Group | null) => void
   onPointerDown: (event: KonvaEventObject<MouseEvent>, node: SceneNode) => void
@@ -33,13 +40,12 @@ interface NodeShapeProps {
 
 export default function NodeShape({
   node,
+  height,
   annotation,
   icon,
   thumb,
   selected,
   singleSelected,
-  lod,
-  compact,
   tokens,
   registerRef,
   onPointerDown,
@@ -51,34 +57,17 @@ export default function NodeShape({
   onAnnotation,
   onHandleDown,
 }: NodeShapeProps) {
-  if (lod) {
-    return (
-      <Group
-        x={node.x}
-        y={node.y}
-        onClick={(event) => onClick(event, node)}
-        onContextMenu={(event) => onContextMenu(event, node)}
-      >
-        <Rect
-          width={node.w}
-          height={node.h}
-          fill={lodColor(node)}
-          cornerRadius={2}
-          opacity={0.85}
-        />
-      </Group>
-    )
-  }
-
-  const iconSize = compact ? 24 : 32
-  // 有标注时名称收成单行，把卡片底边让给标注条。
-  const labelHeight = compact ? 14 : annotation ? 15 : 28
+  const label = displayName(node.name)
+  // 名称最多两行；卡片高度已按行数让出空间，不再为标注压缩名称。
+  const lines = label.includes('\n')
+    ? 2
+    : Math.min(2, Math.ceil(Array.from(label).length / NAME_LINE_BUDGET))
+  const labelHeight = lines * NODE_LINE_HEIGHT
   const showIcon = Boolean(thumb || icon)
-  // 图标尚未就绪时不能留 38px 空洞，否则名称会跑到选中框外，看起来像选框错位。
-  const iconY = compact ? 2 : 3
-  const labelY = showIcon ? iconY + iconSize + 1 : compact ? 4 : 6
-  const showHandles = selected && singleSelected && !compact
-  const tone = annotation ? annotationTone(annotation.color) : null
+  const iconY = NODE_ICON_TOP
+  const labelY = showIcon ? iconY + NODE_ICON_SIZE + 1 : 6
+  const showHandles = selected && singleSelected
+  const tone = annotation ? annotationTone(tokens.primary) : null
 
   return (
     <Group
@@ -86,7 +75,7 @@ export default function NodeShape({
       x={node.x}
       y={node.y}
       width={node.w}
-      height={node.h}
+      height={height}
       onMouseDown={(event) => onPointerDown(event, node)}
       onClick={(event) => onClick(event, node)}
       onDblClick={() => onDblClick(node)}
@@ -97,19 +86,19 @@ export default function NodeShape({
       {selected ? (
         <Rect
           width={node.w}
-          height={node.h}
+          height={height}
           fill={tokens.selectedBg}
           stroke={tokens.primary}
-          strokeWidth={1}
+          strokeWidth={1.5}
           cornerRadius={6}
         />
       ) : null}
       {thumb || icon ? (
         <KonvaImage
           image={(thumb ?? icon) as HTMLImageElement}
-          width={iconSize}
-          height={iconSize}
-          x={(node.w - iconSize) / 2}
+          width={NODE_ICON_SIZE}
+          height={NODE_ICON_SIZE}
+          x={(node.w - NODE_ICON_SIZE) / 2}
           y={iconY}
         />
       ) : null}
@@ -117,13 +106,13 @@ export default function NodeShape({
         width={node.w}
         height={labelHeight}
         y={labelY}
-        text={displayName(node.name)}
-        fontSize={compact ? 10.5 : 11}
+        text={label}
+        fontSize={11}
         fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
         fill={tokens.text}
         align="center"
         wrap="word"
-        ellipsis={!compact}
+        ellipsis
         lineHeight={1.2}
       />
       {!node.isExists ? (
@@ -143,10 +132,10 @@ export default function NodeShape({
         />
       ) : null}
       {annotation && tone ? (
-        // 标注条骑在卡片下边框上：文字压在框线之上可见，又不会脱离对象。
+        // 标注条骑在下边框上：文字压在框线之上，颜色跟随主题主色。
         <Label
           x={2}
-          y={node.h - 10}
+          y={height - NODE_ANNOTATION_HEIGHT + 2}
           onClick={(event) => {
             event.cancelBubble = true
             onAnnotation(annotation)
@@ -167,7 +156,7 @@ export default function NodeShape({
       ) : null}
       {showHandles
         ? HANDLE_SIDES.map((side) => {
-            const point = handlePoint(node, side)
+            const point = handlePoint({ w: node.w, h: height }, side)
             return (
               <Circle
                 key={`handle-${side}`}

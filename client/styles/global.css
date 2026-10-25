@@ -2,24 +2,24 @@
   /* 语义令牌：四套主题只覆盖这一组变量，旧变量名保留为别名。 */
   --primary: #756e87;
   --primary-hover: #625b73;
-  --selected-bg: #eeeaf3;
-  --hover-bg: #f5f2f8;
-  --canvas-bg: #f8f7fa;
+  --selected-bg: #e9e4f0;
+  --hover-bg: #f3eff7;
+  --canvas-bg: #f7f6f9;
   --surface: #fcfbfd;
-  --border: #e4e0e8;
-  --text: #30343a;
-  --text-secondary: #747a83;
+  --border: #d6d0de;
+  --text: #262a31;
+  --text-secondary: #5f6670;
   --error: #c44b52;
   --warning: #9a6b24;
   --success: #4f7663;
 
-  --bg: #f1f0f3;
+  --bg: #f0eef3;
   --paper: var(--surface);
   --panel: var(--surface);
   --line: var(--border);
-  --line-strong: color-mix(in srgb, var(--border) 70%, var(--text-secondary));
+  --line-strong: color-mix(in srgb, var(--border) 62%, var(--text-secondary));
   --muted: var(--text-secondary);
-  --faint: #9299a2;
+  --faint: #7f868f;
   --accent: var(--primary);
   --accent-soft: var(--selected-bg);
   --danger: var(--error);
@@ -31,31 +31,31 @@
 :root[data-theme='slate-blue'] {
   --primary: #536b82;
   --primary-hover: #455d74;
-  --selected-bg: #e9eff4;
-  --hover-bg: #f1f5f8;
-  --canvas-bg: #f7f8fa;
+  --selected-bg: #e4ecf2;
+  --hover-bg: #eef3f7;
+  --canvas-bg: #f6f7f9;
   --surface: #fcfdfe;
-  --border: #dde3e8;
+  --border: #cfd8df;
 }
 
 :root[data-theme='reed-green'] {
   --primary: #647a70;
   --primary-hover: #52675f;
-  --selected-bg: #eaf0ec;
-  --hover-bg: #f2f6f3;
-  --canvas-bg: #f7f9f7;
+  --selected-bg: #e4ede7;
+  --hover-bg: #eff4f1;
+  --canvas-bg: #f6f8f6;
   --surface: #fcfdfc;
-  --border: #dfe6e1;
+  --border: #d2ddd5;
 }
 
 :root[data-theme='graphite'] {
   --primary: #62666d;
   --primary-hover: #50545b;
-  --selected-bg: #eceef1;
-  --hover-bg: #f3f4f6;
-  --canvas-bg: #f7f8f9;
+  --selected-bg: #e8eaee;
+  --hover-bg: #f1f2f4;
+  --canvas-bg: #f6f7f8;
   --surface: #fcfcfd;
-  --border: #e1e4e7;
+  --border: #d5d9dd;
 }
 
 * {
@@ -594,19 +594,62 @@ button {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  /* 标注跟随主题主色，和画布上的标注条保持一致。 */
+  background: var(--primary);
 }
 
-.annotation-color.amber {
-  background: #8a6420;
+.color-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
-.annotation-color.red {
-  background: #a0443c;
+
+.color-picker-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
-.annotation-color.blue {
-  background: #3f6285;
+
+.neighbor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
 }
-.annotation-color.teal {
-  background: #356b5b;
+
+.neighbor-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  background: var(--hover-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.neighbor-option:hover {
+  border-color: var(--primary);
+}
+
+.neighbor-kind {
+  flex: none;
+  padding: 1px 5px;
+  color: var(--primary);
+  font-size: 10px;
+  background: var(--selected-bg);
+  border-radius: 3px;
+}
+
+.neighbor-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .empty-overlay {

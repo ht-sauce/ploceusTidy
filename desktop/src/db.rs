@@ -45,7 +45,7 @@ impl AppState {
 }
 
 /// 当前 schema 版本；迁移按 `PRAGMA user_version` 递增执行。
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// 初始化表结构；只做 `CREATE ... IF NOT EXISTS`，不破坏已有数据。
 /// 关系表使用复合主键，`refs` 只在文件/文件夹上建立部分唯一索引用于去重。
@@ -73,6 +73,7 @@ fn schema() -> &'static str {
     CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
+        color TEXT,
         x REAL NOT NULL,
         y REAL NOT NULL,
         w REAL NOT NULL,
@@ -178,6 +179,7 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
         ("nodes", "z", "INTEGER NOT NULL DEFAULT 0"),
         ("nodes", "parent_node_id", "TEXT"),
         ("nodes", "data_json", "TEXT"),
+        ("groups", "color", "TEXT"),
         ("edges", "from_handle", "TEXT"),
         ("edges", "to_handle", "TEXT"),
         ("edges", "label", "TEXT"),
@@ -308,17 +310,18 @@ pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
     drop(node_statement);
 
     let mut group_statement = connection
-        .prepare("SELECT id, title, x, y, w, h FROM groups")
+        .prepare("SELECT id, title, color, x, y, w, h FROM groups")
         .map_err(|error| format!("读取分组失败：{error}"))?;
     let groups = group_statement
         .query_map([], |row| {
             Ok(crate::models::SceneGroup {
                 id: row.get(0)?,
                 title: row.get(1)?,
-                x: row.get(2)?,
-                y: row.get(3)?,
-                w: row.get(4)?,
-                h: row.get(5)?,
+                color: row.get(2)?,
+                x: row.get(3)?,
+                y: row.get(4)?,
+                w: row.get(5)?,
+                h: row.get(6)?,
             })
         })
         .map_err(|error| format!("读取分组失败：{error}"))?
@@ -544,10 +547,11 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
         let mut upsert_group = transaction
             .prepare(
                 r#"
-                INSERT INTO groups (id, title, x, y, w, h, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+                INSERT INTO groups (id, title, color, x, y, w, h, created_at, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
+                    color = excluded.color,
                     x = excluded.x,
                     y = excluded.y,
                     w = excluded.w,
@@ -565,6 +569,7 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
                 .execute(params![
                     &group.id,
                     &group.title,
+                    &group.color,
                     group.x,
                     group.y,
                     group.w,

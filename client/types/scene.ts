@@ -44,7 +44,10 @@ export interface SceneNode {
 /** 分组框：独立存储，节点通过 `groupId` 归属，坐标始终为世界坐标。 */
 export interface SceneGroup {
   id: string
+  /** 空间标题即空间标注，可由用户重命名。 */
   title: string
+  /** 空间主色（#RRGGBB）；为空时回退主题主色。 */
+  color?: string
   x: number
   y: number
   w: number

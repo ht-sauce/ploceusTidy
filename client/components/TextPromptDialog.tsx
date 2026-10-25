@@ -1,29 +1,35 @@
 /**
- * 连线标签编辑弹窗：双击连线或右键菜单触发，留空表示清除标签。
+ * 通用文本输入弹窗：连线标签、空间标题等单行文本编辑共用。
+ * 通过 `open` 控制显示，调用方用 key 重建以带入初始值。
  */
 import { Input, Modal } from 'antd'
 import { useState } from 'react'
 
-interface EdgeLabelDialogProps {
-  /** 非空表示弹窗打开，值为连线 ID。 */
-  edgeId: string | null
+interface TextPromptDialogProps {
+  open: boolean
+  title: string
+  placeholder: string
   initialText: string
+  maxLength?: number
   onCancel: () => void
   onSave: (text: string) => void
 }
 
-export default function EdgeLabelDialog({
-  edgeId,
+export default function TextPromptDialog({
+  open,
+  title,
+  placeholder,
   initialText,
+  maxLength = 32,
   onCancel,
   onSave,
-}: EdgeLabelDialogProps) {
+}: TextPromptDialogProps) {
   const [text, setText] = useState(initialText)
 
   return (
     <Modal
-      open={edgeId !== null}
-      title="连线标签"
+      open={open}
+      title={title}
       okText="保存"
       cancelText="取消"
       onOk={() => onSave(text)}
@@ -34,8 +40,8 @@ export default function EdgeLabelDialog({
       <Input
         value={text}
         onChange={(event) => setText(event.target.value)}
-        placeholder="留空则清除标签"
-        maxLength={24}
+        placeholder={placeholder}
+        maxLength={maxLength}
         onPressEnter={() => onSave(text)}
       />
     </Modal>
