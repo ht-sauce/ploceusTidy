@@ -328,21 +328,21 @@ button {
   cursor: grabbing;
 }
 
-/* 文字卡片在画布上原地编辑，位置与缩放随视口走。 */
-.canvas-text-editor {
-  position: absolute;
-  z-index: 25;
-  padding: 5px 6px;
-  border: 1px solid var(--primary);
+/* 富文本弹窗内的编辑器：工具栏贴顶，正文区固定高度内滚动。 */
+.rich-editor {
+  border: 1px solid var(--border);
   border-radius: 6px;
+  overflow: hidden;
+}
+
+.rich-editor-toolbar {
+  border-bottom: 1px solid var(--border);
+}
+
+.rich-editor-body {
+  height: 420px;
+  overflow-y: auto;
   background: var(--surface);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-  color: var(--text);
-  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
-  font-size: 12px;
-  line-height: 1.5;
-  resize: none;
-  outline: none;
 }
 
 .tile-tooltip-detail {

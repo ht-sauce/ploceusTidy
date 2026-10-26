@@ -1,0 +1,5 @@
+# pnpm 12 起，依赖构建脚本白名单统一放在本文件，package.json 的 pnpm 字段不再被读取。
+# es5-ext 是 wangEditor 富文本编辑器的传递依赖，其 postinstall 只在终端打印赞助提示、
+# 不产出任何构建产物，因此显式拒绝执行；未列出的包会因 strictDepBuilds 直接中断安装。
+allowBuilds:
+  es5-ext: false

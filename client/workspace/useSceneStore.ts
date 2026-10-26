@@ -112,7 +112,11 @@ export interface SceneStore {
   addAnnotation: (targetIds?: string[]) => void
   saveAnnotation: (text: string) => void
   removeAnnotation: () => void
-  commitText: (id: string, text: string, live?: boolean) => void
+  /**
+   * 提交文字/富文本内容：`plain` 决定卡片名称与副标题（取首个非空行），`body` 是持久化内容
+   * （纯文本即原文，富文本为 HTML）。空内容视为放弃修改，保留原文，避免误删。
+   */
+  commitContent: (id: string, body: string, plain: string, live?: boolean) => void
   toggleEdgeLabel: (id: string, label: string) => void
 }
 
@@ -808,24 +812,25 @@ export function useSceneStore(): SceneStore {
   }, [activeAnnotation, annotatedIds, nodeById, nodes, refitGroupsOf])
 
   /**
-   * 文字卡片在画布上直接编辑：`live` 为真时只同步显示，收尾时才判定是否保存。
+   * 内容写回节点：`live` 为真时只同步显示，收尾时才判定是否保存。
    * 空内容视为放弃修改，保留原文，避免误删。
    */
-  const commitText = useCallback(
-    (id: string, text: string, live = false) => {
-      setNodes((previous) =>
-        previous.map((node) => {
-          if (node.id !== id) return node
-          if (!live && (text.trim() === '' || text.trim() === (node.body ?? ''))) return node
-          const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
-          return { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
-        }),
-      )
-      // 收尾保存时名称可能改变行数 → 成员高度变化，所属空间重新贴合。
+  const commitContent = useCallback(
+    (id: string, body: string, plain: string, live = false) => {
+      if (!live && plain.trim() === '') return
       const node = nodes.find((item) => item.id === id)
-      if (!live && node?.groupId && text.trim() !== '' && text.trim() !== (node.body ?? '')) {
-        const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
-        const changed = { ...node, name: firstLine.slice(0, 28), subtitle: text, body: text }
+      if (!node) return
+      if (node.body === body && node.subtitle === plain) return
+      const firstLine = plain.split('\n').find((line) => line.trim()) ?? '新文字'
+      const changed: SceneNode = {
+        ...node,
+        name: firstLine.trim().slice(0, 28),
+        subtitle: plain,
+        body,
+      }
+      setNodes((previous) => previous.map((item) => (item.id === id ? changed : item)))
+      // 收尾保存时名称可能改变行数 → 成员高度变化，所属空间重新贴合。
+      if (!live && node.groupId) {
         refitGroupsOf(
           nodes.map((item) => (item.id === id ? changed : item)),
           new Set([node.groupId]),
@@ -893,7 +898,7 @@ export function useSceneStore(): SceneStore {
     addAnnotation,
     saveAnnotation,
     removeAnnotation,
-    commitText,
+    commitContent,
     toggleEdgeLabel,
   }
 }

@@ -26,6 +26,7 @@ const KINDS: SystemIconKind[] = [
   'txt',
   'link',
   'text',
+  'rich',
 ]
 
 export function startIconLoad(onSettled: () => void) {

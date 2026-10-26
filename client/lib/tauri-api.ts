@@ -177,6 +177,16 @@ export const desktopApi = {
   openRef: (nodeId: string) => invoke<void>('open_ref', { nodeId }),
   /** 在资源管理器中定位节点对应的文件。 */
   revealRef: (nodeId: string) => invoke<void>('reveal_ref', { nodeId }),
+  /**
+   * 复制原文件到剪贴板（Windows CF_HDROP）：粘贴到资源管理器或 IDE 即可拿到原始地址。
+   * 只传节点 ID，路径由 Rust 侧查库解析；返回实际写入剪贴板的文件数。
+   */
+  copyRefFiles: (nodeIds: string[]) => invoke<number>('copy_ref_files', { nodeIds }),
+  /**
+   * 把原文件拖到外部程序（Windows OLE DoDragDrop）。命令会阻塞到拖放结束，
+   * 因此不在前端等待结果，直接按「发出即成功」处理，失败由命令层返回原因。
+   */
+  startDragOut: (nodeIds: string[]) => invoke<void>('drag_out_refs', { nodeIds }),
   /** 把粘贴的截图写入 dataWorkSpace/assets，返回落盘路径。 */
   saveClipboardImage: (data: string, ext: string) =>
     invoke<string>('save_clipboard_image', { data, ext }),

@@ -1,4 +1,4 @@
-﻿# 04-data-model.md · 数据模型
+﻿﻿# 04-data-model.md · 数据模型
 
 ## 1. dataWorkSpace
 
@@ -66,11 +66,11 @@ dataWorkSpace/
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID |
-| `type` | TEXT | `file` / `folder` / `image` / `video` / `text` / `link` |
+| `type` | TEXT | `file` / `folder` / `image` / `video` / `text` / `link` / `richtext` |
 | `icon` | TEXT | 展示用系统图标种类，不参与业务判断 |
 | `name` | TEXT | 展示名称 |
-| `subtitle` | TEXT NOT NULL DEFAULT '' | 副标题：所在目录或来源 |
-| `body` | TEXT NULL | 文字卡内容 |
+| `subtitle` | TEXT NOT NULL DEFAULT '' | 副标题：所在目录、来源，或富文本的纯文本投影（同时用于搜索） |
+| `body` | TEXT NULL | 文字卡内容；富文本卡存 HTML |
 | `ref_id` | TEXT NULL UNIQUE | 引用；文字卡为空 |
 | `group_id` | TEXT NOT NULL DEFAULT '' | 所属分组框 `groups.id`；空字符串表示未分组 |
 | `z` | INTEGER NOT NULL DEFAULT 0 | 叠放层级 |
@@ -81,6 +81,8 @@ dataWorkSpace/
 | `updated_at` | INTEGER | epoch ms |
 
 - `UNIQUE(ref_id)` 允许 NULL（SQLite 允许多个 NULL）。
+- 文字/富文本/链接没有 `ref_id`：`refs` 仅在 `path` 或 `url` 存在时写入，因此富文本不产生引用行，不占去重索引。
+- 富文本的 `body` 是 HTML，`subtitle` 保存同一内容的纯文本投影；卡片名称与搜索都用投影，避免把标签当成内容（`richtext` 不入库新增字段，`SCHEMA_VERSION` 不变）。
 - 删除分组框时 `group_id` 置空，不删内部节点；`scene_save` 末尾会把指向不存在分组的 `group_id` 归一为空。
 
 ### `edges`

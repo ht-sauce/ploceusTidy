@@ -1,4 +1,4 @@
-﻿# 02-client-architecture.md · 客户端架构
+﻿﻿# 02-client-architecture.md · 客户端架构
 
 ## 1. 运行时
 
@@ -67,7 +67,7 @@ sequenceDiagram
 
 ## 5. 窗口生命周期
 
-- 标准窗口：`decorations: false` 无边框；48px 自定义标题栏承载 logo、居中搜索、新建文字、设置与最小化/最大化/关闭。
+- 标准窗口：`decorations: false` 无边框；48px 自定义标题栏承载 logo、居中搜索、新建内容菜单（纯文本 / 富文本）、设置与最小化/最大化/关闭。
 - 标题栏空白区域标记 `data-tauri-drag-region`，由 Tauri 原生拖动窗口；按钮与输入区域不触发拖动（`core:window:allow-start-dragging`）。
 - 窗口按钮调用 Tauri 窗口 API，权限在 `capabilities/default.json` 显式声明。
 - F12 通过 Rust 命令 `open_devtools` 打开 WebView 开发者工具；`tauri` 启用 `devtools` feature，release 构建同样可用。
@@ -99,6 +99,8 @@ sequenceDiagram
 | `workspace_migrate` | 目标目录 | 复制-校验-切换后的工作空间信息；失败保留旧目录 |
 | `pick_file` / `pick_folder` | 无 | 系统文件/目录选择对话框；取消返回 `null` |
 | `window_set_pin` | pinned | 桌面常驻：窗口压到普通窗口之下 |
+| `copy_ref_files` | nodeId 数组 | 把原文件写入剪贴板（CF_HDROP），返回实际写入数量；路径由 Rust 查库解析 |
+| `drag_out_refs` | nodeId 数组 | 在主线程用 OLE `DoDragDrop` 把原文件拖到外部程序（只声明 COPY）；命令立即返回，不等待拖放结束 |
 | `show_system_menu` | nodeId、x、y | 在主线程弹出 Windows 原生 Shell 右键菜单（IContextMenu + TrackPopupMenuEx），含第三方扩展 |
 | `open_devtools` | 无 | F12 打开开发者工具 |
 
@@ -154,7 +156,6 @@ ploceusTidy/
 │   │   ├── GroupShape.tsx
 │   │   ├── EdgeLayer.tsx
 │   │   ├── Minimap.tsx
-│   │   ├── CanvasTextEditor.tsx
 │   │   ├── geometry.ts
 │   │   ├── icons.tsx
 │   │   ├── constants.ts
@@ -167,6 +168,8 @@ ploceusTidy/
 │   │   ├── StatusBar.tsx
 │   │   ├── EmptyOverlay.tsx
 │   │   ├── TextPromptDialog.tsx
+│   │   ├── TextContentDialog.tsx
+│   │   ├── RichTextDialog.tsx
 │   │   ├── ColorPickerDialog.tsx
 │   │   ├── NeighborPickerDialog.tsx
 │   │   └── SettingsDialog.tsx

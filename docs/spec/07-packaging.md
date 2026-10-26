@@ -1,4 +1,4 @@
-﻿# 07-packaging.md · 打包与运行
+﻿﻿# 07-packaging.md · 打包与运行
 
 ## 1. 目标
 
@@ -10,6 +10,7 @@
 ## 2. 安装形态
 
 - 默认 NSIS 按用户安装（`%LOCALAPPDATA%\Programs\ploceusTidy`）。
+- 安装包语言：`bundle.windows.nsis.languages` 配置 `SimpChinese` + `English`，默认跟随系统语言、命中不到时用第一条；`displayLanguageSelector: true` 先弹语言选择框，中英文用户都能读懂安装流程。
 - WebView2 使用 bootstrapper 下载模式，减小安装包；企业/离线环境可提供离线安装包。
 - 安装目录可写时，`dataWorkSpace` 默认在其下；否则回退 Tauri `app_data_dir\dataWorkSpace`（Windows 通常为 `%APPDATA%\com.ploceus.tidy\dataWorkSpace`）。
 - 安装/升级不得覆盖或删除 `dataWorkSpace`；卸载默认保留，由用户手动清理；安装包需明确提示。

@@ -28,13 +28,15 @@ export function useSearch(
       if (node.groupId) groupCounts.set(node.groupId, (groupCounts.get(node.groupId) ?? 0) + 1)
     })
     nodes.forEach((node) => {
+      // 富文本的 body 是 HTML，检索用纯文本投影，避免标签命中（搜 "div" 不该有结果）。
+      const body = node.kind === 'richtext' ? '' : (node.body ?? '')
       list.push({
         nodeId: node.id,
         type: node.kind,
         title: node.name,
         subtitle: node.path ?? node.url ?? node.subtitle,
         icon: node.icon,
-        searchText: `${node.name} ${node.path ?? ''} ${node.subtitle} ${node.body ?? ''} ${node.url ?? ''}`,
+        searchText: `${node.name} ${node.path ?? ''} ${node.subtitle} ${body} ${node.url ?? ''}`,
         pinyin: pinyinInitials(node.name),
       })
     })

@@ -18,6 +18,8 @@
   "dependencies": {
     "@ant-design/icons": "6.3.4",
     "@tauri-apps/api": "2.12.4",
+    "@wangeditor-next/editor": "6.5.1",
+    "@wangeditor-next/editor-for-react": "6.5.1",
     "antd": "6.6.7",
     "konva": "^10.9.0",
     "pinyin-pro": "3.29.5",

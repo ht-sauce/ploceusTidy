@@ -4,6 +4,31 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+use windows::core::{BOOL, HRESULT, Ref as WinRef};
+#[cfg(windows)]
+use windows::Win32::Foundation::{
+    DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, E_NOTIMPL,
+    E_OUTOFMEMORY, HGLOBAL, OLE_E_ADVISENOTSUPPORTED, S_FALSE, S_OK, TRUE,
+};
+#[cfg(windows)]
+use windows::Win32::System::Com::{
+    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl,
+    IEnumSTATDATA, DATADIR_GET, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+};
+#[cfg(windows)]
+use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+#[cfg(windows)]
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+#[cfg(windows)]
+use windows::Win32::System::Ole::{
+    IDropSource, IDropSource_Impl, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY,
+};
+#[cfg(windows)]
+use windows::Win32::System::SystemServices::{MK_LBUTTON, MK_RBUTTON, MODIFIERKEYS_FLAGS};
+#[cfg(windows)]
+use windows::Win32::UI::Shell::{CFSTR_PREFERREDDROPEFFECT, DROPFILES};
+
 /// 当前时间（epoch 毫秒），用于 `created_at` / `updated_at`。
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -503,4 +528,320 @@ unsafe fn show_system_context_menu_blocking(
 #[cfg(not(windows))]
 pub fn show_system_context_menu(_hwnd: isize, _path: &str, _x: i32, _y: i32) -> Result<(), String> {
     Err("当前版本仅支持 Windows 系统右键菜单".to_string())
+}
+
+/// 把文件绝对路径写入剪贴板（CF_HDROP）。粘贴到资源管理器或 IDE 即得到原文件地址。
+/// 只在用户主动触发时调用；失败按 HC-14 带原因返回。
+#[cfg(windows)]
+pub fn set_clipboard_files(paths: &[String]) -> Result<(), String> {
+    use clipboard_win::{formats::FileList, Clipboard, Setter};
+
+    if paths.is_empty() {
+        return Err("没有可复制到剪贴板的文件".to_string());
+    }
+    // 剪贴板是全局独占资源：对象必须存活到写完，Drop 时才释放锁。
+    let clipboard =
+        Clipboard::new_attempts(10).map_err(|error| format!("打开剪贴板失败：{error}"))?;
+    FileList
+        .write_clipboard(paths)
+        .map_err(|error| format!("写入剪贴板文件列表失败：{error}"))?;
+    drop(clipboard);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn set_clipboard_files(_paths: &[String]) -> Result<(), String> {
+    Err("当前版本仅支持 Windows 剪贴板文件写入".to_string())
+}
+
+/// 以 OLE DoDragDrop 把文件拖出窗口：必须运行在窗口所属主线程（内部会跑模态拖放循环）。
+/// 只声明 COPY 效果，绝不产生「移动」语义。
+#[cfg(windows)]
+pub fn start_file_drag(hwnd: isize, paths: Vec<String>) -> Result<(), String> {
+    use windows::Win32::Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, S_OK};
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::System::Ole::{DoDragDrop, DROPEFFECT, DROPEFFECT_COPY};
+
+    // 拖放不需要窗口句柄：OLE 靠鼠标捕获跟踪轨迹；保留参数以便与命令签名一致。
+    let _ = hwnd;
+    if paths.is_empty() {
+        return Err("没有可拖出的文件".to_string());
+    }
+
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
+    let result = (|| -> Result<(), String> {
+        let data_object: IDataObject = HdropDataObject { paths }.into();
+        let drop_source: IDropSource = FileDropSource.into();
+        let mut effect = DROPEFFECT::default();
+        let outcome = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect) };
+        // 用户松手（DROP）或按 Esc 取消（CANCEL）都算正常结束，只有真失败才上报。
+        if outcome == DRAGDROP_S_DROP || outcome == DRAGDROP_S_CANCEL || outcome == S_OK {
+            return Ok(());
+        }
+        Err(format!("拖出文件失败：{outcome:?}"))
+    })();
+
+    if initialized {
+        unsafe { CoUninitialize() };
+    }
+    result
+}
+
+#[cfg(not(windows))]
+pub fn start_file_drag(_hwnd: isize, _paths: Vec<String>) -> Result<(), String> {
+    Err("当前版本仅支持 Windows 拖出文件".to_string())
+}
+
+/// 拖放数据对象：只提供 `CF_HDROP`（文件列表）与 `CFSTR_PREFERREDDROPEFFECT`（声明 COPY），
+/// 其余格式一律拒绝，避免外部程序索取到非预期数据。
+#[cfg(windows)]
+#[windows::core::implement(IDataObject)]
+struct HdropDataObject {
+    paths: Vec<String>,
+}
+
+#[cfg(windows)]
+impl IDataObject_Impl for HdropDataObject_Impl {
+    fn GetData(&self, pformatetcin: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        if pformatetcin.is_null() {
+            return Err(DV_E_FORMATETC.into());
+        }
+        let format = unsafe { *pformatetcin };
+        let hglobal = if format.cfFormat == CF_HDROP.0 {
+            build_hdrop(&self.paths)?
+        } else if format.cfFormat == preferred_drop_effect_format() {
+            alloc_hglobal(&DROPEFFECT_COPY.0.to_ne_bytes())?
+        } else {
+            return Err(DV_E_FORMATETC.into());
+        };
+        Ok(STGMEDIUM {
+            tymed: TYMED_HGLOBAL.0 as u32,
+            u: STGMEDIUM_0 { hGlobal: hglobal },
+            // 所有权交给调用方，不随 STGMEDIUM 释放。
+            pUnkForRelease: Default::default(),
+        })
+    }
+
+    fn GetDataHere(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *mut STGMEDIUM,
+    ) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn QueryGetData(&self, pformatetc: *const FORMATETC) -> HRESULT {
+        if pformatetc.is_null() {
+            return DV_E_FORMATETC;
+        }
+        let format = unsafe { *pformatetc };
+        if format.cfFormat == CF_HDROP.0 || format.cfFormat == preferred_drop_effect_format() {
+            S_OK
+        } else {
+            DV_E_FORMATETC
+        }
+    }
+
+    fn GetCanonicalFormatEtc(
+        &self,
+        _pformatectin: *const FORMATETC,
+        _pformatetcout: *mut FORMATETC,
+    ) -> HRESULT {
+        E_NOTIMPL
+    }
+
+    fn SetData(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *const STGMEDIUM,
+        _frelease: BOOL,
+    ) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn EnumFormatEtc(&self, dwdirection: u32) -> windows::core::Result<IEnumFORMATETC> {
+        if dwdirection != DATADIR_GET.0 as u32 {
+            return Err(E_NOTIMPL.into());
+        }
+        let enumerator = FormatEtcEnumerator {
+            formats: supported_formats(),
+            index: std::sync::Mutex::new(0),
+        };
+        Ok(enumerator.into())
+    }
+
+    fn DAdvise(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _advf: u32,
+        _padvsink: WinRef<'_, IAdviseSink>,
+    ) -> windows::core::Result<u32> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn DUnadvise(&self, _dwconnection: u32) -> windows::core::Result<()> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn EnumDAdvise(&self) -> windows::core::Result<IEnumSTATDATA> {
+        Err(OLE_E_ADVISENOTSUPPORTED.into())
+    }
+}
+
+/// 拖放数据源的格式枚举器：只枚举固定两种格式，游标仅可前移与复位。
+#[cfg(windows)]
+#[windows::core::implement(IEnumFORMATETC)]
+struct FormatEtcEnumerator {
+    formats: Vec<FORMATETC>,
+    index: std::sync::Mutex<usize>,
+}
+
+#[cfg(windows)]
+impl IEnumFORMATETC_Impl for FormatEtcEnumerator_Impl {
+    fn Next(&self, celt: u32, rgelt: *mut FORMATETC, pceltfetched: *mut u32) -> HRESULT {
+        // 互斥量中毒只说明别的线程 panic 过，游标本身仍可用，取回内部值继续。
+        let mut index = self
+            .index
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let start = *index;
+        let remaining = self.formats.len().saturating_sub(start);
+        let count = (celt as usize).min(remaining);
+        for offset in 0..count {
+            unsafe { rgelt.add(offset).write(self.formats[start + offset]) };
+        }
+        *index += count;
+        if !pceltfetched.is_null() {
+            unsafe { pceltfetched.write(count as u32) };
+        }
+        // 请求多于剩余即为部分成功，按 COM 约定返回 S_FALSE。
+        if count == celt as usize {
+            S_OK
+        } else {
+            S_FALSE
+        }
+    }
+
+    fn Skip(&self, celt: u32) -> windows::core::Result<()> {
+        let mut index = self
+            .index
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let remaining = self.formats.len().saturating_sub(*index);
+        if (celt as usize) > remaining {
+            *index += remaining;
+            return Err(S_FALSE.into());
+        }
+        *index += celt as usize;
+        Ok(())
+    }
+
+    fn Reset(&self) -> windows::core::Result<()> {
+        *self
+            .index
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = 0;
+        Ok(())
+    }
+
+    fn Clone(&self) -> windows::core::Result<IEnumFORMATETC> {
+        let index = *self
+            .index
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let clone = FormatEtcEnumerator {
+            formats: self.formats.clone(),
+            index: std::sync::Mutex::new(index),
+        };
+        Ok(clone.into())
+    }
+}
+
+/// 拖放源：Esc / 右键取消，左键松开落点，全程使用系统默认拖放光标。
+#[cfg(windows)]
+#[windows::core::implement(IDropSource)]
+struct FileDropSource;
+
+#[cfg(windows)]
+impl IDropSource_Impl for FileDropSource_Impl {
+    fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: MODIFIERKEYS_FLAGS) -> HRESULT {
+        if fescapepressed.as_bool() {
+            return DRAGDROP_S_CANCEL;
+        }
+        if grfkeystate.0 & MK_RBUTTON.0 != 0 {
+            return DRAGDROP_S_CANCEL;
+        }
+        if grfkeystate.0 & MK_LBUTTON.0 == 0 {
+            return DRAGDROP_S_DROP;
+        }
+        S_OK
+    }
+
+    fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> HRESULT {
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+}
+
+/// 本数据对象支持的格式：CF_HDROP 与 Preferred DropEffect，均为全局内存块。
+#[cfg(windows)]
+fn supported_formats() -> Vec<FORMATETC> {
+    let entry = |cf_format: u16| FORMATETC {
+        cfFormat: cf_format,
+        // 不针对特定输出设备，lindex 用 -1 表示整体。
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    vec![entry(CF_HDROP.0), entry(preferred_drop_effect_format())]
+}
+
+/// 取回 "Preferred DropEffect" 的运行时注册格式 ID（同一进程内恒定）。
+#[cfg(windows)]
+fn preferred_drop_effect_format() -> u16 {
+    unsafe { RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT) as u16 }
+}
+
+/// 按 CF_HDROP 格式打包路径：DROPFILES 头 + 宽字符路径列表 + 结尾双 NUL。
+#[cfg(windows)]
+fn build_hdrop(paths: &[String]) -> windows::core::Result<HGLOBAL> {
+    use std::mem::size_of;
+
+    let header = DROPFILES {
+        pFiles: size_of::<DROPFILES>() as u32,
+        fWide: TRUE,
+        ..Default::default()
+    };
+    let mut bytes = Vec::new();
+    // DROPFILES 是 packed 结构，按字节复制可避开字段对齐问题。
+    unsafe {
+        bytes.extend_from_slice(std::slice::from_raw_parts(
+            &header as *const DROPFILES as *const u8,
+            size_of::<DROPFILES>(),
+        ));
+    }
+    for path in paths {
+        for unit in path.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_ne_bytes());
+        }
+        bytes.extend_from_slice(&0u16.to_ne_bytes());
+    }
+    // 列表末尾需要再补一个终止 NUL。
+    bytes.extend_from_slice(&0u16.to_ne_bytes());
+    alloc_hglobal(&bytes)
+}
+
+/// 把字节写入可移动全局内存块；所有权交给调用方（通常是 STGMEDIUM）。
+#[cfg(windows)]
+fn alloc_hglobal(bytes: &[u8]) -> windows::core::Result<HGLOBAL> {
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, bytes.len())?;
+        let target = GlobalLock(handle);
+        if target.is_null() {
+            return Err(E_OUTOFMEMORY.into());
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), target as *mut u8, bytes.len());
+        let _ = GlobalUnlock(handle);
+        Ok(handle)
+    }
 }

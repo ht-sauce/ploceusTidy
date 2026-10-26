@@ -25,7 +25,8 @@ export function useNodeActions({
 }: NodeActionsOptions) {
   const openNode = useCallback(
     async (node: SceneNode) => {
-      if (node.kind === 'text') {
+      // 文字与富文本是应用内内容，没有原文件，打开即进入内容编辑弹窗。
+      if (node.kind === 'text' || node.kind === 'richtext') {
         editText(node.id)
         return
       }
@@ -56,7 +57,7 @@ export function useNodeActions({
 
   const reveal = useCallback(
     async (node: SceneNode) => {
-      if (node.kind === 'text' || node.kind === 'link') return
+      if (!node.path) return
       if (isDesktopClient) {
         try {
           await desktopApi.revealRef(node.id)

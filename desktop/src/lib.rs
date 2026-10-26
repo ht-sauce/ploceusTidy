@@ -200,6 +200,64 @@ fn show_system_menu(
         .map_err(|error| format!("调度系统菜单失败：{error}"))
 }
 
+/// 把多个 `nodeId` 解析为存在且不重复的原文件路径；逐个查库，不长期持锁。
+/// 缺失引用与不存在的文件直接跳过；一律不修改用户文件（HC-12）。
+fn resolve_existing_paths(
+    state: &State<'_, AppState>,
+    node_ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for node_id in node_ids {
+        let (path, _url) = db::node_target(state, node_id)?;
+        let Some(path) = path else { continue };
+        if !Path::new(&path).exists() {
+            continue;
+        }
+        if seen.insert(platform::normalize_path_key(Path::new(&path))) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+/// 复制节点对应的原文件到剪贴板；只按 nodeId 查库解析路径，不接受前端传入的路径。
+#[tauri::command]
+fn copy_ref_files(state: State<'_, AppState>, node_ids: Vec<String>) -> Result<usize, String> {
+    let paths = resolve_existing_paths(&state, &node_ids)?;
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    platform::set_clipboard_files(&paths)?;
+    Ok(paths.len())
+}
+
+/// 把节点对应的原文件拖出窗口：路径解析在命令线程完成，真正的拖放在主线程执行。
+/// 拖放会阻塞到用户松手，因此命令立即返回，不等待拖放结果。
+#[tauri::command]
+fn drag_out_refs(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    node_ids: Vec<String>,
+) -> Result<(), String> {
+    let paths = resolve_existing_paths(&state, &node_ids)?;
+    if paths.is_empty() {
+        return Err("选中的对象没有可拖出的原文件".to_string());
+    }
+    let hwnd = window
+        .hwnd()
+        .map_err(|error| format!("获取窗口句柄失败：{error}"))?;
+    let raw_hwnd = hwnd.0 as isize;
+    // DoDragDrop 会跑自己的模态拖放循环，必须放主线程；命令本身立即返回。
+    window
+        .run_on_main_thread(move || {
+            if let Err(error) = platform::start_file_drag(raw_hwnd, paths) {
+                eprintln!("拖出文件失败：{error}");
+            }
+        })
+        .map_err(|error| format!("调度拖出文件失败：{error}"))
+}
+
 /// 读取应用配置；主题、桌面常驻等开关都存 `app_meta`，不散落在前端存储。
 #[tauri::command]
 fn meta_get(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
@@ -371,6 +429,8 @@ pub fn run() {
             thumb_get,
             window_set_pin,
             show_system_menu,
+            copy_ref_files,
+            drag_out_refs,
             pick_file,
             pick_folder,
         ])

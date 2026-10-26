@@ -30,7 +30,6 @@ import type { KonvaEventObject } from 'konva/lib/Node'
 import { Arrow, Circle, Label, Layer, Line, Rect, Stage, Tag, Text } from 'react-konva'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode, ThemeId } from '@/types/scene'
 import { themeById } from '@/lib/theme'
-import CanvasTextEditor from './CanvasTextEditor'
 import EdgeLayer from './EdgeLayer'
 import GroupShape from './GroupShape'
 import Minimap from './Minimap'
@@ -73,7 +72,10 @@ interface CanvasBoardProps {
   onConnect: (from: string, to: string) => void
   onAnnotation: (annotation: SceneAnnotation) => void
   onActivate: (id: string) => void
-  onTextCommit: (id: string, text: string, live?: boolean) => void
+  /** 双击文字/富文本：打开内容编辑弹窗。 */
+  onEditContent: (id: string) => void
+  /** Ctrl + 拖拽文件卡：把原文件拖到外部程序。 */
+  onDragOut: (ids: string[]) => void
   onScaleChange: (scale: number) => void
   /** 双击空间标题：进入重命名。 */
   onGroupTitleEdit: (id: string) => void
@@ -92,7 +94,8 @@ export interface CanvasBoardHandle {
   fitView: () => void
   zoomBy: (factor: number) => void
   getCenterWorld: () => { x: number; y: number }
-  editText: (id: string) => void
+  /** 鼠标在画布上的最后位置（世界坐标）；指针从未进入画布时为 null。 */
+  getPointerWorld: () => { x: number; y: number } | null
 }
 
 const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function CanvasBoard(
@@ -118,7 +121,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onConnect,
     onAnnotation,
     onActivate,
-    onTextCommit,
+    onEditContent,
+    onDragOut,
     onScaleChange,
     onGroupTitleEdit,
     onContextMenu,
@@ -292,6 +296,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onMoveNodes,
     onConnect,
     onActivate,
+    onEditContent,
+    onDragOut,
     onContextMenu,
   })
 
@@ -379,9 +385,9 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       fitView,
       zoomBy,
       getCenterWorld,
-      editText: interactions.editText,
+      getPointerWorld: interactions.getPointerWorld,
     }),
-    [fitView, getCenterWorld, interactions.editText, locateEdge, locateTarget, zoomBy],
+    [fitView, getCenterWorld, interactions.getPointerWorld, locateEdge, locateTarget, zoomBy],
   )
 
   // 定位后的脉冲高亮：只对当前定位对象做一次淡出，不持续渲染；窗口不可见时跳过。
@@ -478,7 +484,6 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     [minimapBounds, size.height, size.width, setViewport],
   )
 
-  const editorNode = interactions.editor ? (nodeById.get(interactions.editor) ?? null) : null
   const activeGroup = selectedGroupId ? (groupById.get(selectedGroupId) ?? null) : null
 
   return (
@@ -741,15 +746,6 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         </Layer>
       </Stage>
 
-      {editorNode ? (
-        <CanvasTextEditor
-          node={editorNode}
-          viewport={viewport}
-          onCommit={onTextCommit}
-          onClose={() => interactions.setEditor(null)}
-        />
-      ) : null}
-
       {interactions.tooltip ? (
         <div
           className="konva-tooltip"
@@ -757,9 +753,12 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         >
           <div>{interactions.tooltip.node.name}</div>
           <div className="tile-tooltip-detail">
+            {/* 富文本的 body 是 HTML，悬停只展示纯文本投影，避免露出标签。 */}
             {interactions.tooltip.node.path ??
               interactions.tooltip.node.url ??
-              interactions.tooltip.node.body ??
+              (interactions.tooltip.node.kind === 'richtext'
+                ? interactions.tooltip.node.subtitle
+                : interactions.tooltip.node.body) ??
               interactions.tooltip.node.subtitle}
           </div>
         </div>

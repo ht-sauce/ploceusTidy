@@ -88,6 +88,10 @@ interface UseCanvasInteractionsOptions {
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
   onActivate: (id: string) => void
+  /** 双击文字/富文本：打开内容编辑弹窗（内容编辑不再在画布上内联进行）。 */
+  onEditContent: (id: string) => void
+  /** Ctrl + 拖拽卡片：把该卡片（或多选中的文件引用）拖到外部程序。 */
+  onDragOut: (ids: string[]) => void
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
 }
 
@@ -129,6 +133,8 @@ export function useCanvasInteractions({
   onMoveNodes,
   onConnect,
   onActivate,
+  onEditContent,
+  onDragOut,
   onContextMenu,
 }: UseCanvasInteractionsOptions) {
   const [selectionRect, setSelectionRect] = useState<Box | null>(null)
@@ -139,8 +145,6 @@ export function useCanvasInteractions({
     x: number
     y: number
   } | null>(null)
-  // 文字节点在画布上直接编辑，不使用弹窗。
-  const [editor, setEditor] = useState<string | null>(null)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node: SceneNode } | null>(null)
   // 空格键按住时才允许拖动画布，避免左键拖空白被误当成平移。
   const [spaceHeld, setSpaceHeld] = useState(false)
@@ -200,6 +204,11 @@ export function useCanvasInteractions({
     /** 拖动期已计算的最新框；松手提交直接取它，不依赖指针是否还在画布内。 */
     current: Rect
   } | null>(null)
+  /**
+   * Ctrl + 拖拽的待定拖出会话：按下时只登记，指针移动超过阈值才真正发起系统拖拽。
+   * 直接在按下时发起会让「Ctrl 点击」也触发一次拖放，落点在自己窗口上会被当成重新导入。
+   */
+  const dragOutPending = useRef<{ ids: string[]; x: number; y: number } | null>(null)
   const hoverTimer = useRef<number | null>(null)
 
   // 空格是平移修饰键：按下时锁定光标为抓取态，并阻止页面滚动。
@@ -516,6 +525,17 @@ export function useCanvasInteractions({
     const pointer = stage.getPointerPosition()
     if (!pointer) return
 
+    if (dragOutPending.current) {
+      const pending = dragOutPending.current
+      // 拖出阈值（屏幕 px）：小于它视为点击，避免误触发一次空拖放。
+      if (Math.abs(pointer.x - pending.x) > 4 || Math.abs(pointer.y - pending.y) > 4) {
+        dragOutPending.current = null
+        panMoved.current = true
+        onDragOut(pending.ids)
+      }
+      return
+    }
+
     if (connectSession.current) {
       const world = screenToWorld(pointer.x, pointer.y)
       connectSession.current.x = world.x
@@ -639,6 +659,7 @@ export function useCanvasInteractions({
   const handleStagePointerUp = () => {
     const stage = stageRef.current
     const pointer = stage?.getPointerPosition()
+    dragOutPending.current = null
 
     if (connectSession.current) {
       const session = connectSession.current
@@ -830,7 +851,19 @@ export function useCanvasInteractions({
     if (!pointer) return
     event.cancelBubble = true
 
-    const additive = event.evt.shiftKey || event.evt.ctrlKey || event.evt.metaKey
+    // Ctrl + 左键拖拽：把原文件地址拖到外部程序（IDE、资源管理器等）。
+    // 只对有真实路径的对象生效；文字、富文本、链接没有文件，按住 Ctrl 仍按普通点击处理。
+    if (event.evt.ctrlKey) {
+      const candidates =
+        selectedSet.has(node.id) && selectedIds.length > 1 ? selectedIds : [node.id]
+      const ids = candidates.filter((id) => nodeById.get(id)?.path)
+      if (ids.length > 0) {
+        dragOutPending.current = { ids, x: pointer.x, y: pointer.y }
+        return
+      }
+    }
+
+    const additive = event.evt.shiftKey
     if (additive) {
       onSelect(node.id, true)
       return
@@ -859,15 +892,16 @@ export function useCanvasInteractions({
 
   const handleNodeClick = (event: KonvaEventObject<MouseEvent>, node: SceneNode) => {
     event.cancelBubble = true
-    if (dragSession.current) return
-    // 追加选择的切换已在 mousedown 完成；click 只在非追加时收敛为单选。
-    if (!event.evt.shiftKey && !event.evt.ctrlKey && !event.evt.metaKey) {
+    if (dragSession.current || dragOutPending.current) return
+    // 追加选择的切换已在 mousedown 完成；click 只在未按 Shift 时收敛为单选。
+    if (!event.evt.shiftKey) {
       onSelect(node.id, false)
     }
   }
 
   const handleNodeDblClick = (node: SceneNode) => {
-    if (node.kind === 'text') setEditor(node.id)
+    // 文字与富文本双击进内容弹窗，其余按原文件/链接打开。
+    if (node.kind === 'text' || node.kind === 'richtext') onEditContent(node.id)
     else onActivate(node.id)
   }
 
@@ -1002,25 +1036,21 @@ export function useCanvasInteractions({
     setTooltip(null)
   }
 
-  /** 进入文字节点的画布内联编辑；非文字节点忽略。 */
-  const editText = useCallback(
-    (id: string) => {
-      const node = nodeById.get(id)
-      if (!node || node.kind !== 'text') return
-      setEditor(id)
-    },
-    [nodeById],
-  )
+  /** 鼠标在画布上的最后位置（世界坐标）；指针从未进入画布时返回 null。 */
+  const getPointerWorld = useCallback(() => {
+    const pointer = stageRef.current?.getPointerPosition()
+    return pointer ? screenToWorld(pointer.x, pointer.y) : null
+    // screenToWorld 只读 viewportRef，引用稳定，无需进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return {
     spaceHeld,
     selectionRect,
     guides,
     connectPreview,
-    editor,
-    setEditor,
     tooltip,
-    editText,
+    getPointerWorld,
     handleWheel,
     handleStagePointerDown,
     handleStagePointerMove,

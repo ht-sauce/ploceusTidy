@@ -26,6 +26,8 @@ interface ContextMenuOptions {
   pickEdgeColor: (id: string) => void
   /** 跳转到当前对象/空间的关联对象；一对多时由调用方弹出选择。 */
   locateNeighbor: (targetId: string) => void
+  /** 把对象对应的原文件复制到剪贴板（Windows CF_HDROP）。 */
+  copyFiles: (ids: string[]) => void
   /** 调起 Windows 原生文件右键菜单（含系统与第三方 Shell 扩展）。 */
   openSystemMenu: (nodeId: string, x: number, y: number) => void
 }
@@ -41,6 +43,7 @@ export function useContextMenu({
   pickGroupColor,
   pickEdgeColor,
   locateNeighbor,
+  copyFiles,
   openSystemMenu,
 }: ContextMenuOptions) {
   const [menu, setMenu] = useState<{
@@ -94,6 +97,7 @@ export function useContextMenu({
 
       if (key === 'open' && node) openNode(node)
       else if (key === 'reveal' && node) reveal(node)
+      else if (key === 'copy-files' && node) copyFiles([node.id])
       else if (key === 'edit-text' && node) editText(node.id)
       else if (key === 'annotate' && node) addAnnotation([node.id])
       else if (key === 'details' && node) openDetails(node.id)
@@ -113,6 +117,7 @@ export function useContextMenu({
     [
       addAnnotation,
       arrangeGroup,
+      copyFiles,
       deleteTarget,
       editEdgeLabel,
       editText,
@@ -140,6 +145,7 @@ export function useContextMenu({
       const items: ContextMenuEntry[] = []
       const hasNeighbor = edges.some((edge) => edge.from === node.id || edge.to === node.id)
       if (node.kind === 'text') items.push({ key: 'edit-text', label: '编辑文字' })
+      else if (node.kind === 'richtext') items.push({ key: 'edit-text', label: '编辑富文本' })
       else if (node.kind === 'image') items.push({ key: 'open', label: '打开图片' })
       else {
         items.push({
@@ -152,16 +158,18 @@ export function useContextMenu({
                 : '打开原文件',
         })
       }
-      if (node.kind !== 'text' && node.kind !== 'link') {
+      if (node.kind !== 'text' && node.kind !== 'link' && node.kind !== 'richtext') {
         items.push({ key: 'reveal', label: '在资源管理器中定位' })
       }
+      // 复制与拖出都只对「有真实文件」的对象有意义：文字、富文本、链接没有原文件。
+      if (node.path) items.push({ key: 'copy-files', label: '复制文件' })
       if (hasNeighbor) items.push({ key: 'locate-neighbor', label: '跳转到关联对象' })
       items.push({ key: 'annotate', label: '添加标注' })
       items.push({ key: 'details', label: '属性' })
       items.push({ key: 'layer-top', label: '置于顶层' })
       items.push({ key: 'layer-bottom', label: '置于底层' })
       items.push({ key: 'divider-1', label: '', divider: true })
-      if (node.kind !== 'text' && node.kind !== 'link') {
+      if (node.kind !== 'text' && node.kind !== 'link' && node.kind !== 'richtext') {
         items.push({ key: 'system-menu', label: '系统右键菜单…' })
         items.push({ key: 'divider-2', label: '', divider: true })
       }

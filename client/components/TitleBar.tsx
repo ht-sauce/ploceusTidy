@@ -5,8 +5,10 @@
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import Button from 'antd/es/button'
+import Dropdown from 'antd/es/dropdown'
 import Input from 'antd/es/input'
 import type { InputRef } from 'antd/es/input'
+import type { MenuProps } from 'antd/es/menu'
 import Popover from 'antd/es/popover'
 import Tooltip from 'antd/es/tooltip'
 import {
@@ -29,6 +31,7 @@ interface TitleBarProps {
   onSelectResult: (entry: SearchEntry) => void
   onOpenResult: (entry: SearchEntry) => void
   onNewText: () => void
+  onNewRichText: () => void
   onSettings: () => void
   onMinimize: () => void
   onMaximize: () => void
@@ -46,6 +49,7 @@ const TYPE_LABEL: Record<string, string> = {
   video: '视频',
   link: '链接',
   text: '文字',
+  richtext: '富文本',
   annotation: '标注',
   group: '空间',
   edge: '连线',
@@ -58,7 +62,8 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: '左键拖拽空白', label: '框选多个对象' },
   { keys: 'Shift + 点击', label: '追加或取消选中' },
   { keys: '拖拽四向圆点', label: '连线到另一个对象' },
-  { keys: '双击文字', label: '直接在画布上编辑' },
+  { keys: 'Ctrl + 点击/拖拽文件', label: '拖到外部程序打开' },
+  { keys: '双击文字或富文本', label: '打开内容编辑弹窗' },
   { keys: '双击文件', label: '打开原文件' },
   { keys: 'G / L', label: '把选中对象放进空间 / 建立连线' },
   { keys: '右键对象', label: '打开、定位、标注、属性、删除' },
@@ -86,6 +91,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
     onSelectResult,
     onOpenResult,
     onNewText,
+    onNewRichText,
     onSettings,
     onMinimize,
     onMaximize,
@@ -103,6 +109,18 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
     setOpen(true)
     setActiveIndex(0)
   }, [])
+
+  // 「+」用的是菜单而不是直接新建：纯文本与富文本的编辑方式完全不同，先让用户选。
+  const newMenu: MenuProps = {
+    items: [
+      { key: 'text', label: '纯文本' },
+      { key: 'richtext', label: '富文本' },
+    ],
+    onClick: ({ key }) => {
+      if (key === 'text') onNewText()
+      else onNewRichText()
+    },
+  }
 
   useImperativeHandle(ref, () => ({ focusSearch }), [focusSearch])
 
@@ -210,14 +228,15 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
       </div>
 
       <div className="title-actions">
-        <Tooltip title="新建文字">
-          <Button
-            className="title-icon-btn"
-            type="text"
-            icon={<PlusOutlined />}
-            aria-label="新建文字"
-            onClick={onNewText}
-          />
+        <Tooltip title="新建内容">
+          <Dropdown menu={newMenu} placement="bottomRight" trigger={['click']}>
+            <Button
+              className="title-icon-btn"
+              type="text"
+              icon={<PlusOutlined />}
+              aria-label="新建内容"
+            />
+          </Dropdown>
         </Tooltip>
         <Tooltip title="设置">
           <Button

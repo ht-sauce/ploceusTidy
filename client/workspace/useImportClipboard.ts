@@ -12,7 +12,10 @@ import { mergeNodes, type SceneStore } from './useSceneStore'
 interface ImportOptions {
   store: SceneStore
   message: MessageInstance
-  getCenterWorld: () => { x: number; y: number }
+  /** 新建对象的落点：优先取鼠标在画布上的最后位置，鼠标从未进入画布时回退视口中心。 */
+  getLandingPoint: () => { x: number; y: number }
+  /** 系统拖入/剪贴板导入的落点：用视口中心，与鼠标当时的位置无关。 */
+  getImportCenter: () => { x: number; y: number }
   locate: (id: string) => void
 }
 
@@ -33,7 +36,13 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
-export function useImportClipboard({ store, message, getCenterWorld, locate }: ImportOptions) {
+export function useImportClipboard({
+  store,
+  message,
+  getLandingPoint,
+  getImportCenter,
+  locate,
+}: ImportOptions) {
   const { addNode, setNodes, setSelectedIds } = store
   // 导入是异步命令，用 ref 读取最新场景做避让，避免闭包拿到旧数组。
   const nodesRef = useRef(store.nodes)
@@ -57,7 +66,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
 
   const createTextNode = useCallback(
     (text: string) => {
-      const center = getCenterWorld()
+      const center = getLandingPoint()
       const firstLine = text.split('\n').find((line) => line.trim()) ?? '新文字'
       focusNewNode({
         id: `text-${crypto.randomUUID()}`,
@@ -75,12 +84,35 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
         h: 64,
       })
     },
-    [focusNewNode, getCenterWorld],
+    [focusNewNode, getLandingPoint],
   )
+
+  /**
+   * 富文本卡片：`body` 存 HTML、`subtitle` 存纯文本投影，落点与纯文本一致，
+   * 因此同样按所在位置自动归属空间。
+   */
+  const createRichTextNode = useCallback(() => {
+    const center = getLandingPoint()
+    focusNewNode({
+      id: `richtext-${crypto.randomUUID()}`,
+      kind: 'richtext',
+      icon: 'rich',
+      name: '新富文本',
+      subtitle: '',
+      body: '',
+      groupId: '',
+      z: 0,
+      isExists: true,
+      x: Math.round(center.x - 36),
+      y: Math.round(center.y - 32),
+      w: 72,
+      h: 64,
+    })
+  }, [focusNewNode, getLandingPoint])
 
   const createLinkNode = useCallback(
     (url: string) => {
-      const center = getCenterWorld()
+      const center = getLandingPoint()
       let host = '链接'
       try {
         host = new URL(url).hostname
@@ -103,7 +135,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
         h: 64,
       })
     },
-    [focusNewNode, getCenterWorld],
+    [focusNewNode, getLandingPoint],
   )
 
   const pasteText = useCallback(
@@ -122,7 +154,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
       const now = Date.now()
       if (importGuard.current.key === signature && now - importGuard.current.at < 1200) return
       importGuard.current = { key: signature, at: now }
-      const center = getCenterWorld()
+      const center = getImportCenter()
       try {
         const result = await desktopApi.importPaths(unique, center.x, center.y)
         if (result.created.length || result.existing.length) {
@@ -159,7 +191,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
         message.error(`导入失败：${String(error)}`)
       }
     },
-    [getCenterWorld, locate, message, setNodes, setSelectedIds],
+    [getImportCenter, locate, message, setNodes, setSelectedIds],
   )
 
   const pasteImage = useCallback(
@@ -173,7 +205,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
         const base64 = dataUrl.split(',')[1] ?? ''
         const ext = file.type.split('/')[1] || 'png'
         const path = await desktopApi.saveClipboardImage(base64, ext)
-        const center = getCenterWorld()
+        const center = getLandingPoint()
         focusNewNode({
           id: `image-${crypto.randomUUID()}`,
           kind: 'image',
@@ -194,7 +226,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
         message.error(`截图粘贴失败：${String(error)}`)
       }
     },
-    [focusNewNode, getCenterWorld, message],
+    [focusNewNode, getLandingPoint, message],
   )
 
   /** 读取资源管理器复制到剪贴板的文件；返回是否处理了文件。 */
@@ -214,6 +246,7 @@ export function useImportClipboard({ store, message, getCenterWorld, locate }: I
 
   return {
     createTextNode,
+    createRichTextNode,
     createLinkNode,
     pasteText,
     pasteImage,

@@ -29,6 +29,7 @@ const TYPE_LABEL: Record<string, string> = {
   image: '图片引用',
   video: '视频引用',
   text: '文字卡',
+  richtext: '富文本卡',
   link: '链接卡',
 }
 
@@ -49,9 +50,12 @@ export default function DetailsPanel({
   const [dataJsonNode, setDataJsonNode] = useState(node?.id ?? '')
 
   // 切换到别的节点时在渲染期重置编辑框，避免残留上一个节点的未保存内容。
-  if (node?.id !== dataJsonNode) {
-    setDataJsonNode(node?.id ?? '')
-    setDataJson(node?.dataJson ?? '')
+  // 必须显式判空：标注模式下 `node` 为 null，若写成 `node?.id !== dataJsonNode`，
+  // undefined 与初值 '' 永远不相等，渲染期 setState 无法收敛，React 会抛
+  // 「Too many re-renders」并卸载整棵树（表现为整页空白且无法恢复）。
+  if (node && node.id !== dataJsonNode) {
+    setDataJsonNode(node.id)
+    setDataJson(node.dataJson ?? '')
   }
 
   if (mode === 'annotation' && annotation) {

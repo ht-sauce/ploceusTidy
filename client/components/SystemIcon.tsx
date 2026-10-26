@@ -201,6 +201,21 @@ export default function SystemIcon({ kind, size = 22, className }: SystemIconPro
     )
   }
 
+  if (kind === 'rich') {
+    return (
+      <svg {...props}>
+        {page}
+        <rect x="7" y="10.6" width="10" height="2.2" rx=".6" fill="#3f7fbf" />
+        <path
+          d="M7.6 15h8.2M7.6 17h8.2M7.6 19h4.6"
+          stroke="#8e8e88"
+          strokeWidth="1.1"
+          strokeLinecap="round"
+        />
+      </svg>
+    )
+  }
+
   return (
     <svg {...props}>
       {page}

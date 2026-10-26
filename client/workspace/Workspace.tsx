@@ -2,7 +2,7 @@
  * 工作空间容器：组合场景 store、桌面动作、持久化、快捷键与各功能组件。
  * 这里是唯一把「领域能力」接到「界面」上的地方，App 只负责主题壳。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import AntApp from 'antd/es/app'
 import type { SceneNode, SearchEntry, ThemeId } from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/canvas/CanvasBoard'
@@ -13,6 +13,7 @@ import TitleBar, { type TitleBarHandle } from '@/components/TitleBar'
 import DetailsPanel from '@/components/DetailsPanel'
 import SettingsDialog from '@/components/SettingsDialog'
 import TextPromptDialog from '@/components/TextPromptDialog'
+import TextContentDialog from '@/components/TextContentDialog'
 import ColorPickerDialog from '@/components/ColorPickerDialog'
 import NeighborPickerDialog from '@/components/NeighborPickerDialog'
 import type { NeighborOption } from '@/components/NeighborPickerDialog'
@@ -33,6 +34,9 @@ interface WorkspaceProps {
   themeId: ThemeId
   onThemeChange: (id: ThemeId) => void
 }
+
+/** 富文本编辑器按需加载：wangEditor 及其依赖不进首屏分包，只在打开富文本时拉取。 */
+const RichTextDialog = lazy(() => import('@/components/RichTextDialog'))
 
 export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   const { message } = AntApp.useApp()
@@ -55,6 +59,8 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     fallback: string
   } | null>(null)
   const [neighbors, setNeighbors] = useState<{ options: NeighborOption[] } | null>(null)
+  /** 内容编辑：文字与富文本统一走弹窗，不在画布上内联编辑。 */
+  const [contentEditorId, setContentEditorId] = useState<string | null>(null)
   /** 「最小化时暂停渲染」偏好；真正的暂停状态由窗口事件驱动。 */
   const [pauseWhenMinimized, setPauseWhenMinimized] = useState(true)
 
@@ -89,12 +95,17 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   // 这些回调会进入拖入/导入 hook 的依赖链，保持稳定，避免重复订阅拖放事件。
   const locateById = useCallback((id: string) => canvasRef.current?.locateTarget(id), [])
-  const editTextById = useCallback((id: string) => canvasRef.current?.editText(id), [])
+  const openContentEditor = useCallback((id: string) => setContentEditorId(id), [])
   const selectNode = store.selectNode
   const selectById = useCallback((id: string) => selectNode(id, false), [selectNode])
   const getCenterWorld = useCallback(
     () => canvasRef.current?.getCenterWorld() ?? { x: 260, y: 260 },
     [],
+  )
+  /** 新建对象的落点：鼠标在画布上的最后位置；指针没进过画布时回退视口中心。 */
+  const getLandingPoint = useCallback(
+    () => canvasRef.current?.getPointerWorld() ?? getCenterWorld(),
+    [getCenterWorld],
   )
 
   const actions = useNodeActions({
@@ -102,14 +113,15 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     onNodePatched: (node: SceneNode) =>
       store.setNodes((previous) => previous.map((item) => (item.id === node.id ? node : item))),
     locate: locateById,
-    editText: editTextById,
+    editText: openContentEditor,
     select: selectById,
   })
 
   const importers = useImportClipboard({
     store,
     message,
-    getCenterWorld,
+    getLandingPoint,
+    getImportCenter: getCenterWorld,
     locate: locateById,
   })
   const { importPaths } = importers
@@ -223,17 +235,51 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [message, store],
   )
 
+  // ---------- 原文件复制与拖出 ----------
+
+  /** 拖出到外部程序：只传有真实路径的对象 ID，路径由 Rust 侧查库解析（不信任前端路径）。 */
+  const dragOut = useCallback(
+    (ids: string[]) => {
+      if (!isDesktopClient) {
+        message.info('拖出到外部程序仅在桌面客户端可用')
+        return
+      }
+      void desktopApi
+        .startDragOut(ids)
+        .catch((error) => message.error(`拖出失败：${String(error)}`))
+    },
+    [message],
+  )
+
+  /** 复制原文件到剪贴板（CF_HDROP）：粘贴到资源管理器或 IDE 即可拿到原始地址。 */
+  const copyFiles = useCallback(
+    (ids: string[]) => {
+      if (!isDesktopClient) {
+        message.info('复制文件仅在桌面客户端可用')
+        return
+      }
+      void desktopApi
+        .copyRefFiles(ids)
+        .then((count) => {
+          if (count > 0) message.success(`已复制 ${count} 个文件，可粘贴到资源管理器或 IDE`)
+        })
+        .catch((error) => message.error(`复制失败：${String(error)}`))
+    },
+    [message],
+  )
+
   const contextMenu = useContextMenu({
     store,
     openNode: (node) => void actions.openNode(node),
     reveal: (node) => void actions.reveal(node),
-    editText: (id) => canvasRef.current?.editText(id),
+    editText: openContentEditor,
     editEdgeLabel: openEdgeLabel,
     renameGroup: openGroupTitle,
     arrangeGroup: arrangeSpace,
     pickGroupColor: openGroupColor,
     pickEdgeColor: openEdgeColor,
     locateNeighbor,
+    copyFiles,
     openSystemMenu: (nodeId, x, y) => {
       if (!isDesktopClient) {
         message.info('系统右键菜单仅在桌面客户端可用')
@@ -246,6 +292,16 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   })
 
   // ---------- 场景命令（带提示） ----------
+
+  /** Ctrl+C：复制选中对象里有真实路径的那些。 */
+  const copySelectedFiles = useCallback(() => {
+    const ids = store.selectedIds.filter((id) => store.nodeById.get(id)?.path)
+    if (ids.length === 0) {
+      message.info('先选中文件或文件夹，再复制原文件')
+      return
+    }
+    copyFiles(ids)
+  }, [copyFiles, message, store.nodeById, store.selectedIds])
 
   const createSpace = useCallback(() => {
     // 自动编号 + 调色板轮换，多个空间无需手动改名也能区分。
@@ -342,6 +398,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     onUndo: undo,
     onSelectAll: () => store.setSelectedIds(store.nodes.map((node) => node.id)),
     onDelete: deleteSelected,
+    onCopyFiles: copySelectedFiles,
     onLink: linkSelected,
     onGroup: createSpace,
     onToggleEmpty: toggleEmpty,
@@ -435,6 +492,8 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     if (node) void actions.openNode(node)
   }
 
+  const contentNode = contentEditorId ? (store.nodeById.get(contentEditorId) ?? null) : null
+
   return (
     <div className="app-shell">
       <TitleBar
@@ -444,7 +503,13 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         onQueryChange={setQuery}
         onSelectResult={selectResult}
         onOpenResult={openResult}
-        onNewText={() => importers.createTextNode('双击编辑文字；适合记录结论、待办或项目说明。')}
+        onNewText={() =>
+          importers.createTextNode('双击或右键编辑内容；适合记录结论、待办或项目说明。')
+        }
+        onNewRichText={() => {
+          importers.createRichTextNode()
+          message.info('双击新富文本卡片开始写作')
+        }}
         onSettings={() => setSettingsOpen(true)}
         onMinimize={() => void desktopWindow.minimize()}
         onMaximize={() => void desktopWindow.toggleMaximize()}
@@ -480,10 +545,8 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
             const node = store.nodeById.get(id)
             if (node) actions.activate(node)
           }}
-          onTextCommit={(id, text, live) => {
-            store.commitText(id, text, live)
-            if (!live) message.success('文字已保存')
-          }}
+          onEditContent={openContentEditor}
+          onDragOut={dragOut}
           onScaleChange={setScale}
           onContextMenu={contextMenu.open}
         />
@@ -582,6 +645,34 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         onCancel={() => setNeighbors(null)}
         onPick={pickNeighbor}
       />
+
+      {contentNode ? (
+        contentNode.kind === 'richtext' ? (
+          <Suspense fallback={null}>
+            <RichTextDialog
+              key={contentNode.id}
+              initialHtml={contentNode.body ?? ''}
+              onCancel={() => setContentEditorId(null)}
+              onSave={(html, plain) => {
+                store.commitContent(contentNode.id, html, plain)
+                setContentEditorId(null)
+                message.success('富文本已保存')
+              }}
+            />
+          </Suspense>
+        ) : (
+          <TextContentDialog
+            key={contentNode.id}
+            initialText={contentNode.body ?? contentNode.subtitle ?? ''}
+            onCancel={() => setContentEditorId(null)}
+            onSave={(text) => {
+              store.commitContent(contentNode.id, text, text)
+              setContentEditorId(null)
+              message.success('文字已保存')
+            }}
+          />
+        )
+      ) : null}
     </div>
   )
 }

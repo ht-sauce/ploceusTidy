@@ -3,12 +3,27 @@
  * 字段名保持 camelCase，与 Rust 的 `#[serde(rename_all = "camelCase")]` 对齐。
  */
 
-/** 节点类型；`file` 涵盖所有普通文件，具体图标由 `icon` 区分。 */
-export type SceneNodeKind = 'file' | 'folder' | 'image' | 'video' | 'text' | 'link'
+/**
+ * 节点类型；`file` 涵盖所有普通文件，具体图标由 `icon` 区分。
+ * `richtext` 是应用内的富文本卡片：`body` 存 HTML，`subtitle` 存同名纯文本投影，
+ * 名称与搜索都用投影，避免把标签当成内容索引。
+ */
+export type SceneNodeKind = 'file' | 'folder' | 'image' | 'video' | 'text' | 'link' | 'richtext'
 
 /** 系统图标种类，仅用于展示，不参与业务判断。 */
 export type SystemIconKind =
-  'folder' | 'pdf' | 'docx' | 'xlsx' | 'dwg' | 'exe' | 'image' | 'video' | 'txt' | 'link' | 'text'
+  | 'folder'
+  | 'pdf'
+  | 'docx'
+  | 'xlsx'
+  | 'dwg'
+  | 'exe'
+  | 'image'
+  | 'video'
+  | 'txt'
+  | 'link'
+  | 'text'
+  | 'rich'
 
 /**
  * 画布节点。

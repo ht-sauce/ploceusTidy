@@ -13,6 +13,7 @@
 | 构建 | Vite 8.3.5 + `@vitejs/plugin-react` 6.1.2 | `vite.config.ts` |
 | 画布 | Konva 10 + react-konva 19.3.2 + rbush 4，视口裁剪 + 高清倍率（不做远景 LOD） | 见 ADR-005 / ADR-016、02 §4 |
 | 主题 | 四套浅色主题语义令牌（`client/lib/theme.ts` + CSS 变量 + AntD ConfigProvider） | 见 ADR-014、03 §10 |
+| 富文本 | `@wangeditor-next/editor` 6.5.1（按需加载的懒 chunk），正文 HTML 存 `nodes.body` | 见 ADR-025 |
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间与连线标签 | 见 ADR-020 |
 | 数据存储 | SQLite（rusqlite）+ `dataWorkSpace`；`PRAGMA user_version` 迁移 | 见 ADR-003 与 [04-data-model.md](spec/04-data-model.md) |
 | 外部数据源 | 纯本地，无云端、无遥测 | 见 ADR-004 |
@@ -34,6 +35,7 @@ ploceusTidy/
 ├── vite.config.ts                  # root: client，127.0.0.1:5173
 ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
 ├── eslint.config.js / prettier.config.cjs / .editorconfig
+├── pnpm-workspace.yaml             # pnpm 12 设置（依赖构建脚本白名单 allowBuilds）
 ├── .prettierignore / .gitignore
 ├── assets/
 │   └── ploceusTidy.jpg             # 品牌图
@@ -71,19 +73,20 @@ ploceusTidy/
 │   │   ├── GroupShape.tsx          # 空间实线框与命中区域
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
 │   │   ├── Minimap.tsx             # 迷你地图与点击定位
-│   │   ├── CanvasTextEditor.tsx    # 文字内联编辑
 │   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
 │   │   ├── icons.tsx               # 系统图标与缩略图缓存
 │   │   ├── constants.ts            # 迷你地图、名称预算、空间调色板、渲染倍率等常量
 │   │   └── types.ts                # 右键目标、视口、舞台尺寸类型
 │   ├── components/                 # 通用界面组件
-│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建文字、设置、操作说明、窗口按钮
-│   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接
+│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建内容菜单、设置、操作说明、窗口按钮
+│   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接 / 富文本
 │   │   ├── DetailsPanel.tsx        # 右键「属性」面板与标注编辑（只读属性，动作走右键菜单）
 │   │   ├── ContextMenu.tsx         # 画布右键菜单渲染
 │   │   ├── StatusBar.tsx           # 保存状态、对象数、缩放与画布按钮
 │   │   ├── EmptyOverlay.tsx        # 空画布引导
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
+│   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本）
+│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor 编辑与保存
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器
 │   │   ├── NeighborPickerDialog.tsx # 一对多关联对象跳转选择
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
@@ -97,7 +100,7 @@ ploceusTidy/
 │       ├── main.rs / lib.rs        # Tauri 启动（单实例）、命令注册
 │       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重与图标刷新、校验/重连、缩略图、app_meta
 │       ├── models.rs               # IPC DTO
-│       └── platform.rs             # 路径规范化、文件类型、剪贴板文件、Shell 缩略图、原生右键菜单、窗口置底
+│       └── platform.rs             # 路径规范化、文件类型、剪贴板文件读写、Shell 缩略图、原生右键菜单、窗口置底、OLE 拖出
 ├── docs/
 │   ├── README.md / REQUIREMENTS.md / project-overview.md / coding-conventions.md
 │   └── spec/                       # 00–08
@@ -129,7 +132,11 @@ client/
 | 场景命令、选择、删除/撤销、标注、空间成员自动归属与拖入整理、空间/连线配色、空间自动整理与手动调框 | `client/workspace/useSceneStore.ts` |
 | 加载/保存/缺失校验/拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts` |
 | 打开/定位/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
+| 文字/富文本弹窗、加号新建菜单 | `client/components/TextContentDialog.tsx`、`RichTextDialog.tsx`、`TitleBar.tsx`、`client/workspace/Workspace.tsx` |
+| 原文件复制与拖出（CF_HDROP / OLE 拖放） | `desktop/src/platform.rs`、`desktop/src/lib.rs`、`client/canvas/useCanvasInteractions.ts`、`client/workspace/Workspace.tsx` |
+| 安装包语言 | `desktop/tauri.conf.json`（`bundle.windows.nsis.languages`） |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
+| 富文本节点与编辑器（`richtext`、`body` 存 HTML、纯文本投影） | `client/components/RichTextDialog.tsx`、`client/workspace/useSceneStore.ts`（`commitContent`）、`docs/spec/08-adr.md` ADR-025 |
 | 搜索归一化、拼音首字母与排序 | `client/domain/search.ts`、`client/workspace/useSearch.ts` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/workspace/useImportClipboard.ts`、`useNodeActions.ts`、`client/lib/tauri-api.ts` |

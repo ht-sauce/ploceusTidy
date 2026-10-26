@@ -1,4 +1,4 @@
-﻿# 08-adr.md · 架构决策记录
+﻿﻿# 08-adr.md · 架构决策记录
 
 > 只在出现「二选一」的架构取舍时记录。当前已决策条目见 §3，待复核见 §5。
 
@@ -55,6 +55,10 @@
 | ADR-022 | 持久化性能：读写分离连接、增量保存与空闲调度 | accepted | 2026-10-25 |
 | ADR-023 | 空间容器接纳与手动调框 | accepted | 2026-10-25 |
 | ADR-024 | 单实例运行：重复启动激活已有窗口 | accepted | 2026-10-25 |
+| ADR-025 | 富文本卡片：wangEditor-next + HTML 存 `body` | accepted | 2026-10-26 |
+| ADR-026 | 原文件拖出与复制：只传引用、只声明 COPY | accepted | 2026-10-26 |
+| ADR-027 | 安装包中英双语 | accepted | 2026-10-26 |
+| ADR-028 | 文字/富文本改为弹窗编辑（推翻画布内联编辑） | accepted | 2026-10-26 |
 
 ## 4. ADR 正文
 
@@ -344,6 +348,55 @@
   - 用户已确认不做多画布，因此不考虑「多实例对应多画布」的方案。
 - 后果：新增 Rust 依赖 `tauri-plugin-single-instance`；第二实例的启动参数（如未来支持拖文件到图标）只能在激活回调里接收，需要时在此扩展。
 
+### ADR-025 富文本卡片：wangEditor-next + HTML 存 `body`
+
+- 状态：accepted
+- 日期：2026-10-26
+- 背景：用户需要「类似知识库的文章书写」能力，明确要求用国内的王富文本；画布上已有纯文本卡片（`kind=text`、`body` 存纯文本），需要在同一套场景模型、持久化与搜索链路里增加富文本，且不能让首屏包体被编辑器拖大。
+- 决策：新增节点类型 `richtext`（图标 `rich`）；用 `@wangeditor-next/editor` 6.5.1 + `@wangeditor-next/editor-for-react` 6.5.1（wangEditor 5 的社区维护分支，peer 依赖 `react >= 17`，与 React 19.3.1 兼容）；正文 HTML 存进既有 `body` 列，同时把纯文本投影存进 `subtitle`，卡片名称与搜索只用投影；不新增列、不升 `SCHEMA_VERSION`。富文本弹窗组件在 `Workspace` 里用 `React.lazy` 按需加载，编辑器与它的依赖独立成 chunk，不进首屏。
+- 备选方案：
+  - 经典 `@wangeditor/editor` 5.1.23：官方 5.x 已停止维护，`editor-for-react` 的 peer 只声明到 React 18，在 React 19 下要靠绕行；用户要求的「王富文本」由维护分支继续承载；否决。
+  - Quill / TipTap 等其他编辑器：能力满足，但不是用户指定的国内编辑器，且要自建中文工具栏；否决。
+  - 富文本另存到 `assets/` 的 HTML 文件、节点只存路径：与「文字卡片不落文件」的现有语义冲突，且要走只读引用与缺失校验链路；否决。
+  - 存进 `data_json`：该列已声明为「扩展样式 JSON」并在属性面板做 JSON 校验，塞 HTML 会破坏该契约；否决。
+- 后果：新增两个前端依赖与一个懒加载 chunk（约 634KB，gzip 199KB），首屏主脚本基本不变；`rich` 图标需同时加进 `SystemIcon` 与画布图标预加载表；搜索与悬停提示必须避开 HTML，改为读 `subtitle`；`pnpm` 因 `es5-ext`（wangEditor 传递依赖）的 postinstall 触发 `strictDepBuilds` 报错，需在 `pnpm-workspace.yaml` 的 `allowBuilds` 中显式拒绝该脚本。
+
+### ADR-026 原文件拖出与复制：只传引用、只声明 COPY
+
+- 状态：accepted
+- 日期：2026-10-26
+- 背景：用户需要把画布上的项目文件夹直接拖进 IDE（VS Code 等）打开项目，而不必回资源管理器逐层找路径；「复制」也要能拿到原地址。既有画布行为里左键拖拽用于画布内移动，不能直接让位给系统拖放；同时 HC-12 要求绝不修改用户文件。
+- 决策：手势用 `Ctrl + 左键拖拽`（位移超过 4px 才真正发起，避免 Ctrl 点击误触发一次落在自身窗口上的空拖放）；普通左键拖拽仍是画布内移动。Rust 侧新增两个命令：`copy_ref_files`（`clipboard-win` 写 `CF_HDROP`，入口为 `Ctrl+C` 与右键「复制文件」）、`drag_out_refs`（自研最小 `IDataObject` + `IDropSource`，主线程 `DoDragDrop`，数据对象只提供 `CF_HDROP` 与 `CFSTR_PREFERREDDROPEFFECT=COPY`，格式枚举只列这两种）。前端只传 `nodeId`，路径全部由 Rust 查库解析并校验存在性；文字、富文本、链接无原文件，不参与。为此把 `Ctrl` 从「追加选择」的修饰键中去掉（文档一直只写 `Shift` 追加选择）。
+- 备选方案：
+  - 引入社区 crate（`drag` / `tauri-plugin-drag`）：代码量更少，但引入非官方维护依赖，且核心行为（只 COPY、只导出显式引用）仍要自己兜；用户已选择自研；否决。
+  - 用 `tauri-plugin-fs` 的 drag 能力或 WebView 的 HTML5 dragstart：WebView 无法给出 `CF_HDROP`，外部程序拿不到文件；否决。
+  - 直接把「左键拖拽」改成系统拖出：破坏画布内移动这一最高频操作；否决。
+  - 用 `IDragSourceHelper` 提供文件缩略图拖影：观感更好，但要再实现一层 Shell 帮助对象，本轮只保留系统默认拖放光标；暂不做。
+- 后果：新增 windows feature（`Win32_System_Ole`、`Win32_System_Memory`、`Win32_System_DataExchange`、`Win32_System_Com_StructuredStorage`、`Win32_System_SystemServices`）与 `windows-core`（windows-rs 官方组成部分，非第三方）；`DoDragDrop` 会跑模态循环，只能派发到主线程，命令立即返回、错误只写 stderr；拖出示意（光标）依赖系统默认样式；`Ctrl` 不再能追加选择。
+
+### ADR-027 安装包中英双语
+
+- 状态：accepted
+- 日期：2026-10-26
+- 背景：安装包此前只有英文界面，中文用户看不懂安装流程。
+- 决策：`bundle.windows.nsis.languages` 设为 `["SimpChinese", "English"]`（OS 语言命中即用，否则用第一条）并开启 `displayLanguageSelector`，让用户显式选择。只改安装器语言，不改应用内界面语言。
+- 备选方案：
+  - 只把默认语言换成中文：英文用户又会看不懂，等于把问题换个方向；否决。
+  - 做应用内多语言（i18n 框架 + 全量文案抽取）：当前需求只是「安装包不友好」，应用内多语言的改动面与维护成本远超收益；不做，需要时另立 ADR。
+- 后果：安装包体积基本不变；语言选择框每次安装都会先出现（用户可自行选择）；改完需重新 `pnpm tauri:build` 出包验证。
+
+### ADR-028 文字/富文本改为弹窗编辑（推翻画布内联编辑）
+
+- 状态：accepted
+- 日期：2026-10-26
+- 背景：文字卡片此前在画布上原地编辑（`CanvasTextEditor`，跟随视口的绝对定位 textarea）。用户反馈希望改回弹窗编辑：内联编辑区受缩放与视口变换影响、长文难以核对，且与随后加入的富文本编辑器无法共用同一套编辑体验。
+- 决策：删除 `CanvasTextEditor` 与交互层的 `editor` 会话；文字与富文本统一由 `ContentDialog` 承载（纯文本用多行 `TextArea`，富文本用按需加载的 wangEditor），双击卡片或右键「编辑文字 / 编辑富文本」打开；保存时统一走 `commitContent(id, body, plain)`，空内容不覆盖原文；悬停提示保留。顶部「+」改为下拉菜单（纯文本 / 富文本）。
+- 备选方案：
+  - 保留内联编辑、只给富文本加弹窗：两套编辑体验并存，用户要在两处切换心智；否决。
+  - 内联富文本编辑器：Konva 画布上的 DOM 覆盖层要自己处理缩放、滚动与选区，编辑器工具栏还会与画布交互抢事件；否决。
+  - 在右侧属性面板里编辑正文：面板宽度固定 280px，长文编辑体验差，且面板语义是「只读属性」；否决。
+- 后果：`commitText` 被 `commitContent` 取代（多一个纯文本参数，供富文本写投影）；画布不再有内联 textarea、`CanvasTextEditor.tsx` 删除；新建文字卡的引导文案改为「双击或右键编辑内容」。
+
 ## 5. 待复核
 
 | 事项 | 触发时机 | 说明 |
@@ -355,3 +408,5 @@
 | 多画布 | 不做（已定） | 单窗口单画布；重复启动只激活已有窗口（ADR-024） |
 | macOS/Linux | 后续 | 剪贴板已有；Shell 缩略图降级；打包（dmg/AppImage/deb）与真机验证未做 |
 | 代码签名 | 已完成（v0.1.0） | 已用本机自签名证书签名并发布 v0.1.0 至 GitHub Releases；自签名不受系统信任，正式 CA 证书 / Azure Trusted Signing 待有真实分发需求时评估 |
+| 拖出到外部程序的真机验证 | 下次出包后 | 自研 `IDataObject` + `IDropSource` 只在编译层验证（`cargo check` / `cargo test` 通过）；`DoDragDrop` 是否稳定运行在 Tauri 主线程、VS Code / 资源管理器 / Explorer 是否都能正确接收 `CF_HDROP`，需要真机实测（见 ADR-026） |
+| 富文本编辑器的真机验证 | 下次出包后 | wangEditor-next 与 React 19.3.1 的组合只做了构建与类型验证，弹窗内编辑、保存、重开的完整往返需真机实测（见 ADR-025） |

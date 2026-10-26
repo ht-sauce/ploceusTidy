@@ -9,6 +9,8 @@ interface ShortcutOptions {
   onUndo: () => void
   onSelectAll: () => void
   onDelete: () => void
+  /** Ctrl+C：复制选中对象的原文件（无原文件的对象由调用方过滤并提示）。 */
+  onCopyFiles: () => void
   onLink: () => void
   onGroup: () => void
   onToggleEmpty: () => void
@@ -22,6 +24,7 @@ export function useShortcuts({
   onUndo,
   onSelectAll,
   onDelete,
+  onCopyFiles,
   onLink,
   onGroup,
   onToggleEmpty,
@@ -51,6 +54,11 @@ export function useShortcuts({
 
       if (isTypingTarget(event.target)) return
 
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        onCopyFiles()
+        return
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         onUndo()
@@ -86,6 +94,7 @@ export function useShortcuts({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [
+    onCopyFiles,
     onDelete,
     onEscape,
     onFocusSearch,
