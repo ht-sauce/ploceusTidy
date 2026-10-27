@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
-use windows::core::{BOOL, HRESULT, Ref as WinRef};
+use windows::core::{Ref as WinRef, BOOL, HRESULT};
 #[cfg(windows)]
 use windows::Win32::Foundation::{
     DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, E_NOTIMPL,
@@ -13,8 +13,8 @@ use windows::Win32::Foundation::{
 };
 #[cfg(windows)]
 use windows::Win32::System::Com::{
-    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl,
-    IEnumSTATDATA, DATADIR_GET, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
+    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, IEnumSTATDATA,
+    DATADIR_GET, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
 #[cfg(windows)]
 use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
@@ -573,7 +573,8 @@ pub fn start_file_drag(hwnd: isize, paths: Vec<String>) -> Result<(), String> {
         let data_object: IDataObject = HdropDataObject { paths }.into();
         let drop_source: IDropSource = FileDropSource.into();
         let mut effect = DROPEFFECT::default();
-        let outcome = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect) };
+        let outcome =
+            unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect) };
         // 用户松手（DROP）或按 Esc 取消（CANCEL）都算正常结束，只有真失败才上报。
         if outcome == DRAGDROP_S_DROP || outcome == DRAGDROP_S_CANCEL || outcome == S_OK {
             return Ok(());
@@ -700,10 +701,7 @@ struct FormatEtcEnumerator {
 impl IEnumFORMATETC_Impl for FormatEtcEnumerator_Impl {
     fn Next(&self, celt: u32, rgelt: *mut FORMATETC, pceltfetched: *mut u32) -> HRESULT {
         // 互斥量中毒只说明别的线程 panic 过，游标本身仍可用，取回内部值继续。
-        let mut index = self
-            .index
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut index = self.index.lock().unwrap_or_else(|error| error.into_inner());
         let start = *index;
         let remaining = self.formats.len().saturating_sub(start);
         let count = (celt as usize).min(remaining);
@@ -723,10 +721,7 @@ impl IEnumFORMATETC_Impl for FormatEtcEnumerator_Impl {
     }
 
     fn Skip(&self, celt: u32) -> windows::core::Result<()> {
-        let mut index = self
-            .index
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let mut index = self.index.lock().unwrap_or_else(|error| error.into_inner());
         let remaining = self.formats.len().saturating_sub(*index);
         if (celt as usize) > remaining {
             *index += remaining;
@@ -737,18 +732,12 @@ impl IEnumFORMATETC_Impl for FormatEtcEnumerator_Impl {
     }
 
     fn Reset(&self) -> windows::core::Result<()> {
-        *self
-            .index
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = 0;
+        *self.index.lock().unwrap_or_else(|error| error.into_inner()) = 0;
         Ok(())
     }
 
     fn Clone(&self) -> windows::core::Result<IEnumFORMATETC> {
-        let index = *self
-            .index
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+        let index = *self.index.lock().unwrap_or_else(|error| error.into_inner());
         let clone = FormatEtcEnumerator {
             formats: self.formats.clone(),
             index: std::sync::Mutex::new(index),

@@ -82,7 +82,7 @@ dataWorkSpace/
 
 - `UNIQUE(ref_id)` 允许 NULL（SQLite 允许多个 NULL）。
 - 文字/富文本/链接没有 `ref_id`：`refs` 仅在 `path` 或 `url` 存在时写入，因此富文本不产生引用行，不占去重索引。
-- 富文本的 `body` 是 HTML，`subtitle` 保存同一内容的纯文本投影；卡片名称与搜索都用投影，避免把标签当成内容（`richtext` 不入库新增字段，`SCHEMA_VERSION` 不变）。
+- 富文本的 `body` 是 HTML，`subtitle` 保存同一内容的纯文本投影；卡片名称与搜索都用投影，避免把标签当成内容（`richtext` 不入库新增字段，`SCHEMA_VERSION` 不变）。富文本内的图片/视频引用存 `assets/<文件名>` 相对路径，文件本体在 `assets/` 目录（UUID 文件名，见 ADR-029）。
 - 删除分组框时 `group_id` 置空，不删内部节点；`scene_save` 末尾会把指向不存在分组的 `group_id` 归一为空。
 
 ### `edges`

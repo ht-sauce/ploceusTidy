@@ -8,8 +8,10 @@ mod models;
 mod platform;
 
 use base64::Engine;
+use std::borrow::Cow;
 use std::path::Path;
-use tauri::{AppHandle, Manager, State};
+use tauri::ipc::InvokeBody;
+use tauri::{http, AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -142,6 +144,140 @@ fn save_clipboard_image(
         .decode(data)
         .map_err(|error| format!("截图解码失败：{error}"))?;
     db::save_asset(&state, &bytes, &clean_ext)
+}
+
+/// 富文本媒体上传：图片/视频以 Raw IPC 二进制体直传（不经 base64），
+/// body = `[ext_len: u8][ext ascii][文件字节]`，JSON 体直接拒绝；
+/// 文件名由 Rust 生成 UUID，返回 `assets/<文件名>` 相对引用。
+/// 命令只收字节与扩展名，不接受路径（HC-12）。
+#[tauri::command]
+async fn save_rich_asset(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
+    let body: Vec<u8> = match request.body() {
+        InvokeBody::Raw(raw) => raw.to_vec(),
+        _ => return Err("富文本媒体必须以二进制方式上传".to_string()),
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::save_rich_asset(&state, &body)
+    })
+    .await
+    .map_err(|error| format!("保存富文本媒体任务失败：{error}"))?
+}
+
+/// `richasset` 协议的 MIME 映射；白名单外的扩展名不会落盘，这里兜底二进制流。
+fn rich_asset_mime(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "ogg" => "video/ogg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 解析 `Range: bytes=start-` / `bytes=start-end`；只在语义有效时返回分片范围，
+/// 无效或缺省返回 `None`（按全量 200 响应，浏览器可接受）。
+fn parse_byte_range(header: Option<&http::HeaderValue>, total: u64) -> Option<(u64, u64)> {
+    let header = header?.to_str().ok()?;
+    let (start_raw, end_raw) = header.strip_prefix("bytes=")?.split_once('-')?;
+    let start = start_raw.trim().parse::<u64>().ok()?;
+    if start >= total {
+        return None;
+    }
+    let end = if end_raw.trim().is_empty() {
+        total - 1
+    } else {
+        end_raw.trim().parse::<u64>().ok()?.min(total - 1)
+    };
+    (start <= end).then_some((start, end))
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    #[test]
+    fn video_ranges_cover_seeking_and_invalid_headers() {
+        for (header, expected) in [
+            ("bytes=0-", Some((0, 99))),
+            ("bytes=40-59", Some((40, 59))),
+            ("bytes=99-999", Some((99, 99))),
+            ("bytes=100-", None),
+            ("bytes=50-20", None),
+            ("bytes=x-20", None),
+            ("bytes=0-1,5-6", None),
+        ] {
+            let value = http::HeaderValue::from_str(header).expect("构造测试 Range 失败");
+            assert_eq!(parse_byte_range(Some(&value), 100), expected, "{header}");
+            assert_eq!(parse_byte_range(Some(&value), 0), None);
+        }
+        assert_eq!(parse_byte_range(None, 100), None);
+    }
+}
+
+/// 处理 `richasset` 协议请求：把 `http://richasset.localhost/<文件名>` 映射到
+/// 工作空间 assets 目录，图片与视频都以本地文件回读（HC-13：不发起网络请求）；
+/// `Range` 分片支撑视频拖动进度条。
+fn rich_asset_response(
+    app: &AppHandle,
+    request: http::Request<Vec<u8>>,
+) -> http::Response<Cow<'static, [u8]>> {
+    let not_found = |message: &'static str| {
+        http::Response::builder()
+            .status(404)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(Cow::Borrowed(message.as_bytes()))
+            .expect("构造 404 响应失败")
+    };
+    // 保留完整相对路径交给边界校验，不能丢弃目录段后误读同名资产。
+    let name = request.uri().path().trim_start_matches('/');
+    let path = {
+        let state = app.state::<AppState>();
+        match db::rich_asset_file(&state, name) {
+            Ok(path) => path,
+            Err(_) => return not_found("媒体文件不存在或已被拒绝"),
+        }
+    };
+    let total = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len(),
+        Err(_) => return not_found("媒体文件不存在"),
+    };
+    // 本地媒体通常几 MB，整读后按 Range 切片即可；正确性优先于增量读盘。
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(_) => return not_found("媒体文件读取失败"),
+    };
+    let mime = rich_asset_mime(name.rsplit('.').next().unwrap_or(""));
+
+    match parse_byte_range(request.headers().get("range"), total) {
+        Some((start, end)) => {
+            let slice = bytes[start as usize..=(end as usize)].to_vec();
+            http::Response::builder()
+                .status(206)
+                .header("Content-Type", mime)
+                .header("Content-Length", slice.len().to_string())
+                .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+                .header("Accept-Ranges", "bytes")
+                .header("Cache-Control", "no-cache")
+                .body(Cow::Owned(slice))
+                .expect("构造 206 响应失败")
+        }
+        None => http::Response::builder()
+            .status(200)
+            .header("Content-Type", mime)
+            .header("Content-Length", total.to_string())
+            .header("Accept-Ranges", "bytes")
+            .header("Cache-Control", "no-cache")
+            .body(Cow::Owned(bytes))
+            .expect("构造媒体响应失败"),
+    }
 }
 
 /// 按 ID 读取单个节点，用于重复导入后的定位刷新。
@@ -356,6 +492,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 富文本媒体回读：`richasset` 协议直接映射到工作空间 assets 目录，
+        // 图片/视频在编辑器里以本地文件显示，全程不发起网络请求。
+        .register_uri_scheme_protocol("richasset", |ctx, request| {
+            rich_asset_response(ctx.app_handle(), request)
+        })
         .setup(|app| {
             let state = db::initialize(app.handle()).map_err(|error| {
                 Box::<dyn std::error::Error>::from(std::io::Error::new(
@@ -418,6 +559,7 @@ pub fn run() {
             open_ref,
             reveal_ref,
             save_clipboard_image,
+            save_rich_asset,
             node_get,
             meta_get,
             meta_set,

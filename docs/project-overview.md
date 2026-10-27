@@ -13,7 +13,7 @@
 | 构建 | Vite 8.3.5 + `@vitejs/plugin-react` 6.1.2 | `vite.config.ts` |
 | 画布 | Konva 10 + react-konva 19.3.2 + rbush 4，视口裁剪 + 高清倍率（不做远景 LOD） | 见 ADR-005 / ADR-016、02 §4 |
 | 主题 | 四套浅色主题语义令牌（`client/lib/theme.ts` + CSS 变量 + AntD ConfigProvider） | 见 ADR-014、03 §10 |
-| 富文本 | `@wangeditor-next/editor` 6.5.1（按需加载的懒 chunk），正文 HTML 存 `nodes.body` | 见 ADR-025 |
+| 富文本 | `@wangeditor-next/editor` 6.5.1（按需加载的懒 chunk），正文 HTML 存 `nodes.body`，媒体引用存 `assets/<文件名>` 相对路径 | 见 ADR-025、ADR-029 |
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间与连线标签 | 见 ADR-020 |
 | 数据存储 | SQLite（rusqlite）+ `dataWorkSpace`；`PRAGMA user_version` 迁移 | 见 ADR-003 与 [04-data-model.md](spec/04-data-model.md) |
 | 外部数据源 | 纯本地，无云端、无遥测 | 见 ADR-004 |
@@ -55,7 +55,7 @@ ploceusTidy/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
 │   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
 │   │   ├── Workspace.tsx           # 组合画布/标题栏/属性面板/状态栏/弹窗
-│   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 删除/撤销/标注/空间命令（含手动调框、拖入整理）
+│   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 删除/撤销/标注/空间命令（含手动调框、拖入整理）；媒体正文无文字时仍可保存
 │   │   ├── useScenePersistence.ts  # 加载/保存/缺失校验/拖入监听
 │   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴
 │   │   ├── useNodeActions.ts       # 打开、定位、重连、双击激活
@@ -86,7 +86,7 @@ ploceusTidy/
 │   │   ├── EmptyOverlay.tsx        # 空画布引导
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
 │   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本）
-│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor 编辑与保存
+│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor 编辑与保存；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器
 │   │   ├── NeighborPickerDialog.tsx # 一对多关联对象跳转选择
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
@@ -98,7 +98,7 @@ ploceusTidy/
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
 │       ├── main.rs / lib.rs        # Tauri 启动（单实例）、命令注册
-│       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重与图标刷新、校验/重连、缩略图、app_meta
+│       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重与图标刷新、校验/重连、缩略图、app_meta；媒体大小与真实路径边界及回归测试
 │       ├── models.rs               # IPC DTO
 │       └── platform.rs             # 路径规范化、文件类型、剪贴板文件读写、Shell 缩略图、原生右键菜单、窗口置底、OLE 拖出
 ├── docs/
@@ -136,7 +136,7 @@ client/
 | 原文件复制与拖出（CF_HDROP / OLE 拖放） | `desktop/src/platform.rs`、`desktop/src/lib.rs`、`client/canvas/useCanvasInteractions.ts`、`client/workspace/Workspace.tsx` |
 | 安装包语言 | `desktop/tauri.conf.json`（`bundle.windows.nsis.languages`） |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
-| 富文本节点与编辑器（`richtext`、`body` 存 HTML、纯文本投影） | `client/components/RichTextDialog.tsx`、`client/workspace/useSceneStore.ts`（`commitContent`）、`docs/spec/08-adr.md` ADR-025 |
+| 富文本节点与编辑器（`richtext`、`body` 存 HTML、纯文本投影；媒体本地资产化见 ADR-029） | `client/components/RichTextDialog.tsx`、`client/workspace/useSceneStore.ts`（`commitContent`）、`docs/spec/08-adr.md` ADR-025 |
 | 搜索归一化、拼音首字母与排序 | `client/domain/search.ts`、`client/workspace/useSearch.ts` |
 | Tauri 命令、SQLite、导入去重 | `desktop/src/lib.rs`、`db.rs`、`models.rs`、`platform.rs` |
 | 拖入 / 粘贴 / 打开 / 定位 | `client/workspace/useImportClipboard.ts`、`useNodeActions.ts`、`client/lib/tauri-api.ts` |

@@ -87,6 +87,7 @@ sequenceDiagram
 | `import_paths` | 路径数组、x/y | created / existing / errors |
 | `read_clipboard_files` | 无 | Windows CF_HDROP 文件路径数组 |
 | `save_clipboard_image` | base64、扩展名 | 本地 asset 路径 |
+| `save_rich_asset` | Raw IPC 二进制体（`[ext_len][ext][文件字节]`，不经 base64） | `assets/<文件名>` 相对引用；UUID 落盘 assets，扩展名白名单（异步命令，运行时线程写盘）；回读走 `richasset` 自定义协议（MIME 按扩展名，含 Range 206 分片） |
 | `open_ref` | nodeId | 打开原文件 / URL（图片、视频同样走系统默认程序） |
 | `reveal_ref` | nodeId | 在资源管理器中定位 |
 | `node_get` | nodeId | 单个节点（重复导入后定位刷新） |

@@ -14,7 +14,7 @@
 
 | 渠道 | 地址 |
 | --- | --- |
-| 最新安装包（v0.1.1） | [release/络雀_0.1.1_x64-setup.exe](release/络雀_0.1.1_x64-setup.exe) |
+| 最新安装包（v0.1.2） | [release/络雀_0.1.2_x64-setup.exe](release/络雀_0.1.2_x64-setup.exe) |
 | GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
 
 安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。
@@ -27,7 +27,7 @@
 | 前端 | React 19.3.1 + TypeScript 6.0.3 + Vite 8.3.5 + Ant Design 6.6.7，目录 `client/` |
 | 画布 | Konva 10 + react-konva + rbush：视口裁剪、高清倍率（≥2）、任意缩放都绘制完整对象；对象/空间不重叠、拖动吸附对齐 |
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间标题与连线标签 |
-| 内容 | 文字卡与富文本卡都在弹窗里编辑；富文本用 wangEditor-next（按需加载），正文以 HTML 持久化 |
+| 内容 | 文字卡与富文本卡都在弹窗里编辑；富文本用 wangEditor-next（按需加载），正文以 HTML 持久化，支持本地插入图片与视频（二进制直传到 `assets/`，粘贴截图直传） |
 | 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制 |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
 | 安装包 | NSIS 安装包中英双语（跟随系统语言，可手动选择） |
@@ -109,5 +109,5 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0 与 v0.1.1 修复版发布已完成。）
-- 拖出到外部程序与富文本编辑器尚未在本机出包后实测（编译与类型检查已通过），见 [docs/spec/08-adr.md](docs/spec/08-adr.md) §5。
+- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.1.2 发布已完成。）
+- 媒体上传已补大小/非空校验、Windows BMP MIME 兼容与真实路径边界，仅含媒体的富文本也可保存；Rust 10 项测试与内容保存 5 项回归通过。拖出到外部程序、编辑器媒体展示、视频进度条与粘贴截图的真机验收已由用户确认完成（2026-10-27），见 [docs/spec/08-adr.md](docs/spec/08-adr.md) §5。

@@ -59,6 +59,7 @@
 | ADR-026 | 原文件拖出与复制：只传引用、只声明 COPY | accepted | 2026-10-26 |
 | ADR-027 | 安装包中英双语 | accepted | 2026-10-26 |
 | ADR-028 | 文字/富文本改为弹窗编辑（推翻画布内联编辑） | accepted | 2026-10-26 |
+| ADR-029 | 富文本媒体本地化：Raw IPC 二进制直传 + `richasset` 协议回读 | accepted | 2026-10-27 |
 
 ## 4. ADR 正文
 
@@ -397,6 +398,24 @@
   - 在右侧属性面板里编辑正文：面板宽度固定 280px，长文编辑体验差，且面板语义是「只读属性」；否决。
 - 后果：`commitText` 被 `commitContent` 取代（多一个纯文本参数，供富文本写投影）；画布不再有内联 textarea、`CanvasTextEditor.tsx` 删除；新建文字卡的引导文案改为「双击或右键编辑内容」。
 
+### ADR-029 富文本媒体本地化：Raw IPC 二进制直传 + `richasset` 协议回读
+
+- 状态：accepted
+- 日期：2026-10-27
+- 背景：v0.1.1 富文本只有格式化文字，用户要求支持插入图片与视频。wangEditor 默认的上传配置需要服务端、网络图片入口要发起外网请求，都违反 HC-13（纯本地、无外部请求）；base64 内嵌 HTML 会把正文体积放大 1/3 以上并撑爆数据库行，用户明确否决。
+- 决策：
+  - 上传走 Tauri 2 Raw IPC 二进制直传：`invoke('save_rich_asset', Uint8Array)`，body = `[ext_len: u8][ext ascii][文件字节]`，JSON 体直接拒绝；命令只收字节与扩展名，文件名由 Rust 生成 UUID（HC-12）。
+  - 落盘复用 `assets/` 目录（启动时 `create_dir_all` 保证存在），扩展名白名单 png/jpg/jpeg/webp/gif/bmp/mp4/webm/ogg，图片 ≤20MB、视频 ≤100MB；HTML 只存 `assets/<文件名>` 相对引用，工作空间迁移后无需改写。
+  - 回读走自定义 `richasset` 协议（`http://richasset.localhost/<文件名>`）：MIME 按扩展名映射，支持 HTTP Range 206 分片供视频拖动进度条；文件名严格校验（拒绝分隔符/`..`/`%`/白名单外扩展名）防目录穿越。
+  - 上传大小与非空校验在前端和 Rust 边界同时执行；兼容 Windows BMP 的 `image/x-ms-bmp` MIME。媒体读写解析真实路径，资产目录不得越出当前工作空间，回读文件不得越出资产目录；协议保留完整路径供校验，不丢弃目录段。
+  - 仅含本地图片/视频的富文本也允许保存，纯文本投影保持为空，卡片名称回退「富文本媒体」；真正空白的正文仍不覆盖原内容。
+  - 编辑器移除「网络图片 / 网络视频」入口（`excludeKeys: ['insertImage', 'insertVideo']`）；粘贴截图自动进入 `uploadImage.customUpload`，即剪贴板/粘贴上传通道。
+- 备选方案：
+  - base64 data URL 内嵌 HTML：体积爆炸、保存传输量放大、数据库行膨胀；否决（用户明确要求文件方式）。
+  - assetProtocol scope 配置 + 绝对路径：要把资产目录开进 scope，且 HTML 里存绝对路径，迁移工作空间后全部失效；否决。
+  - 复用 `save_clipboard_image`（base64 参数）：与「不经 base64」的文件上传要求冲突；否决。
+- 后果：新增 `save_rich_asset` 命令与 `richasset` 协议 handler（写盘走 `spawn_blocking`，不阻塞主线程）；删除富文本节点不回收 assets 里的媒体文件（与截图副本行为一致，有真实需求时再做 GC）；`dataWorkSpace/assets/` 从此承载截图副本与富文本媒体两类本地资产。
+
 ## 5. 待复核
 
 | 事项 | 触发时机 | 说明 |
@@ -408,5 +427,6 @@
 | 多画布 | 不做（已定） | 单窗口单画布；重复启动只激活已有窗口（ADR-024） |
 | macOS/Linux | 后续 | 剪贴板已有；Shell 缩略图降级；打包（dmg/AppImage/deb）与真机验证未做 |
 | 代码签名 | 已完成（v0.1.0） | 已用本机自签名证书签名并发布 v0.1.0 至 GitHub Releases；自签名不受系统信任，正式 CA 证书 / Azure Trusted Signing 待有真实分发需求时评估 |
-| 拖出到外部程序的真机验证 | 下次出包后 | 自研 `IDataObject` + `IDropSource` 只在编译层验证（`cargo check` / `cargo test` 通过）；`DoDragDrop` 是否稳定运行在 Tauri 主线程、VS Code / 资源管理器 / Explorer 是否都能正确接收 `CF_HDROP`，需要真机实测（见 ADR-026） |
-| 富文本编辑器的真机验证 | 下次出包后 | wangEditor-next 与 React 19.3.1 的组合只做了构建与类型验证，弹窗内编辑、保存、重开的完整往返需真机实测（见 ADR-025） |
+| 拖出到外部程序的真机验证 | 已完成（v0.1.2） | 用户于 2026-10-27 确认真机验收完成；自动检查与 Rust 测试通过（见 ADR-026） |
+| 富文本编辑器的真机验证 | 已完成（v0.1.1） | 弹窗编辑、保存、重开往返已真机实测通过 |
+| 富文本媒体上传与回读的真机验证 | 已完成（v0.1.2） | 用户于 2026-10-27 确认真机验收完成；二进制往返、非法/超限上传、路径拒绝、Range 解析与媒体正文保存回归通过（见 ADR-029） |

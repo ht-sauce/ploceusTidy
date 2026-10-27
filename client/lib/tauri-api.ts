@@ -2,7 +2,7 @@
  * Tauri IPC 封装：前端唯一允许接触桌面能力的地方。
  * 所有命令只传引用 ID 与展示数据，不传任意文件路径（HC-12）。
  */
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type {
   ImportResult,
@@ -19,6 +19,9 @@ import type {
 
 /** 浏览器调试模式下为 false，用于跳过桌面专属逻辑。 */
 export const isDesktopClient = isTauri()
+
+/** 富文本媒体扩展名白名单，与 Rust 侧 `RICH_MEDIA_EXTS` 保持一致。 */
+const RICH_MEDIA_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'mp4', 'webm', 'ogg'])
 
 /**
  * 场景序列化走 Web Worker：10 万对象的 JSON.stringify 在主线程是 100–300ms
@@ -190,6 +193,31 @@ export const desktopApi = {
   /** 把粘贴的截图写入 dataWorkSpace/assets，返回落盘路径。 */
   saveClipboardImage: (data: string, ext: string) =>
     invoke<string>('save_clipboard_image', { data, ext }),
+  /**
+   * 富文本媒体上传：Raw IPC 二进制直传（body = [ext_len][ext][文件字节]），不经 base64。
+   * 返回 `assets/<文件名>` 相对引用（存 HTML 用）与 `richasset` 协议回读 URL（编辑器展示用）。
+   */
+  saveRichAsset: async (file: Blob): Promise<{ name: string; url: string }> => {
+    if (!isDesktopClient) throw new Error('媒体上传仅在桌面客户端中可用')
+    const mimeExt = (file.type.split('/')[1] ?? '').toLowerCase()
+    const ext = mimeExt === 'x-ms-bmp' ? 'bmp' : mimeExt
+    if (!RICH_MEDIA_EXTS.has(ext)) throw new Error(`不支持的媒体格式：${file.type || '未知'}`)
+    const limit = ['mp4', 'webm', 'ogg'].includes(ext) ? 100 : 20
+    if (file.size === 0 || file.size > limit * 1024 * 1024) {
+      throw new Error(`媒体文件须非空且不超过 ${limit}MB`)
+    }
+    const extBytes = new TextEncoder().encode(ext)
+    const fileBytes = new Uint8Array(await file.arrayBuffer())
+    const body = new Uint8Array(1 + extBytes.length + fileBytes.length)
+    body[0] = extBytes.length
+    body.set(extBytes, 1)
+    body.set(fileBytes, 1 + extBytes.length)
+    const relative = await invoke<string>('save_rich_asset', body)
+    const name = relative.slice('assets/'.length)
+    return { name, url: convertFileSrc(name, 'richasset') }
+  },
+  /** 富文本媒体回读 URL：`richasset` 协议映射到工作空间 assets 目录。 */
+  richAssetUrl: (name: string) => convertFileSrc(name, 'richasset'),
   workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
   /** 用 Windows Shell 生成缩略图；不可用时返回 null。 */
   thumbGet: (nodeId: string, size = 96) => invoke<string | null>('thumb_get', { nodeId, size }),

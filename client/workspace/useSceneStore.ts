@@ -817,11 +817,15 @@ export function useSceneStore(): SceneStore {
    */
   const commitContent = useCallback(
     (id: string, body: string, plain: string, live = false) => {
-      if (!live && plain.trim() === '') return
       const node = nodes.find((item) => item.id === id)
       if (!node) return
+      // 富文本的纯文本投影不含媒体；只有图片/视频的正文仍是有效内容。
+      const hasMedia =
+        node.kind === 'richtext' && /<(?:img|video)\b[^>]*\bsrc=["']assets\//i.test(body)
+      if (!live && plain.trim() === '' && !hasMedia) return
       if (node.body === body && node.subtitle === plain) return
-      const firstLine = plain.split('\n').find((line) => line.trim()) ?? '新文字'
+      const firstLine =
+        plain.split('\n').find((line) => line.trim()) ?? (hasMedia ? '富文本媒体' : '新文字')
       const changed: SceneNode = {
         ...node,
         name: firstLine.trim().slice(0, 28),

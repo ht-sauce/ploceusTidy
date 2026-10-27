@@ -1327,6 +1327,93 @@ pub fn save_asset(state: &AppState, bytes: &[u8], ext: &str) -> Result<String, S
     Ok(path.to_string_lossy().to_string())
 }
 
+/// 富文本媒体扩展名白名单：图片 + WebView2 可直接播放的视频格式。
+const RICH_MEDIA_EXTS: [&str; 9] = [
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp4", "webm", "ogg",
+];
+
+/// 富文本媒体扩展名校验；白名单外直接拒绝，不做静默降级。
+pub fn is_rich_media_ext(ext: &str) -> bool {
+    RICH_MEDIA_EXTS.contains(&ext)
+}
+
+/// 保存富文本媒体：body = `[ext_len: u8][ext ascii][文件字节]`（Raw IPC 二进制体，不经 base64）。
+/// 文件名由 UUID 生成，返回 `assets/<文件名>` 相对引用；HTML 只存相对引用，
+/// 工作空间迁移后无需改写（HC-12：不传路径，扩展名走白名单）。
+pub fn save_rich_asset(state: &AppState, body: &[u8]) -> Result<String, String> {
+    let ext_len = *body.first().ok_or("媒体上传体为空")? as usize;
+    let ext = std::str::from_utf8(body.get(1..1 + ext_len).ok_or("媒体上传体不完整")?)
+        .map_err(|_| "媒体扩展名必须是 ASCII")?
+        .to_lowercase();
+    if !is_rich_media_ext(&ext) {
+        return Err(format!("不支持的媒体格式：{ext}"));
+    }
+    let file = body.get(1 + ext_len..).ok_or("媒体上传体不完整")?;
+    let limit = if matches!(ext.as_str(), "mp4" | "webm" | "ogg") {
+        100 * 1024 * 1024
+    } else {
+        20 * 1024 * 1024
+    };
+    if file.is_empty() || file.len() > limit {
+        return Err(format!("媒体文件须非空且不超过 {}MB", limit / 1024 / 1024));
+    }
+    let assets = state.assets_path()?;
+    fs::create_dir_all(&assets)
+        .map_err(|error| format!("{}：创建媒体目录失败：{error}", assets.display()))?;
+    let assets = rich_assets_root(state)?;
+    let name = format!("{}.{}", Uuid::new_v4(), ext);
+    let path = assets.join(&name);
+    fs::write(&path, file)
+        .map_err(|error| format!("{}：写入媒体文件失败：{error}", path.display()))?;
+    Ok(format!("assets/{name}"))
+}
+
+/// 解析富文本媒体文件名为 assets 目录下的绝对路径；
+/// 文件名必须是白名单扩展名，且拒绝路径分隔符与编码字符，防目录穿越。
+pub fn rich_asset_file(state: &AppState, name: &str) -> Result<PathBuf, String> {
+    let ext = name.rsplit('.').next().unwrap_or("");
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_'))
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains("..")
+        || name.contains('%')
+        || !is_rich_media_ext(ext)
+    {
+        return Err("非法的媒体文件名".to_string());
+    }
+    let root = rich_assets_root(state)?;
+    let path = root.join(name);
+    let resolved = fs::canonicalize(&path)
+        .map_err(|error| format!("{}：解析媒体路径失败：{error}", path.display()))?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "{}：读取媒体被拒绝：真实路径越出 assets",
+            path.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+/// 资产目录自身也可能被替换成链接，读写前均要求真实目录留在当前工作空间内。
+fn rich_assets_root(state: &AppState) -> Result<PathBuf, String> {
+    let assets = state.assets_path()?;
+    let root = fs::canonicalize(&assets)
+        .map_err(|error| format!("{}：解析媒体目录失败：{error}", assets.display()))?;
+    let workspace = state.workspace_path()?;
+    let workspace = fs::canonicalize(&workspace)
+        .map_err(|error| format!("{}：解析工作空间失败：{error}", workspace.display()))?;
+    if !root.starts_with(workspace) {
+        return Err(format!(
+            "{}：媒体读写被拒绝：真实目录越出工作空间",
+            assets.display()
+        ));
+    }
+    Ok(root)
+}
+
 /// 按 ID 读取单个节点；不存在时返回 `None`，由调用方决定是否报错。
 pub fn node_by_id(state: &AppState, node_id: &str) -> Result<Option<SceneNode>, String> {
     let connection = state.reader.lock().map_err(|error| error.to_string())?;
@@ -1883,6 +1970,102 @@ pub fn seed_bench_nodes(state: &AppState, count: i64) -> Result<i64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MediaFixture {
+        state: AppState,
+        root: PathBuf,
+    }
+
+    impl MediaFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("ploceus-media-test-{}", Uuid::new_v4()));
+            fs::create_dir_all(root.join("assets")).expect("创建测试目录失败");
+            let state = AppState {
+                db: Mutex::new(Connection::open_in_memory().expect("打开测试库失败")),
+                reader: Mutex::new(Connection::open_in_memory().expect("打开测试库失败")),
+                workspace: Mutex::new(root.clone()),
+                assets: Mutex::new(root.join("assets")),
+                thumb_meta: Mutex::new(HashMap::new()),
+            };
+            Self { state, root }
+        }
+    }
+
+    impl Drop for MediaFixture {
+        fn drop(&mut self) {
+            // 只清理本测试生成的 UUID 临时目录，不接触运行中的工作空间。
+            fs::remove_dir_all(&self.root).expect("清理媒体测试目录失败");
+        }
+    }
+
+    #[test]
+    fn rich_media_roundtrip_preserves_binary_and_relative_reference() {
+        let fixture = MediaFixture::new();
+        for ext in RICH_MEDIA_EXTS {
+            let mut body = vec![ext.len() as u8];
+            body.extend_from_slice(ext.as_bytes());
+            body.extend_from_slice(&[0, 255, 10, 128]);
+            let relative = save_rich_asset(&fixture.state, &body).expect("上传失败");
+            let name = relative
+                .strip_prefix("assets/")
+                .expect("引用必须为相对路径");
+            let path = rich_asset_file(&fixture.state, name).expect("解析回读路径失败");
+            assert_eq!(fs::read(path).expect("回读失败"), [0, 255, 10, 128]);
+        }
+    }
+
+    #[test]
+    fn rich_media_rejects_malformed_empty_and_oversized_uploads() {
+        let fixture = MediaFixture::new();
+        for body in [
+            vec![],
+            vec![8, b'p'],
+            vec![1, 255],
+            b"\x03exeX".to_vec(),
+            b"\x03png".to_vec(),
+        ] {
+            assert!(save_rich_asset(&fixture.state, &body).is_err());
+        }
+        for (ext, limit) in [("png", 20), ("mp4", 100)] {
+            let mut body = vec![0; 4 + limit * 1024 * 1024 + 1];
+            body[..4].copy_from_slice(&[
+                3,
+                ext.as_bytes()[0],
+                ext.as_bytes()[1],
+                ext.as_bytes()[2],
+            ]);
+            assert!(save_rich_asset(&fixture.state, &body).is_err());
+        }
+        assert_eq!(
+            fs::read_dir(fixture.root.join("assets"))
+                .expect("读取测试目录失败")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn rich_media_rejects_paths_and_external_asset_roots() {
+        let fixture = MediaFixture::new();
+        for name in [
+            "",
+            "../a.png",
+            "sub/a.png",
+            "sub\\a.png",
+            "%2e.png",
+            "a.png:stream.png",
+            "a.exe",
+        ] {
+            assert!(
+                rich_asset_file(&fixture.state, name).is_err(),
+                "应拒绝：{name}"
+            );
+        }
+        let outside = MediaFixture::new();
+        *fixture.state.assets.lock().expect("锁定测试状态失败") = outside.root.join("assets");
+        assert!(save_rich_asset(&fixture.state, b"\x03pngX").is_err());
+        assert!(rich_asset_file(&fixture.state, "a.png").is_err());
+    }
 
     #[test]
     fn migrate_creates_tables_and_sets_version() {
