@@ -25,7 +25,14 @@ export const NODE_ICON_SIZE = 32
 export const NODE_NAME_FONT_SIZE = 12
 export const NODE_LINE_HEIGHT = 14
 export const NODE_PADDING_BOTTOM = 4
-export const NODE_ANNOTATION_HEIGHT = 12
+/**
+ * 标注条的独占高度（含与卡片下边框的间距）。
+ * 标注曾贴在下边框线上，与描边重叠后几乎看不清；现在整块让出 18px：
+ * 文字牌约 12px 高，上下各留 ~5px，既不压线也不显得脱开。
+ */
+export const NODE_ANNOTATION_HEIGHT = 18
+/** 标注文字牌顶边相对卡片底边的偏移：height 减该值即文字牌 y。 */
+export const NODE_ANNOTATION_INSET = 17
 
 /**
  * Konva 渲染倍率：不低于 2 倍，低 DPI 屏也能保持文字锐利。

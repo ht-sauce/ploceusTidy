@@ -7,9 +7,11 @@
  * - 该组件由上层按需 `import()` 加载，富文本依赖因此不进首屏分包；
  * - 保存时同时取出 HTML（正文）与纯文本（卡片名称、搜索用投影）；
  * - 图片/视频只走本地上传（Raw IPC 二进制直传到工作空间 assets），
- *   网络图/网络视频入口被移除，编辑器内不发任何网络请求（HC-13）。
+ *   网络图/网络视频入口被移除，编辑器内不发任何网络请求（HC-13）；
+ * - Ctrl+S 就地保存不关闭，「保存」按钮保存并关闭，取消时若有改动先确认。
  */
 import { useEffect, useRef } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import Modal from 'antd/es/modal'
 import { App as AntApp } from 'antd'
 import { createEditor, createToolbar } from '@wangeditor-next/editor'
@@ -34,16 +36,29 @@ function htmlForSave(html: string) {
 interface RichTextDialogProps {
   initialHtml: string
   onCancel: () => void
+  /** 保存并关闭。 */
   onSave: (html: string, plain: string) => void
+  /** 就地保存：写回内容但不关闭弹窗，方便边看画布边继续写。 */
+  onQuickSave: (html: string, plain: string) => void
 }
 
-export default function RichTextDialog({ initialHtml, onCancel, onSave }: RichTextDialogProps) {
+export default function RichTextDialog({
+  initialHtml,
+  onCancel,
+  onSave,
+  onQuickSave,
+}: RichTextDialogProps) {
   const editorHost = useRef<HTMLDivElement>(null)
   const toolbarHost = useRef<HTMLDivElement>(null)
   const editorRef = useRef<IDomEditor | null>(null)
   // 初始内容只在挂载时读取一次：编辑器自身持有文档状态，不必让 React 参与回流。
   const initialRef = useRef(initialHtml)
-  const { message } = AntApp.useApp()
+  /**
+   * 是否有未保存改动：由编辑器的 change 事件标记，而不是比对 HTML 字符串——
+   * wangEditor 会把初始 HTML 规范化（补 <p> 等），字符串比对会一打开就判定为「已修改」。
+   */
+  const dirtyRef = useRef(false)
+  const { message, modal } = AntApp.useApp()
 
   useEffect(() => {
     let editor: IDomEditor | null = null
@@ -96,6 +111,10 @@ export default function RichTextDialog({ initialHtml, onCancel, onSave }: RichTe
       const editorConfig: Partial<IEditorConfig> = {
         placeholder: '写点什么：结论、方案、会议记录都可以',
         MENU_CONF: menuConf,
+        // 内容变化只打一个标记：用于 Ctrl+S 幂等与取消时确认，不参与渲染。
+        onChange: () => {
+          dirtyRef.current = true
+        },
       }
       editor = createEditor({
         selector: host,
@@ -109,6 +128,8 @@ export default function RichTextDialog({ initialHtml, onCancel, onSave }: RichTe
       }
       createToolbar({ editor, selector: toolbar, mode: 'default', config: toolbarConfig })
       editorRef.current = editor
+      // 初始化过程可能触发一次 change，这里归零，避免空改动也弹确认。
+      dirtyRef.current = false
     }
     attempt(10)
     return () => {
@@ -126,6 +147,42 @@ export default function RichTextDialog({ initialHtml, onCancel, onSave }: RichTe
     onSave(htmlForSave(editor.getHtml()), editor.getText())
   }
 
+  /** 当前编辑器内容是否与打开时不同；用于 Ctrl+S 的幂等判断与取消时确认。 */
+  const isDirty = () => dirtyRef.current
+
+  const handleQuickSave = () => {
+    const editor = editorRef.current
+    if (!editor || !dirtyRef.current) return
+    const html = htmlForSave(editor.getHtml())
+    onQuickSave(html, editor.getText())
+    // 就地保存后把基线推进到当前内容：再点取消不该提示「有未保存修改」。
+    initialRef.current = html
+    dirtyRef.current = false
+  }
+
+  const requestCancel = () => {
+    if (!isDirty()) {
+      onCancel()
+      return
+    }
+    modal.confirm({
+      title: '放弃未保存的修改？',
+      content: '这篇富文本还有改动没有保存，关闭后会丢失。',
+      okText: '放弃修改',
+      okButtonProps: { danger: true },
+      cancelText: '继续编辑',
+      onOk: onCancel,
+    })
+  }
+
+  /** 编辑器是 contenteditable，keydown 会冒泡到外层容器，在这里接住 Ctrl+S。 */
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return
+    event.preventDefault()
+    event.stopPropagation()
+    handleQuickSave()
+  }
+
   return (
     <Modal
       open
@@ -134,13 +191,14 @@ export default function RichTextDialog({ initialHtml, onCancel, onSave }: RichTe
       okText="保存"
       cancelText="取消"
       onOk={handleSave}
-      onCancel={onCancel}
+      onCancel={requestCancel}
       styles={{ body: { paddingTop: 8 } }}
     >
-      <div className="rich-editor">
+      <div className="rich-editor" onKeyDown={handleKeyDown}>
         <div ref={toolbarHost} className="rich-editor-toolbar" />
         <div ref={editorHost} className="rich-editor-body" />
       </div>
+      <p className="rich-editor-hint">Ctrl+S 保存但不关闭；点「保存」写回画布并关闭。</p>
     </Modal>
   )
 }

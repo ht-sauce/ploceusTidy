@@ -74,7 +74,7 @@ dataWorkSpace/
 | `ref_id` | TEXT NULL UNIQUE | 引用；文字卡为空 |
 | `group_id` | TEXT NOT NULL DEFAULT '' | 所属分组框 `groups.id`；空字符串表示未分组 |
 | `z` | INTEGER NOT NULL DEFAULT 0 | 叠放层级 |
-| `parent_node_id` | TEXT NULL | 规划字段：相对父节点挂载，当前未实现 |
+| `parent_node_id` | TEXT NULL | 保留列：嵌套挂载未做，客户端已不再读写（后续若做挂载再启用） |
 | `data_json` | TEXT NULL | 规划字段：扩展样式，当前未写入 |
 | `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸（默认 72 宽；渲染高度按名称行数与标注自适应） |
 | `created_at` | INTEGER | epoch ms |

@@ -42,9 +42,7 @@ export interface SceneNode {
   groupId: string
   /** 叠放层级，数值大的在上层。 */
   z: number
-  /** 相对父节点的挂载点；为空表示使用世界坐标。 */
-  parentNodeId?: string
-  /** 扩展样式（JSON 字符串）。 */
+  /** 扩展样式（JSON 字符串）；`accent` 用作卡片描边色。 */
   dataJson?: string
   x: number
   y: number

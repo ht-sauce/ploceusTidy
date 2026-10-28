@@ -61,13 +61,15 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Alt + 滚轮', label: '以指针为中心缩放' },
   { keys: '左键拖拽空白', label: '框选多个对象' },
   { keys: 'Shift + 点击', label: '追加或取消选中' },
+  { keys: '方向键 / Shift + 方向键', label: '微调 1px / 10px' },
   { keys: '拖拽四向圆点', label: '连线到另一个对象' },
   { keys: 'Ctrl + 点击/拖拽文件', label: '拖到外部程序打开' },
   { keys: '双击文字或富文本', label: '打开内容编辑弹窗' },
   { keys: '双击文件', label: '打开原文件' },
   { keys: 'G / L', label: '把选中对象放进空间 / 建立连线' },
   { keys: '右键对象', label: '打开、定位、标注、属性、删除' },
-  { keys: 'Delete / Ctrl+Z', label: '删除 / 撤销删除' },
+  { keys: 'Delete / Ctrl+Z / Ctrl+Shift+Z', label: '删除 / 撤销 / 重做' },
+  { keys: 'Ctrl+S', label: '立即保存（编辑弹窗内也不关闭）' },
   { keys: 'Ctrl+A / Ctrl+K', label: '全选 / 聚焦搜索' },
 ]
 

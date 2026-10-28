@@ -741,6 +741,52 @@ button {
   background: var(--accent);
 }
 
+/* 保存状态三态：进行中闪烁、失败转红；成功沿用主题色。 */
+.save-dot.is-saving {
+  background: var(--text-secondary);
+  animation: save-dot-pulse 900ms ease-in-out infinite;
+}
+
+.save-dot.is-error {
+  background: var(--error);
+}
+
+.status-save-error {
+  color: var(--error);
+}
+
+@keyframes save-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 导入失败汇总：逐条列出路径与原因，可滚动。 */
+.import-error-list {
+  max-height: 240px;
+  overflow: auto;
+  display: grid;
+  gap: 6px;
+}
+
+.import-error-list p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+  color: var(--text-secondary);
+}
+
+.rich-editor-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .status-separator {
   color: var(--border);
 }

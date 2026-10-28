@@ -1414,12 +1414,6 @@ fn rich_assets_root(state: &AppState) -> Result<PathBuf, String> {
     Ok(root)
 }
 
-/// 按 ID 读取单个节点；不存在时返回 `None`，由调用方决定是否报错。
-pub fn node_by_id(state: &AppState, node_id: &str) -> Result<Option<SceneNode>, String> {
-    let connection = state.reader.lock().map_err(|error| error.to_string())?;
-    load_node_by_id(&connection, node_id).map_err(|error| format!("读取节点失败：{error}"))
-}
-
 // ---------- 应用配置 ----------
 
 /// 读取应用配置；键不存在或数据库异常时返回 `None`，由调用方回退默认值。

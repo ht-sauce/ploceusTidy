@@ -24,6 +24,11 @@ import {
 } from '@/domain/layout'
 
 type Box = { x: number; y: number; w: number; h: number }
+type Point = { x: number; y: number }
+
+/** 拖动到视口边缘多近开始自动平移（屏幕 px）与每帧最大位移。 */
+const AUTO_PAN_MARGIN = 56
+const AUTO_PAN_STEP = 16
 
 /** 空间手动调框的抓角：北/南改高、东/西改宽，西北/西南以对角为锚。 */
 export type GroupResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
@@ -165,8 +170,8 @@ export function useCanvasInteractions({
     idSet: Set<string>
     /** 超大选择集降级：只拖包围盒 ghost，不逐个驱动图形。 */
     ghost: boolean
-    pointerX: number
-    pointerY: number
+    /** 按下时的世界坐标：拖动偏移由「指针世界坐标 − 起点世界坐标」得出。 */
+    startWorld: Point
     offsetX: number
     offsetY: number
     /** 吸附前的裸偏移：吸附落点被拒时先退回裸偏移，再考虑整体回退。 */
@@ -182,8 +187,7 @@ export function useCanvasInteractions({
   } | null>(null)
   const groupDrag = useRef<{
     id: string
-    startX: number
-    startY: number
+    startWorld: Point
     appliedX: number
     appliedY: number
     /** 吸附前的裸偏移：落点被拒时先退回裸偏移，再考虑整体回退（与对象拖动一致）。 */
@@ -197,8 +201,7 @@ export function useCanvasInteractions({
   /** 空间手动调框会话：与空间拖动互斥，拖动期直驱框图形，松手一次性提交尺寸。 */
   const groupResize = useRef<{
     id: string
-    startX: number
-    startY: number
+    startWorld: Point
     box: Rect
     corner: GroupResizeCorner
     /** 拖动期已计算的最新框；松手提交直接取它，不依赖指针是否还在画布内。 */
@@ -245,9 +248,38 @@ export function useCanvasInteractions({
     [],
   )
 
-  const screenToWorld = (x: number, y: number) => {
-    const current = viewportRef.current
-    return { x: (x - current.x) / current.scale, y: (y - current.y) / current.scale }
+  /**
+   * 拖动期视口基准：边缘自动平移会改写视口，而 setState 要到下一帧才反映到 viewportRef。
+   * 这里用「按下时的视口 + 本次累计平移量」换算世界坐标，拖动读数永远是最新的。
+   */
+  const panBase = useRef<CanvasViewport | null>(null)
+  const panOffset = useRef<Point>({ x: 0, y: 0 })
+  const autoPan = useRef<{ raf: number | null; vx: number; vy: number; pointer: Point | null }>({
+    raf: null,
+    vx: 0,
+    vy: 0,
+    pointer: null,
+  })
+
+  const worldAt = (x: number, y: number) => {
+    const base = panBase.current
+    const scale = viewportRef.current.scale
+    const tx = base ? base.x - panOffset.current.x : viewportRef.current.x
+    const ty = base ? base.y - panOffset.current.y : viewportRef.current.y
+    return { x: (x - tx) / scale, y: (y - ty) / scale }
+  }
+
+  /** 开始一次拖动会话：锁住视口基准并清空自动平移累计。 */
+  const beginSession = () => {
+    panBase.current = { ...viewportRef.current }
+    panOffset.current = { x: 0, y: 0 }
+  }
+
+  const stopAutoPan = () => {
+    if (autoPan.current.raf !== null) cancelAnimationFrame(autoPan.current.raf)
+    autoPan.current = { raf: null, vx: 0, vy: 0, pointer: null }
+    panBase.current = null
+    panOffset.current = { x: 0, y: 0 }
   }
 
   /**
@@ -323,8 +355,9 @@ export function useCanvasInteractions({
     const session = groupDrag.current
     if (!session) return
     const scale = viewportRef.current.scale
-    let desiredX = (pointerX - session.startX) / scale
-    let desiredY = (pointerY - session.startY) / scale
+    const world = worldAt(pointerX, pointerY)
+    let desiredX = world.x - session.startWorld.x
+    let desiredY = world.y - session.startWorld.y
     session.rawOffsetX = desiredX
     session.rawOffsetY = desiredY
     // 对齐吸附：rbush 局部邻居 + 其他空间（数量少），不做任何碰撞约束。
@@ -387,12 +420,12 @@ export function useCanvasInteractions({
   const moveGroupResize = (pointerX: number, pointerY: number) => {
     const session = groupResize.current
     if (!session) return
-    const scale = viewportRef.current.scale
+    const world = worldAt(pointerX, pointerY)
     const box = resizedBoxOf(
       session.box,
       session.corner,
-      (pointerX - session.startX) / scale,
-      (pointerY - session.startY) / scale,
+      world.x - session.startWorld.x,
+      world.y - session.startWorld.y,
     )
     session.current = box
     groupBoxRefs.current
@@ -467,15 +500,16 @@ export function useCanvasInteractions({
     }
   }
 
-  /** Alt / Ctrl + 滚轮缩放；普通滚轮按 PS 习惯做纵向平移，避免误缩放。 */
+  /** Alt / Ctrl + 滚轮缩放；普通滚轮按 PS 习惯做平移，两个方向都跟随 delta，触摸板横向滑动不再变成纵向。 */
   const handleWheel = (event: KonvaEventObject<WheelEvent>) => {
     event.evt.preventDefault()
     const stage = stageRef.current
     if (!stage) return
     const pointer = stage.getPointerPosition()
-    const raw = event.evt.deltaY !== 0 ? event.evt.deltaY : event.evt.deltaX
+    const deltaX = event.evt.deltaX
+    const deltaY = event.evt.deltaY
     if (event.evt.altKey || event.evt.ctrlKey || event.evt.metaKey) {
-      const factor = raw > 0 ? 0.9 : 1.1
+      const factor = (deltaY || deltaX) > 0 ? 0.9 : 1.1
       zoomAt(
         viewportRef.current.scale * factor,
         pointer?.x ?? size.width / 2,
@@ -483,7 +517,7 @@ export function useCanvasInteractions({
       )
       return
     }
-    setViewport((previous) => ({ ...previous, y: previous.y - raw }))
+    setViewport((previous) => ({ ...previous, x: previous.x - deltaX, y: previous.y - deltaY }))
   }
 
   const handleStagePointerDown = (event: KonvaEventObject<MouseEvent>) => {
@@ -508,7 +542,8 @@ export function useCanvasInteractions({
     if (event.target !== stage) return
 
     // 左键拖空白即框选；按住 Shift 追加到当前选择。
-    const start = screenToWorld(pointer.x, pointer.y)
+    beginSession()
+    const start = worldAt(pointer.x, pointer.y)
     boxSession.current = {
       startX: start.x,
       startY: start.y,
@@ -519,12 +554,8 @@ export function useCanvasInteractions({
     setSelectionRect(null)
   }
 
-  const handleStagePointerMove = () => {
-    const stage = stageRef.current
-    if (!stage) return
-    const pointer = stage.getPointerPosition()
-    if (!pointer) return
-
+  /** 把一次指针移动应用到当前会话：所有偏移都由世界坐标算出，自动平移不会让对象脱手。 */
+  const applyPointer = (pointer: Point) => {
     if (dragOutPending.current) {
       const pending = dragOutPending.current
       // 拖出阈值（屏幕 px）：小于它视为点击，避免误触发一次空拖放。
@@ -537,7 +568,7 @@ export function useCanvasInteractions({
     }
 
     if (connectSession.current) {
-      const world = screenToWorld(pointer.x, pointer.y)
+      const world = worldAt(pointer.x, pointer.y)
       connectSession.current.x = world.x
       connectSession.current.y = world.y
       setConnectPreview({
@@ -551,15 +582,14 @@ export function useCanvasInteractions({
 
     if (boxSession.current) {
       const session = boxSession.current
-      const currentX = (pointer.x - viewportRef.current.x) / viewportRef.current.scale
-      const currentY = (pointer.y - viewportRef.current.y) / viewportRef.current.scale
-      session.currentX = currentX
-      session.currentY = currentY
+      const current = worldAt(pointer.x, pointer.y)
+      session.currentX = current.x
+      session.currentY = current.y
       setSelectionRect({
-        x: Math.min(session.startX, currentX),
-        y: Math.min(session.startY, currentY),
-        w: Math.abs(currentX - session.startX),
-        h: Math.abs(currentY - session.startY),
+        x: Math.min(session.startX, current.x),
+        y: Math.min(session.startY, current.y),
+        w: Math.abs(current.x - session.startX),
+        h: Math.abs(current.y - session.startY),
       })
       return
     }
@@ -589,8 +619,9 @@ export function useCanvasInteractions({
     if (dragSession.current) {
       const session = dragSession.current
       const scale = viewportRef.current.scale
-      let desiredX = (pointer.x - session.pointerX) / scale
-      let desiredY = (pointer.y - session.pointerY) / scale
+      const world = worldAt(pointer.x, pointer.y)
+      let desiredX = world.x - session.startWorld.x
+      let desiredY = world.y - session.startWorld.y
       session.rawOffsetX = desiredX
       session.rawOffsetY = desiredY
       if (Math.abs(desiredX) > 1 || Math.abs(desiredY) > 1) session.moving = true
@@ -656,6 +687,76 @@ export function useCanvasInteractions({
     }
   }
 
+  /**
+   * 边缘自动平移：指针贴近视口边缘时按帧平移画布，并用同一屏幕坐标重算会话偏移，
+   * 被拖对象因此随视野一起走——大画布上不必「松手 → 平移 → 再拖」。
+   * 只在拖动类会话进行中启用；平移画布本身不触发，避免自激。
+   */
+  const updateAutoPan = (pointer: Point) => {
+    const margin = AUTO_PAN_MARGIN
+    const depthX =
+      pointer.x < margin
+        ? pointer.x - margin
+        : pointer.x > size.width - margin
+          ? pointer.x - (size.width - margin)
+          : 0
+    const depthY =
+      pointer.y < margin
+        ? pointer.y - margin
+        : pointer.y > size.height - margin
+          ? pointer.y - (size.height - margin)
+          : 0
+    const state = autoPan.current
+    state.pointer = pointer
+    state.vx = (depthX / margin) * AUTO_PAN_STEP
+    state.vy = (depthY / margin) * AUTO_PAN_STEP
+    if (state.vx === 0 && state.vy === 0) {
+      if (state.raf !== null) cancelAnimationFrame(state.raf)
+      state.raf = null
+      return
+    }
+    if (state.raf !== null) return
+    const tick = () => {
+      const current = autoPan.current
+      const base = panBase.current
+      if (!current.pointer || !base) {
+        current.raf = null
+        return
+      }
+      panOffset.current = {
+        x: panOffset.current.x + current.vx,
+        y: panOffset.current.y + current.vy,
+      }
+      setViewport({
+        x: base.x - panOffset.current.x,
+        y: base.y - panOffset.current.y,
+        scale: viewportRef.current.scale,
+      })
+      applyPointer(current.pointer)
+      current.raf = requestAnimationFrame(tick)
+    }
+    state.raf = requestAnimationFrame(tick)
+  }
+
+  const handleStagePointerMove = () => {
+    const stage = stageRef.current
+    if (!stage) return
+    const pointer = stage.getPointerPosition()
+    if (!pointer) return
+    applyPointer(pointer)
+    // 只有改坐标的会话才自动平移：拖对象、拖空间、调框、拉连线、框选。
+    if (
+      !dragOutPending.current &&
+      (dragSession.current ||
+        groupDrag.current ||
+        groupResize.current ||
+        connectSession.current ||
+        boxSession.current)
+    ) {
+      updateAutoPan(pointer)
+    }
+  }
+
   const handleStagePointerUp = () => {
     const stage = stageRef.current
     const pointer = stage?.getPointerPosition()
@@ -667,7 +768,9 @@ export function useCanvasInteractions({
       setConnectPreview(null)
       // 拖出连线后紧跟的 click 不能再清空选择。
       panMoved.current = true
-      const world = pointer ? screenToWorld(pointer.x, pointer.y) : { x: session.x, y: session.y }
+      const world = pointer ? worldAt(pointer.x, pointer.y) : { x: session.x, y: session.y }
+      // 连线会话在这里就返回了，必须自己收尾自动平移，否则视口会一直跟着指针跑。
+      stopAutoPan()
       // 命中指针下方的节点优先，其次落在某个空间框内；都没有则视为取消。
       const hitNode = [...nodes]
         .reverse()
@@ -811,6 +914,10 @@ export function useCanvasInteractions({
     panStart.current = null
     commitGroupResize()
     commitGroupDrag()
+    // 松手时参考线必须清掉：最后一次移动可能停在吸附状态，残留会一直挂在画布上。
+    setGuides(null)
+    // 会话收尾：停掉边缘自动平移并释放视口基准。
+    stopAutoPan()
   }
 
   // 指针在画布外释放时 Stage 收不到 pointerup，会话会残留；这里做一次兜底收尾。
@@ -880,14 +987,14 @@ export function useCanvasInteractions({
       idSet: new Set(dragIds),
       // 超大选择集降级：逐个驱动图形每帧要上万次 position 调用，改为拖包围盒 ghost。
       ghost: items.length > GHOST_DRAG_LIMIT,
-      pointerX: pointer.x,
-      pointerY: pointer.y,
+      startWorld: worldAt(pointer.x, pointer.y),
       offsetX: 0,
       offsetY: 0,
       rawOffsetX: 0,
       rawOffsetY: 0,
       moving: false,
     }
+    beginSession()
   }
 
   const handleNodeClick = (event: KonvaEventObject<MouseEvent>, node: SceneNode) => {
@@ -918,9 +1025,10 @@ export function useCanvasInteractions({
   ) => {
     event.cancelBubble = true
     const pointer = stageRef.current?.getPointerPosition()
-    const world = pointer ? screenToWorld(pointer.x, pointer.y) : { x: 0, y: 0 }
+    const world = pointer ? worldAt(pointer.x, pointer.y) : { x: 0, y: 0 }
     connectSession.current = { from: box.id, side, x: world.x, y: world.y }
     setConnectPreview({ from: box.id, side, x: world.x, y: world.y })
+    beginSession()
   }
 
   const handleGroupBoxDown = (event: KonvaEventObject<MouseEvent>, groupId: string) => {
@@ -933,8 +1041,7 @@ export function useCanvasInteractions({
     onSelectGroup(groupId)
     groupDrag.current = {
       id: groupId,
-      startX: pointer.x,
-      startY: pointer.y,
+      startWorld: worldAt(pointer.x, pointer.y),
       appliedX: 0,
       appliedY: 0,
       rawOffsetX: 0,
@@ -945,6 +1052,7 @@ export function useCanvasInteractions({
         .filter((item) => item.groupId === groupId)
         .map((item) => ({ id: item.id, x: item.x, y: item.y })),
     }
+    beginSession()
   }
 
   /** 选中空间的四角调框手柄按下：开启调框会话；成员位置不动，只改空间框。 */
@@ -963,12 +1071,12 @@ export function useCanvasInteractions({
     const box = { x: group.x, y: group.y, w: group.w, h: group.h }
     groupResize.current = {
       id: groupId,
-      startX: pointer.x,
-      startY: pointer.y,
+      startWorld: worldAt(pointer.x, pointer.y),
       box,
       corner,
       current: box,
     }
+    beginSession()
   }
 
   const handleGroupClick = (event: KonvaEventObject<MouseEvent>, groupId: string) => {
@@ -997,8 +1105,7 @@ export function useCanvasInteractions({
     onSelectGroup(groupId)
     groupDrag.current = {
       id: groupId,
-      startX: pointer.x,
-      startY: pointer.y,
+      startWorld: worldAt(pointer.x, pointer.y),
       appliedX: 0,
       appliedY: 0,
       rawOffsetX: 0,
@@ -1009,6 +1116,7 @@ export function useCanvasInteractions({
         .filter((item) => item.groupId === groupId)
         .map((item) => ({ id: item.id, x: item.x, y: item.y })),
     }
+    beginSession()
   }
 
   const handleGroupTitleMove = (event: KonvaEventObject<DragEvent>) => {
@@ -1039,8 +1147,8 @@ export function useCanvasInteractions({
   /** 鼠标在画布上的最后位置（世界坐标）；指针从未进入画布时返回 null。 */
   const getPointerWorld = useCallback(() => {
     const pointer = stageRef.current?.getPointerPosition()
-    return pointer ? screenToWorld(pointer.x, pointer.y) : null
-    // screenToWorld 只读 viewportRef，引用稳定，无需进依赖。
+    return pointer ? worldAt(pointer.x, pointer.y) : null
+    // worldAt 只读视口与平移 ref，引用变化不影响结果，无需进依赖。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

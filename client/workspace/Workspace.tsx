@@ -39,7 +39,7 @@ interface WorkspaceProps {
 const RichTextDialog = lazy(() => import('@/components/RichTextDialog'))
 
 export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
-  const { message } = AntApp.useApp()
+  const { message, modal } = AntApp.useApp()
   const store = useSceneStore()
   const [query, setQuery] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -120,11 +120,30 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
   const importers = useImportClipboard({
     store,
     message,
+    // 失败项交给界面层逐条列出：只报第一条会掩盖真实失败面（HC-14）。
+    onImportErrors: (errors) => {
+      const limit = 8
+      const shown = errors.slice(0, limit)
+      modal.error({
+        title: `${errors.length} 项导入失败`,
+        width: 620,
+        content: (
+          <div className="import-error-list">
+            {shown.map((item) => (
+              <p key={`${item.path}-${item.reason}`}>
+                {item.path} — {item.reason}
+              </p>
+            ))}
+            {errors.length > limit ? <p>…另有 {errors.length - limit} 项失败</p> : null}
+          </div>
+        ),
+      })
+    },
     getLandingPoint,
     getImportCenter: getCenterWorld,
     locate: locateById,
   })
-  const { importPaths } = importers
+  const { importPaths, importClipboardFiles, pasteImage, pasteText } = importers
 
   const onHydrated = useCallback((isEmpty: boolean) => setEmptyDismissed(!isEmpty), [])
   const onImportPaths = useCallback(
@@ -134,7 +153,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [importPaths],
   )
 
-  const { workspace, setWorkspace } = useScenePersistence({
+  const { workspace, setWorkspace, saveState, flush } = useScenePersistence({
     store,
     message,
     onHydrated,
@@ -323,6 +342,57 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     else message.info('没有可撤销的操作')
   }, [message, store])
 
+  const redo = useCallback(() => {
+    if (store.redo()) message.success('已重做')
+    else message.info('没有可重做的操作')
+  }, [message, store])
+
+  /** Ctrl+S：绕过去抖立即落库，不改变选中与弹窗状态。 */
+  const saveNow = useCallback(() => {
+    void flush()
+      .then(() => message.success('已保存'))
+      .catch(() => {
+        // 失败提示已在持久化层弹出，这里不再重复。
+      })
+  }, [flush, message])
+
+  /** 方向键微调：只在有选中对象时生效，避免空按也弹提示。 */
+  const nudge = useCallback(
+    (dx: number, dy: number) => {
+      if (store.selectedIds.length === 0) return
+      store.nudgeSelected(dx, dy)
+    },
+    [store],
+  )
+
+  /**
+   * 重新校验引用：全量比对磁盘状态（空数组即全量），把 `isExists` 写回场景。
+   * 供设置面板手动触发——文件在资源管理器里被搬走后不必重启应用。
+   */
+  const revalidateRefs = useCallback(() => {
+    if (!isDesktopClient) {
+      message.info('引用校验仅在桌面客户端可用')
+      return
+    }
+    void desktopApi
+      .refCheck([])
+      .then((statuses) => {
+        const statusMap = new Map(statuses.map((item) => [item.nodeId, item.isExists]))
+        store.setNodes((previous) =>
+          previous.map((node) =>
+            statusMap.has(node.id) ? { ...node, isExists: statusMap.get(node.id) ?? true } : node,
+          ),
+        )
+        const missing = statuses.filter((item) => !item.isExists).length
+        message.success(
+          missing
+            ? `校验完成：${statuses.length} 个引用，${missing} 个缺失`
+            : `校验完成：${statuses.length} 个引用均可用`,
+        )
+      })
+      .catch((error) => message.error(`校验失败：${String(error)}`))
+  }, [message, store])
+
   const linkSelected = useCallback(() => {
     const ids = store.selectedIds
     if (ids.length < 2) {
@@ -396,6 +466,9 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   useShortcuts({
     onUndo: undo,
+    onRedo: redo,
+    onSave: saveNow,
+    onNudge: nudge,
     onSelectAll: () => store.setSelectedIds(store.nodes.map((node) => node.id)),
     onDelete: deleteSelected,
     onCopyFiles: copySelectedFiles,
@@ -422,7 +495,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isDesktopClient || isTypingTarget(event.target)) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
-        void importers.importClipboardFiles()
+        void importClipboardFiles()
       }
     }
 
@@ -438,9 +511,9 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           imageItem?.getAsFile() ??
           Array.from(clipboard.files).find((file) => file.type.startsWith('image/')) ??
           null
-        void importers.importClipboardFiles().then((handled) => {
+        void importClipboardFiles().then((handled) => {
           if (handled) return
-          if (imageFile) void importers.pasteImage(imageFile)
+          if (imageFile) void pasteImage(imageFile)
           else message.info('剪贴板里没有可导入的文件路径')
         })
         return
@@ -449,7 +522,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       const text = clipboard.getData('text/plain').trim()
       if (text) {
         event.preventDefault()
-        importers.pasteText(text)
+        pasteText(text)
       }
     }
 
@@ -459,7 +532,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       document.removeEventListener('keydown', onKeyDown)
       document.removeEventListener('paste', onPaste)
     }
-  }, [importers, message])
+  }, [importClipboardFiles, message, pasteImage, pasteText])
 
   // ---------- 搜索与详情 ----------
 
@@ -595,6 +668,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         nodeCount={store.nodes.length}
         selectedCount={store.selectedIds.length}
         scale={scale}
+        saveState={saveState}
         onLink={linkSelected}
         onCreateSpace={createSpace}
         onDelete={deleteSelected}
@@ -611,6 +685,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         workspace={workspace}
         onWorkspaceChanged={setWorkspace}
         onPauseWhenMinimizedChange={setPauseWhenMinimized}
+        onRevalidateRefs={revalidateRefs}
         onSceneCleared={() => {
           store.setNodes([])
           store.setGroups([])
@@ -653,6 +728,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
               key={contentNode.id}
               initialHtml={contentNode.body ?? ''}
               onCancel={() => setContentEditorId(null)}
+              onQuickSave={(html, plain) => {
+                store.commitContent(contentNode.id, html, plain)
+                message.success('已保存，可继续编辑')
+              }}
               onSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
                 setContentEditorId(null)
@@ -665,6 +744,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
             key={contentNode.id}
             initialText={contentNode.body ?? contentNode.subtitle ?? ''}
             onCancel={() => setContentEditorId(null)}
+            onQuickSave={(text) => {
+              store.commitContent(contentNode.id, text, text)
+              message.success('已保存，可继续编辑')
+            }}
             onSave={(text) => {
               store.commitContent(contentNode.id, text, text)
               setContentEditorId(null)

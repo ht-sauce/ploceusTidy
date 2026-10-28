@@ -1,5 +1,6 @@
 /**
  * 底部状态栏：保存状态、对象数量、选中数量与画布操作按钮。
+ * 保存状态来自 IPC 层的真实结果——保存失败时不能继续显示「已保存」。
  */
 import Button from 'antd/es/button'
 import Tooltip from 'antd/es/tooltip'
@@ -11,11 +12,13 @@ import {
   MinusOutlined,
   PlusOutlined,
 } from '@ant-design/icons'
+import type { SaveState } from '@/lib/tauri-api'
 
 interface StatusBarProps {
   nodeCount: number
   selectedCount: number
   scale: number
+  saveState: SaveState
   onLink: () => void
   onCreateSpace: () => void
   onDelete: () => void
@@ -24,10 +27,18 @@ interface StatusBarProps {
   onFit: () => void
 }
 
+const SAVE_LABEL: Record<SaveState, string> = {
+  idle: '就绪',
+  saving: '保存中…',
+  saved: '已保存',
+  error: '保存失败',
+}
+
 export default function StatusBar({
   nodeCount,
   selectedCount,
   scale,
+  saveState,
   onLink,
   onCreateSpace,
   onDelete,
@@ -38,8 +49,10 @@ export default function StatusBar({
   return (
     <footer className="status-bar">
       <div className="status-left">
-        <span className="save-dot" />
-        <span>已保存</span>
+        <span className={`save-dot is-${saveState}`} />
+        <span className={saveState === 'error' ? 'status-save-error' : undefined}>
+          {SAVE_LABEL[saveState]}
+        </span>
         <span className="status-separator">·</span>
         <span>{nodeCount.toLocaleString()} 个引用</span>
         {selectedCount > 1 ? (

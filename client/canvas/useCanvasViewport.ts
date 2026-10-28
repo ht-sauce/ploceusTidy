@@ -81,7 +81,8 @@ export function useCanvasViewport({
   )
 
   const fitView = useCallback(() => {
-    const boxes = groups.length > 0 ? groups : nodes
+    // 空间与游离对象一起纳入包围盒：只按空间算会把空间外的对象漏在视口外。
+    const boxes = groups.length > 0 ? [...groups, ...nodes] : nodes
     if (!boxes.length) return
     const bounds = boxes.reduce(
       (result, box) => ({

@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
-import type { SceneNode } from '@/types/scene'
+import type { ImportError, SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 import { findFreeOffset, LAYOUT_GAP, nodeRect } from '@/domain/layout'
 import { mergeNodes, type SceneStore } from './useSceneStore'
@@ -12,6 +12,8 @@ import { mergeNodes, type SceneStore } from './useSceneStore'
 interface ImportOptions {
   store: SceneStore
   message: MessageInstance
+  /** 失败项汇总上报（由界面层渲染弹窗）：只报第一条会让用户误以为只失败了一项。 */
+  onImportErrors: (errors: ImportError[]) => void
   /** 新建对象的落点：优先取鼠标在画布上的最后位置，鼠标从未进入画布时回退视口中心。 */
   getLandingPoint: () => { x: number; y: number }
   /** 系统拖入/剪贴板导入的落点：用视口中心，与鼠标当时的位置无关。 */
@@ -39,11 +41,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
 export function useImportClipboard({
   store,
   message,
+  onImportErrors,
   getLandingPoint,
   getImportCenter,
   locate,
 }: ImportOptions) {
-  const { addNode, setNodes, setSelectedIds } = store
+  const { addNode, setNodes, setSelectedIds, markHistory } = store
   // 导入是异步命令，用 ref 读取最新场景做避让，避免闭包拿到旧数组。
   const nodesRef = useRef(store.nodes)
   const annotationsRef = useRef(store.annotations)
@@ -172,6 +175,7 @@ export function useImportClipboard({
             x: Math.round(node.x + offset.dx),
             y: Math.round(node.y + offset.dy),
           }))
+          markHistory()
           setNodes((previous) => mergeNodes(previous, [...created, ...result.existing]))
           const target = created[0] ?? result.existing[0]
           if (target) {
@@ -183,15 +187,12 @@ export function useImportClipboard({
         if (result.existing.length) {
           message.info(`已存在，已定位：${result.existing[0].name}`)
         }
-        if (result.errors.length) {
-          const [first] = result.errors
-          message.error(`导入失败 ${result.errors.length} 项：${first.path}（${first.reason}）`)
-        }
+        if (result.errors.length) onImportErrors(result.errors)
       } catch (error) {
         message.error(`导入失败：${String(error)}`)
       }
     },
-    [getImportCenter, locate, message, setNodes, setSelectedIds],
+    [getImportCenter, locate, markHistory, message, onImportErrors, setNodes, setSelectedIds],
   )
 
   const pasteImage = useCallback(

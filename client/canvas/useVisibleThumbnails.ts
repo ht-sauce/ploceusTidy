@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react'
 import type { SceneNode } from '@/types/scene'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
-import { THUMB_IMAGES } from './icons'
+import { THUMB_IMAGES, setThumb } from './icons'
 
 export function useVisibleThumbnails(visibleNodes: SceneNode[], active = true) {
   const [, setThumbVersion] = useState(0)
@@ -27,7 +27,7 @@ export function useVisibleThumbnails(visibleNodes: SceneNode[], active = true) {
           try {
             const source = await desktopApi.thumbGet(node.id)
             if (!source) {
-              THUMB_IMAGES.set(node.id, null)
+              setThumb(node.id, null)
               return
             }
             const image = new window.Image()
@@ -36,9 +36,9 @@ export function useVisibleThumbnails(visibleNodes: SceneNode[], active = true) {
               image.onerror = () => resolve()
               image.src = source
             })
-            THUMB_IMAGES.set(node.id, image)
+            setThumb(node.id, image)
           } catch {
-            THUMB_IMAGES.set(node.id, null)
+            setThumb(node.id, null)
           }
         }),
       ).then(() => setThumbVersion((value) => value + 1))

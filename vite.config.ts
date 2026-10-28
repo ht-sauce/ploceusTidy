@@ -1,10 +1,19 @@
 import { fileURLToPath, URL } from 'node:url'
+import { readFileSync } from 'node:fs'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+
+/** 版本号唯一来源是 package.json，构建期注入，界面不再手写版本（避免与安装包脱节）。 */
+const appVersion: string = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+).version
 
 export default defineConfig({
   root: 'client',
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./client', import.meta.url)),

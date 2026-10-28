@@ -85,8 +85,15 @@ export default function DetailsPanel({
         <Input.TextArea
           value={annotationText}
           onChange={(event) => setAnnotationText(event.target.value)}
+          onKeyDown={(event) => {
+            // 与文字/富文本弹窗一致：Ctrl+S（或 Ctrl+回车）保存标注，面板不关闭。
+            const mod = event.ctrlKey || event.metaKey
+            if (!mod || (event.key.toLowerCase() !== 's' && event.key !== 'Enter')) return
+            event.preventDefault()
+            onSaveAnnotation(annotationText)
+          }}
           autoSize={{ minRows: 5, maxRows: 9 }}
-          placeholder="写下结论、待办或下一步"
+          placeholder="写下结论、待办或下一步（Ctrl+S 保存）"
         />
 
         <p className="details-note">

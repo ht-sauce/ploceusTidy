@@ -55,46 +55,46 @@ ploceusTidy/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
 │   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
 │   │   ├── Workspace.tsx           # 组合画布/标题栏/属性面板/状态栏/弹窗
-│   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 删除/撤销/标注/空间命令（含手动调框、拖入整理）；媒体正文无文字时仍可保存
-│   │   ├── useScenePersistence.ts  # 加载/保存/缺失校验/拖入监听
-│   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴
+│   │   ├── useSceneStore.ts        # 场景数据 + 选择 + 撤销/重做栈 + 方向键微调 + 删除/标注/空间命令（含手动调框、进出空间整理）；媒体正文无文字时仍可保存
+│   │   ├── useScenePersistence.ts  # 加载/防抖保存/flush/关窗先落库/保存状态订阅/缺失校验/拖入监听
+│   │   ├── useImportClipboard.ts   # 文件导入、文字/链接/截图落盘与粘贴；失败项交给界面层汇总
 │   │   ├── useNodeActions.ts       # 打开、定位、重连、双击激活
 │   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作（含系统菜单入口）
-│   │   ├── useShortcuts.ts         # 全局快捷键映射
+│   │   ├── useShortcuts.ts         # 全局快捷键映射（含 Ctrl+S 保存、撤销/重做、方向键微调）
 │   │   ├── useWindowSuspended.ts   # 最小化/隐藏检测，驱动暂停渲染
 │   │   └── useSearch.ts            # 搜索条目（对象/标注/空间/连线）与排序
 │   ├── canvas/                     # 画布域（Konva 渲染与交互）
 │   │   ├── CanvasBoard.tsx         # 图层编排：组合视口/可见性/交互会话
 │   │   ├── useCanvasViewport.ts    # 视口缩放、定位、适配、缩放回调
-│   │   ├── useVisibleScene.ts      # rbush 视口裁剪、连线筛选
-│   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线/空间拖动与四角调框/悬停会话
+│   │   ├── useVisibleScene.ts      # rbush 常驻增量索引（按矩形增删）、视口裁剪、连线筛选
+│   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线/空间拖动与四角调框/边缘自动平移/悬停会话（世界坐标增量）
 │   │   ├── useVisibleThumbnails.ts # 可见图片 / 可执行对象的缩略图与图标延迟加载
-│   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条、四向锚点
+│   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条（独占底部区域）、扩展色描边、四向锚点
 │   │   ├── GroupShape.tsx          # 空间实线框与命中区域
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
 │   │   ├── Minimap.tsx             # 迷你地图与点击定位
 │   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
-│   │   ├── icons.tsx               # 系统图标与缩略图缓存
-│   │   ├── constants.ts            # 迷你地图、名称预算、空间调色板、渲染倍率等常量
+│   │   ├── icons.tsx               # 系统图标与缩略图缓存（缩略图有 400 张上界）
+│   │   ├── constants.ts            # 迷你地图、名称预算、标注高度、空间调色板、渲染倍率等常量
 │   │   └── types.ts                # 右键目标、视口、舞台尺寸类型
 │   ├── components/                 # 通用界面组件
 │   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建内容菜单、设置、操作说明、窗口按钮
 │   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接 / 富文本
-│   │   ├── DetailsPanel.tsx        # 右键「属性」面板与标注编辑（只读属性，动作走右键菜单）
+│   │   ├── DetailsPanel.tsx        # 右键「属性」面板与标注编辑（只读属性，动作走右键菜单；标注 Ctrl+S 保存）
 │   │   ├── ContextMenu.tsx         # 画布右键菜单渲染
-│   │   ├── StatusBar.tsx           # 保存状态、对象数、缩放与画布按钮
+│   │   ├── StatusBar.tsx           # 真实保存状态（保存中/已保存/失败）、对象数、缩放与画布按钮
 │   │   ├── EmptyOverlay.tsx        # 空画布引导
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
-│   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本）
-│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor 编辑与保存；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换
+│   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本；Ctrl+S 就地保存、取消确认）
+│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor；Ctrl+S 就地保存、取消确认；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器
 │   │   ├── NeighborPickerDialog.tsx # 一对多关联对象跳转选择
-│   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据 / 关于
+│   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据（含引用校验）/ 关于（版本读 package.json）
 │   └── styles/global.css
 ├── desktop/                        # Tauri 2 桌面壳 / Rust 平台层（无移动端）
 │   ├── Cargo.toml / Cargo.lock / build.rs
 │   ├── tauri.conf.json             # decorations:false 无边框自定义标题栏、frontendDist ../client/dist、仅 nsis
-│   ├── capabilities/default.json   # core / opener / dialog 权限；窗口拖动、最小化、关闭与可见性查询
+│   ├── capabilities/default.json   # core / opener / dialog 权限；窗口拖动、最小化、关闭/销毁（关窗前落库后放行）与可见性查询
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
 │       ├── main.rs / lib.rs        # Tauri 启动（单实例）、命令注册
@@ -129,8 +129,8 @@ client/
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
 | 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
 | 画布平移缩放、Konva 渲染、空间与锚点连线、不重叠与吸附（拖动期不校验、松手 rbush 判定落点）、自动整理、右键菜单、迷你地图 | `client/canvas/*`、`client/domain/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
-| 场景命令、选择、删除/撤销、标注、空间成员自动归属与拖入整理、空间/连线配色、空间自动整理与手动调框 | `client/workspace/useSceneStore.ts` |
-| 加载/保存/缺失校验/拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts` |
+| 场景命令、选择、撤销/重做栈、方向键微调、标注、空间成员自动归属与进出空间整理、空间/连线配色、空间自动整理与手动调框 | `client/workspace/useSceneStore.ts` |
+| 加载/保存/flush/关窗先落库/保存状态、缺失校验、拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts`、`lib/tauri-api.ts` |
 | 打开/定位/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
 | 文字/富文本弹窗、加号新建菜单 | `client/components/TextContentDialog.tsx`、`RichTextDialog.tsx`、`TitleBar.tsx`、`client/workspace/Workspace.tsx` |
 | 原文件复制与拖出（CF_HDROP / OLE 拖放） | `desktop/src/platform.rs`、`desktop/src/lib.rs`、`client/canvas/useCanvasInteractions.ts`、`client/workspace/Workspace.tsx` |

@@ -11,7 +11,7 @@ import type { HandleSide, CanvasTokens } from './constants'
 import {
   HANDLE_SIDES,
   NAME_LINE_BUDGET,
-  NODE_ANNOTATION_HEIGHT,
+  NODE_ANNOTATION_INSET,
   NODE_ICON_SIZE,
   NODE_ICON_TOP,
   NODE_LINE_HEIGHT,
@@ -26,6 +26,10 @@ interface NodeShapeProps {
   /** 展示高度：按名称行数与标注自适应，来自 `nodeDisplayHeight`。 */
   height: number
   annotation?: SceneAnnotation
+  /** 同一对象被多少条额外标注覆盖：名称后加「+N」，提示还有别的标注。 */
+  extraAnnotations?: number
+  /** 扩展样式里的描边色（`dataJson.accent`）；缺失时用主题描边。 */
+  accent?: string
   icon?: HTMLImageElement
   thumb?: HTMLImageElement | null
   selected: boolean
@@ -47,6 +51,8 @@ function NodeShape({
   node,
   height,
   annotation,
+  extraAnnotations = 0,
+  accent,
   icon,
   thumb,
   selected,
@@ -103,6 +109,17 @@ function NodeShape({
           cornerRadius={6}
         />
       ) : null}
+      {accent ? (
+        // 扩展样式 `{"accent":"#..."}`：给卡片加一圈用户自定义的描边，不参与命中。
+        <Rect
+          width={node.w}
+          height={height}
+          stroke={accent}
+          strokeWidth={2}
+          cornerRadius={6}
+          listening={false}
+        />
+      ) : null}
       {thumb || icon ? (
         <KonvaImage
           image={(thumb ?? icon) as HTMLImageElement}
@@ -142,10 +159,10 @@ function NodeShape({
         />
       ) : null}
       {annotation && tone ? (
-        // 标注条骑在下边框上：文字压在框线之上，颜色跟随主题主色。
+        // 标注条独占卡片底部让出的区域：不再压在下边框线上，底部留出呼吸间距。
         <Label
-          x={2}
-          y={height - NODE_ANNOTATION_HEIGHT + 2}
+          x={3}
+          y={height - NODE_ANNOTATION_INSET}
           onClick={(event) => {
             event.cancelBubble = true
             onAnnotation(annotation)
@@ -153,10 +170,12 @@ function NodeShape({
         >
           <Tag fill={tone.fill} cornerRadius={3} />
           <Text
-            text={annotation.text}
-            fontSize={9}
+            text={
+              extraAnnotations > 0 ? `${annotation.text} +${extraAnnotations}` : annotation.text
+            }
+            fontSize={10}
             padding={1}
-            width={node.w - 4}
+            width={node.w - 8}
             ellipsis
             wrap="none"
             fill={tone.ink}

@@ -69,7 +69,7 @@ interface CanvasBoardProps {
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onSelectEdge: (id: string) => void
   onEdgeLabelEdit: (id: string) => void
-  onConnect: (from: string, to: string) => void
+  onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
   onAnnotation: (annotation: SceneAnnotation) => void
   onActivate: (id: string) => void
   /** 双击文字/富文本：打开内容编辑弹窗。 */
@@ -149,14 +149,40 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
   const annotationByNode = useMemo(() => {
-    const map = new Map<string, SceneAnnotation>()
+    // 同一对象可被多条标注覆盖：只画第一条，其余用「+N」提示，避免卡片高度失控。
+    const map = new Map<string, { annotation: SceneAnnotation; extra: number }>()
     annotations.forEach((annotation) => {
       annotation.nodeIds.forEach((nodeId) => {
-        if (!map.has(nodeId)) map.set(nodeId, annotation)
+        const current = map.get(nodeId)
+        if (current) current.extra += 1
+        else map.set(nodeId, { annotation, extra: 0 })
       })
     })
     return map
   }, [annotations])
+
+  /**
+   * 扩展样式里的描边色（`{"accent":"#..."}`）：按「id + 原始 JSON」缓存解析结果，
+   * 场景刷新时只为真正改过的对象重新解析，10 万对象也不会每帧 JSON.parse。
+   */
+  const accentCache = useRef(new Map<string, { raw: string; accent?: string }>())
+  const accentOf = useCallback((node: SceneNode) => {
+    const raw = node.dataJson ?? ''
+    if (!raw) return undefined
+    const cached = accentCache.current.get(node.id)
+    if (cached?.raw === raw) return cached.accent
+    let accent: string | undefined
+    try {
+      const parsed = JSON.parse(raw) as { accent?: unknown }
+      if (typeof parsed.accent === 'string' && parsed.accent.trim()) {
+        accent = parsed.accent.trim()
+      }
+    } catch {
+      // 非法 JSON 由属性面板保存时拦截；这里静默按无描边处理。
+    }
+    accentCache.current.set(node.id, { raw, accent })
+    return accent
+  }, [])
 
   useEffect(() => {
     startIconLoad(() => setIconVersion((value) => value + 1))
@@ -574,28 +600,33 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           {/* 按 z 升序渲染：z 大的后画、盖在上层；稳定排序保证同 z 保持插入次序。 */}
           {[...visibleNodes]
             .sort((left, right) => left.z - right.z)
-            .map((node) => (
-              <NodeShape
-                key={node.id}
-                node={node}
-                height={nodeDisplayHeight(node, annotationByNode.has(node.id))}
-                annotation={annotationByNode.get(node.id)}
-                icon={ICON_IMAGES.get(node.icon)}
-                thumb={THUMB_IMAGES.get(node.id) ?? null}
-                selected={selectedSet.has(node.id)}
-                singleSelected={selectedSet.size === 1}
-                tokens={tokens}
-                registerRef={registerNodeRef}
-                onPointerDown={nodeHandlers.onPointerDown}
-                onClick={nodeHandlers.onClick}
-                onDblClick={nodeHandlers.onDblClick}
-                onContextMenu={nodeHandlers.onContextMenu}
-                onHoverStart={nodeHandlers.onHoverStart}
-                onHoverEnd={nodeHandlers.onHoverEnd}
-                onAnnotation={onAnnotation}
-                onHandleDown={nodeHandlers.onHandleDown}
-              />
-            ))}
+            .map((node) => {
+              const entry = annotationByNode.get(node.id)
+              return (
+                <NodeShape
+                  key={node.id}
+                  node={node}
+                  height={nodeDisplayHeight(node, Boolean(entry))}
+                  annotation={entry?.annotation}
+                  extraAnnotations={entry?.extra}
+                  accent={accentOf(node)}
+                  icon={ICON_IMAGES.get(node.icon)}
+                  thumb={THUMB_IMAGES.get(node.id) ?? null}
+                  selected={selectedSet.has(node.id)}
+                  singleSelected={selectedSet.size === 1}
+                  tokens={tokens}
+                  registerRef={registerNodeRef}
+                  onPointerDown={nodeHandlers.onPointerDown}
+                  onClick={nodeHandlers.onClick}
+                  onDblClick={nodeHandlers.onDblClick}
+                  onContextMenu={nodeHandlers.onContextMenu}
+                  onHoverStart={nodeHandlers.onHoverStart}
+                  onHoverEnd={nodeHandlers.onHoverEnd}
+                  onAnnotation={onAnnotation}
+                  onHandleDown={nodeHandlers.onHandleDown}
+                />
+              )
+            })}
 
           {/* 选中空间时同样给出四向锚点：空间可以和文件一样连线。 */}
           {activeGroup

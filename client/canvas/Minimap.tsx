@@ -2,7 +2,7 @@
  * 迷你地图：对象分布与空间用单个 canvas 绘制（替代几百个 DOM span 的重排），
  * 视口框保留为 DOM 以便平移时只更新一个元素；点击/拖动把对应世界坐标移到视口中心。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { MINIMAP_MAX_DOTS } from './constants'
 import { clamp } from './geometry'
 import { cssVar } from './icons'
@@ -27,7 +27,7 @@ interface MinimapProps {
   onMoveTo: (clientX: number, clientY: number, element: HTMLElement) => void
 }
 
-// memo：框选/拖动/选中等无关重渲染不再重绘分布图。
+// memo：框选/拖动/选中等无关重渲染不再重绘分布图（视口框是普通 DOM，随 props 更新）。
 function Minimap({ bounds, nodes, groups, viewport, size, themeId, onMoveTo }: MinimapProps) {
   const [dragging, setDragging] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -119,4 +119,4 @@ function Minimap({ bounds, nodes, groups, viewport, size, themeId, onMoveTo }: M
   )
 }
 
-export default Minimap
+export default memo(Minimap)

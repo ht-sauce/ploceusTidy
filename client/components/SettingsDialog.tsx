@@ -21,6 +21,8 @@ interface SettingsDialogProps {
   onWorkspaceChanged: (info: WorkspaceInfo) => void
   /** 最小化暂停偏好变化时同步给工作空间，立即生效。 */
   onPauseWhenMinimizedChange: (value: boolean) => void
+  /** 全量校验引用是否仍存在（文件被搬走后不必重启应用）。 */
+  onRevalidateRefs: () => void
   onSceneCleared: () => void
 }
 
@@ -40,6 +42,7 @@ export default function SettingsDialog({
   workspace,
   onWorkspaceChanged,
   onPauseWhenMinimizedChange,
+  onRevalidateRefs,
   onSceneCleared,
 }: SettingsDialogProps) {
   const { message, modal } = AntApp.useApp()
@@ -222,6 +225,15 @@ export default function SettingsDialog({
 
       <section className="settings-section">
         <h3>数据</h3>
+        <div className="settings-row">
+          <div>
+            <strong>校验引用</strong>
+            <span>重新比对原文件是否还在；被移动或删除的卡片会标回「缺失」</span>
+          </div>
+          <Button size="small" onClick={onRevalidateRefs}>
+            立即校验
+          </Button>
+        </div>
         <div className="settings-row settings-row-danger">
           <div>
             <strong>重建工作空间</strong>
@@ -237,7 +249,7 @@ export default function SettingsDialog({
         <h3>关于</h3>
         <div className="settings-row">
           <div>
-            <strong>络雀 0.1.1</strong>
+            <strong>络雀 {__APP_VERSION__}</strong>
             <span>Tauri 2 · React 19 · 纯本地，无云端与遥测</span>
           </div>
         </div>

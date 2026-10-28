@@ -79,6 +79,25 @@ let saveSequence = 0
 /** 保存串行链：防抖窗口重叠时也不并发写库，基线更新严格有序。 */
 let saveChain: Promise<void> = Promise.resolve()
 
+/** 保存状态：状态栏据此显示「保存中 / 已保存 / 保存失败」，不再恒亮「已保存」。 */
+export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+let saveState: SaveState = 'idle'
+const saveStateListeners = new Set<(state: SaveState) => void>()
+
+function setSaveState(next: SaveState) {
+  saveState = next
+  saveStateListeners.forEach((listener) => listener(next))
+}
+
+/** 订阅保存状态；订阅时立即回调当前值，返回值用于取消订阅。 */
+export function subscribeSaveState(listener: (state: SaveState) => void) {
+  saveStateListeners.add(listener)
+  listener(saveState)
+  return () => {
+    saveStateListeners.delete(listener)
+  }
+}
+
 function toBaseline(scene: SceneData): SaveBaseline {
   return {
     nodes: new Map(scene.nodes.map((item) => [item.id, item])),
@@ -139,6 +158,7 @@ async function doSave(scene: SceneData): Promise<void> {
   // 先快照基线引用：模块级变量在 await 间可能被清空，diff 只认本次读到的基线。
   const baseline = saveBaseline
   const full = !baseline || saveSequence % FULL_SAVE_INTERVAL === 0
+  setSaveState('saving')
   try {
     if (full) {
       // 全量：整场景序列化走 Worker；Rust 侧按指纹只写变化行。
@@ -146,17 +166,21 @@ async function doSave(scene: SceneData): Promise<void> {
       await invoke<void>('scene_save', { scene: json })
     } else {
       const delta = diffScene(scene, baseline)
-      if (deltaIsEmpty(delta)) return
-      // 增量通常是个位数对象：直接主线程 stringify，不值得付 Worker 往返。
-      await invoke<void>('scene_save_delta', { delta: JSON.stringify(delta) })
+      // 增量通常是个位数对象：直接主线程 stringify，不值得付 Worker 往返；
+      // 无变化时跳过写库，但状态仍算已保存。
+      if (!deltaIsEmpty(delta)) {
+        await invoke<void>('scene_save_delta', { delta: JSON.stringify(delta) })
+      }
     }
   } catch (error) {
     // 失败清基线：下一次强制全量对账，防基线与库内状态错位。
     saveBaseline = null
+    setSaveState('error')
     throw error
   }
   saveBaseline = toBaseline(scene)
   saveSequence += 1
+  setSaveState('saved')
 }
 
 function saveScene(scene: SceneData): Promise<void> {

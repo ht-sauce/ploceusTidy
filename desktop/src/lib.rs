@@ -17,8 +17,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use db::AppState;
 use models::{
-    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneDelta, SceneNode,
-    WorkspaceInfo,
+    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneDelta, WorkspaceInfo,
 };
 
 /// 返回工作空间路径、数据库路径与节点数量，供设置面板展示。
@@ -278,12 +277,6 @@ fn rich_asset_response(
             .body(Cow::Owned(bytes))
             .expect("构造媒体响应失败"),
     }
-}
-
-/// 按 ID 读取单个节点，用于重复导入后的定位刷新。
-#[tauri::command]
-fn node_get(state: State<'_, AppState>, node_id: String) -> Result<Option<SceneNode>, String> {
-    db::node_by_id(&state, &node_id)
 }
 
 /// 按需生成缩略图并返回 data URL；无路径、缺失或非 Windows 平台返回 `None`。
@@ -560,7 +553,6 @@ pub fn run() {
             reveal_ref,
             save_clipboard_image,
             save_rich_asset,
-            node_get,
             meta_get,
             meta_set,
             ref_check,

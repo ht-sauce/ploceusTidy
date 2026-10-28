@@ -7,8 +7,27 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import SystemIcon from '@/components/SystemIcon'
 import type { SystemIconKind } from '@/types/scene'
 
-/** 进程内缩略图缓存：请求过的 data URL 转成 HTMLImageElement 复用。 */
+/**
+ * 进程内缩略图缓存：请求过的 data URL 转成 HTMLImageElement 复用。
+ * 有上界：浏览过几千张图的画布不该把位图一直攒在内存里，超出后按插入顺序淘汰最旧的。
+ */
 export const THUMB_IMAGES = new Map<string, HTMLImageElement | null>()
+/** 缩略图缓存上限；被淘汰的对象再次进入视口时会重新请求一次。 */
+const THUMB_LIMIT = 400
+
+/** 写入缩略图缓存，超出上限时淘汰最早进入的那批。 */
+export function setThumb(id: string, image: HTMLImageElement | null) {
+  THUMB_IMAGES.delete(id)
+  THUMB_IMAGES.set(id, image)
+  if (THUMB_IMAGES.size <= THUMB_LIMIT) return
+  const overflow = THUMB_IMAGES.size - THUMB_LIMIT
+  let removed = 0
+  for (const key of THUMB_IMAGES.keys()) {
+    if (removed >= overflow) break
+    THUMB_IMAGES.delete(key)
+    removed += 1
+  }
+}
 /** 系统图标 data URL 缓存：SVG 渲染一次后转图片，Konva 直接绘制。 */
 export const ICON_IMAGES = new Map<SystemIconKind, HTMLImageElement>()
 

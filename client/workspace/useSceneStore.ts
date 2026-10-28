@@ -3,10 +3,11 @@
  *
  * 职责边界：
  * - 只维护场景数据与选中态，不碰文件系统、剪贴板、窗口与快捷键；
- * - 删除类操作保留一步快照，供 Ctrl+Z 撤销；
+ * - 每个会改场景的命令都先写一份快照到撤销栈（上限 30 步），Ctrl+Z / Ctrl+Shift+Z 往返；
+ *   连续的方向键微调按 800ms 合并成一步，避免一次挪动产生几十条历史；
  * - 空间（分组框）与节点同属场景，空间可被连线引用。
  */
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import { withEdgeColor } from '@/canvas/geometry'
 import {
@@ -19,13 +20,18 @@ import {
   rectsOverlap,
 } from '@/domain/layout'
 
-/** 删除前快照，仅保留一步，用于 Ctrl+Z 撤销。 */
+/** 撤销栈里的一步快照：四张表整体引用，不可变更新保证快照零拷贝。 */
 interface SceneSnapshot {
   nodes: SceneNode[]
   groups: SceneGroup[]
   edges: SceneEdge[]
   annotations: SceneAnnotation[]
 }
+
+/** 撤销栈深度；快照只存数组引用，深度大不占内存。 */
+const UNDO_LIMIT = 30
+/** 同一合并键在窗口内的连续命令只记一步（方向键微调专用）。 */
+const COALESCE_MS = 800
 
 /** 点是否落在空间内；多个空间重叠时取最上层（数组靠后）的那个。 */
 function groupIdAt(groups: SceneGroup[], x: number, y: number) {
@@ -42,6 +48,30 @@ function groupIdAt(groups: SceneGroup[], x: number, y: number) {
 function membershipOf(node: SceneNode, groups: SceneGroup[]) {
   const height = nodeDisplayHeight(node)
   return groupIdAt(groups, node.x + node.w / 2, node.y + height / 2)
+}
+
+/**
+ * 按给定坐标平移一批对象，并按中心点重算空间归属。
+ * 返回新数组、需要重新贴合的空间，以及因本次移动新增成员的空间（这些空间要整理）。
+ */
+function relocatedNodes(
+  nodes: SceneNode[],
+  groups: SceneGroup[],
+  moves: Map<string, { x: number; y: number }>,
+) {
+  const refit = new Set<string>()
+  const entered = new Set<string>()
+  const next = nodes.map((node) => {
+    const move = moves.get(node.id)
+    if (!move) return node
+    if (node.groupId) refit.add(node.groupId)
+    const moved = { ...node, x: move.x, y: move.y }
+    const groupId = membershipOf(moved, groups)
+    if (groupId) refit.add(groupId)
+    if (groupId && groupId !== node.groupId) entered.add(groupId)
+    return { ...moved, groupId }
+  })
+  return { next, refit, entered }
 }
 
 /** 合并导入结果：已有节点按 id 覆盖，重复导入不会产生第二张卡片。 */
@@ -87,15 +117,14 @@ export interface SceneStore {
 
   addNode: (node: SceneNode) => void
   moveNodes: (moves: { id: string; x: number; y: number }[]) => void
+  /** 方向键微调：整体平移选中对象，不触发空间整理，连续按键合并为一步撤销。 */
+  nudgeSelected: (dx: number, dy: number) => void
   moveGroup: (id: string, dx: number, dy: number) => void
   /** 手动调整空间框（四角拖拽提交）：只改框本身；下次成员变化时仍按内容自动贴合。 */
   resizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   connect: (from: string, to: string, fromHandle?: string, toHandle?: string) => void
   /** 叠放层级：置顶取当前最大 z + 1；置底取最小 z - 1。 */
   raiseNode: (id: string, to: 'top' | 'bottom') => void
-  /** 挂载到父节点；父移动时子按世界坐标跟随，父删除时子卸载为独立对象。 */
-  mountNode: (id: string, parentId: string) => void
-  unmountNode: (id: string) => void
   /** 扩展样式：写入 `dataJson`；空串清空。非法 JSON 由调用方在保存前校验。 */
   updateNodeDataJson: (id: string, dataJson: string) => void
   createGroup: (label: string, color?: string) => SceneGroup | null
@@ -106,7 +135,10 @@ export interface SceneStore {
   setEdgeColor: (id: string, color: string) => void
   deleteSelection: () => boolean
   deleteTarget: (target: { kind: 'node' | 'group' | 'edge'; id: string }) => void
+  /** 外部直接改场景（批量导入）前记一步历史，保证导入也能撤销。 */
+  markHistory: () => void
   undo: () => boolean
+  redo: () => boolean
 
   openAnnotation: (annotation: SceneAnnotation) => void
   addAnnotation: (targetIds?: string[]) => void
@@ -133,7 +165,17 @@ export function useSceneStore(): SceneStore {
   const [detailsNodeId, setDetailsNodeId] = useState<string | null>(null)
   const [detailsMode, setDetailsMode] = useState<'details' | 'annotation'>('details')
 
-  const undoRef = useRef<SceneSnapshot | null>(null)
+  /** 撤销 / 重做双栈，加一个合并键窗口（连续微调只记一步）。 */
+  const historyRef = useRef<{ undo: SceneSnapshot[]; redo: SceneSnapshot[] }>({
+    undo: [],
+    redo: [],
+  })
+  const coalesceRef = useRef<{ key: string; at: number } | null>(null)
+  /** 当前场景的最新引用：命令里需要「改动前」的快照，用它读不产生额外依赖。 */
+  const latestRef = useRef<SceneSnapshot>({ nodes, groups, edges, annotations })
+  useEffect(() => {
+    latestRef.current = { nodes, groups, edges, annotations }
+  })
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
@@ -258,10 +300,62 @@ export function useSceneStore(): SceneStore {
     setDetailsMode('details')
   }, [])
 
+  // ---------- 撤销 / 重做 ----------
+
+  /** 记一步历史：`coalesceKey` 相同的连续命令在 800ms 内只保留最初那一步快照。 */
+  const markHistory = useCallback((coalesceKey = '') => {
+    const history = historyRef.current
+    const now = Date.now()
+    const previous = coalesceRef.current
+    if (coalesceKey && previous?.key === coalesceKey && now - previous.at < COALESCE_MS) {
+      coalesceRef.current = { key: coalesceKey, at: now }
+      return
+    }
+    coalesceRef.current = coalesceKey ? { key: coalesceKey, at: now } : null
+    history.undo.push({ ...latestRef.current })
+    if (history.undo.length > UNDO_LIMIT) history.undo.shift()
+    // 新操作会切断重做链，与常见编辑器一致。
+    history.redo.length = 0
+  }, [])
+
+  const restore = useCallback((snapshot: SceneSnapshot) => {
+    setNodes(snapshot.nodes)
+    setGroups(snapshot.groups)
+    setEdges(snapshot.edges)
+    setAnnotations(snapshot.annotations)
+    setSelectedIds([])
+    setSelectedGroupId(null)
+    setSelectedEdgeId(null)
+    setActiveAnnotationId(null)
+    setDetailsMode('details')
+    setDetailsNodeId(null)
+  }, [])
+
+  const undo = useCallback(() => {
+    const history = historyRef.current
+    const snapshot = history.undo.pop()
+    if (!snapshot) return false
+    history.redo.push({ ...latestRef.current })
+    coalesceRef.current = null
+    restore(snapshot)
+    return true
+  }, [restore])
+
+  const redo = useCallback(() => {
+    const history = historyRef.current
+    const snapshot = history.redo.pop()
+    if (!snapshot) return false
+    history.undo.push({ ...latestRef.current })
+    coalesceRef.current = null
+    restore(snapshot)
+    return true
+  }, [restore])
+
   // ---------- 场景改动 ----------
 
   const addNode = useCallback(
     (node: SceneNode) => {
+      markHistory()
       // 新对象先避开已有对象，再按落点归属空间；避免导入/新建时压在别人身上。
       const offset = findFreeOffset(
         [nodeRect(node, false)],
@@ -277,98 +371,110 @@ export function useSceneStore(): SceneStore {
       setActiveAnnotationId(null)
       setDetailsMode('details')
     },
-    [annotatedIds, groups, nodes, refitGroupsOf],
+    [annotatedIds, groups, markHistory, nodes, refitGroupsOf],
   )
 
+  /**
+   * 拖动落点提交。整理策略：**只在对象进出空间时**按网格整理该空间；
+   * 空间内部拖动压到成员时只把被拖对象推到最近空位，不重排整组——
+   * 「整理」是明确动作（右键「自动整理空间」），不该由一次拖动顺带触发。
+   */
   const moveNodes = useCallback(
     (moves: { id: string; x: number; y: number }[]) => {
-      const byId = new Map(moves.map((move) => [move.id, move]))
-      // 已挂载的子节点不直接拖动，但要跟随父节点的世界位移，保持相对位置。
-      // 按 id 建一次索引：在全量数组上逐个 find 在多选拖动时是 O(M×N)。
-      const prevById = new Map(nodes.map((node) => [node.id, node]))
-      const delta = new Map<string, { dx: number; dy: number }>()
+      // 只收真正改变坐标的对象：落点被拒绝时会带着原坐标回调，
+      // 没有位移就不写历史，避免 Ctrl+Z 空转一次。
+      const previousById = new Map(nodes.map((node) => [node.id, node]))
+      const requested = new Map<string, { x: number; y: number }>()
       moves.forEach((move) => {
-        const node = prevById.get(move.id)
+        const node = previousById.get(move.id)
         if (!node) return
-        delta.set(node.id, { dx: move.x - node.x, dy: move.y - node.y })
+        const x = Math.round(move.x)
+        const y = Math.round(move.y)
+        if (node.x === x && node.y === y) return
+        requested.set(move.id, { x, y })
       })
-      // 多级挂载：父再有父时，子按最上层拖动者的总位移跟随（按层级逐轮归并）。
-      for (let round = 0; round < nodes.length; round += 1) {
-        let changed = false
-        nodes.forEach((node) => {
-          if (!node.parentNodeId || delta.has(node.id)) return
-          const parentDelta = delta.get(node.parentNodeId)
-          if (!parentDelta) return
-          delta.set(node.id, parentDelta)
-          changed = true
-        })
-        if (!changed) break
-      }
-      // 移动过的节点涉及的空间（旧归属 + 新归属）都要重新贴合内容。
-      const affected = new Set<string>()
-      // 需要自动整理的空间：新加入成员的空间，以及拖动后与既有成员重叠的空间。
-      const arrangeTargets = new Set<string>()
-      const next = nodes.map((node) => {
-        const move = byId.get(node.id)
-        const follow = delta.get(node.id)
-        if (!move && !follow) return node
-        if (node.groupId) affected.add(node.groupId)
-        const moved = {
-          ...node,
-          x: move ? move.x : node.x + (follow?.dx ?? 0),
-          y: move ? move.y : node.y + (follow?.dy ?? 0),
-        }
-        // 拖动结束按中心点重算归属：进入空间即加入，离开即脱离。
-        const groupId = membershipOf(moved, groups)
-        if (groupId) affected.add(groupId)
-        if (groupId && groupId !== node.groupId) arrangeTargets.add(groupId)
-        return { ...moved, groupId }
-      })
-      // 同一空间内拖动后若与既有成员重叠（拖入时允许压住，靠整理消解），也触发整理。
+      if (requested.size === 0) return
+      markHistory()
+      const { next, refit, entered } = relocatedNodes(nodes, groups, requested)
       const hasAnnotation = (node: SceneNode) => annotatedIds.has(node.id)
-      affected.forEach((groupId) => {
-        if (arrangeTargets.has(groupId)) return
+
+      // 进出空间：按网格整理，和右键「自动整理空间」同一套尺度。
+      const positions = new Map<string, { x: number; y: number }>()
+      entered.forEach((groupId) => {
+        const group = groupById.get(groupId)
+        if (!group) return
+        arrangeGroupMembers(
+          next.filter((node) => node.groupId === groupId),
+          group,
+          LAYOUT_GAP,
+          hasAnnotation,
+        ).positions.forEach((item) => positions.set(item.id, item))
+      })
+
+      // 组内重叠：只把本次移动的对象推到最近空位，其他成员保持用户摆好的位置。
+      const membersByGroup = new Map<string, SceneNode[]>()
+      next.forEach((node) => {
+        if (!node.groupId || entered.has(node.groupId) || !requested.has(node.id)) return
+        const list = membersByGroup.get(node.groupId)
+        if (list) list.push(node)
+        else membersByGroup.set(node.groupId, [node])
+      })
+      membersByGroup.forEach((moved, groupId) => {
         const members = next.filter((node) => node.groupId === groupId)
-        for (const node of members) {
-          if (!delta.has(node.id)) continue
+        moved.forEach((node) => {
           const rect = nodeRect(node, hasAnnotation(node))
           const blocked = members.some(
             (other) =>
               other.id !== node.id &&
               rectsOverlap(rect, nodeRect(other, hasAnnotation(other)), LAYOUT_GAP),
           )
-          if (blocked) {
-            arrangeTargets.add(groupId)
-            return
-          }
-        }
-      })
-      // 整理在贴合之前应用：贴合按整理后的坐标反推空间框，成员保持网格不重叠。
-      let placed = next
-      if (arrangeTargets.size > 0) {
-        const positions = new Map<string, { x: number; y: number }>()
-        arrangeTargets.forEach((groupId) => {
-          const group = groupById.get(groupId)
-          if (!group) return
-          const arranged = arrangeGroupMembers(
-            next.filter((node) => node.groupId === groupId),
-            group,
+          if (!blocked) return
+          const offset = findFreeOffset(
+            [rect],
+            members
+              .filter((other) => other.id !== node.id)
+              .map((other) => nodeRect(other, hasAnnotation(other))),
             LAYOUT_GAP,
-            hasAnnotation,
+            24,
+            8,
+            8,
           )
-          arranged.positions.forEach((item) => positions.set(item.id, item))
+          positions.set(node.id, { x: rect.x + offset.dx, y: rect.y + offset.dy })
         })
-        if (positions.size > 0) {
-          placed = next.map((node) => {
-            const position = positions.get(node.id)
-            return position ? { ...node, x: position.x, y: position.y } : node
-          })
-        }
-      }
+      })
+
+      const placed =
+        positions.size > 0
+          ? next.map((node) => {
+              const position = positions.get(node.id)
+              return position ? { ...node, x: position.x, y: position.y } : node
+            })
+          : next
       setNodes(placed)
-      refitGroupsOf(placed, affected)
+      refitGroupsOf(placed, refit)
     },
-    [annotatedIds, groupById, groups, nodes, refitGroupsOf],
+    [annotatedIds, groupById, groups, markHistory, nodes, refitGroupsOf],
+  )
+
+  /**
+   * 方向键微调：只平移坐标并重算归属，不做整理、不做落点校验——
+   * 精确摆放本来就是用户意图，连续按键按合并键写成一步撤销。
+   */
+  const nudgeSelected = useCallback(
+    (dx: number, dy: number) => {
+      if (selectedIds.length === 0 || (dx === 0 && dy === 0)) return
+      markHistory('nudge')
+      const ids = new Set(selectedIds)
+      const moves = new Map<string, { x: number; y: number }>()
+      nodes.forEach((node) => {
+        if (ids.has(node.id)) moves.set(node.id, { x: node.x + dx, y: node.y + dy })
+      })
+      if (moves.size === 0) return
+      const { next, refit } = relocatedNodes(nodes, groups, moves)
+      setNodes(next)
+      refitGroupsOf(next, refit)
+    },
+    [groups, markHistory, nodes, refitGroupsOf, selectedIds],
   )
 
   /** 叠放层级：置顶取当前最大 z + 1，置底取最小 z - 1，保持相对次序。 */
@@ -383,55 +489,52 @@ export function useSceneStore(): SceneStore {
         if (node.z > max) max = node.z
       })
       const z = to === 'top' ? max + 1 : min - 1
+      markHistory()
       setNodes((previous) => previous.map((node) => (node.id === id ? { ...node, z } : node)))
     },
-    [nodes],
+    [markHistory, nodes],
   )
 
-  /** 挂载/卸载只维护引用关系；坐标始终是世界坐标，不引入第二套坐标系。 */
-  const mountNode = useCallback((id: string, parentId: string) => {
-    if (id === parentId) return
-    setNodes((previous) =>
-      previous.map((node) => (node.id === id ? { ...node, parentNodeId: parentId } : node)),
-    )
-  }, [])
-
-  const unmountNode = useCallback((id: string) => {
-    setNodes((previous) =>
-      previous.map((node) => (node.id === id ? { ...node, parentNodeId: undefined } : node)),
-    )
-  }, [])
-
-  const updateNodeDataJson = useCallback((id: string, dataJson: string) => {
-    const value = dataJson.trim()
-    setNodes((previous) =>
-      previous.map((node) =>
-        node.id === id ? { ...node, dataJson: value ? value : undefined } : node,
-      ),
-    )
-  }, [])
+  const updateNodeDataJson = useCallback(
+    (id: string, dataJson: string) => {
+      const value = dataJson.trim()
+      markHistory()
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.id === id ? { ...node, dataJson: value ? value : undefined } : node,
+        ),
+      )
+    },
+    [markHistory],
+  )
 
   /** 移动空间时带动内部节点，保持相对位置不变。 */
-  const moveGroup = useCallback((id: string, dx: number, dy: number) => {
-    setGroups((previous) =>
-      previous.map((group) =>
-        group.id === id
-          ? { ...group, x: Math.round(group.x + dx), y: Math.round(group.y + dy) }
-          : group,
-      ),
-    )
-    setNodes((previous) =>
-      previous.map((node) =>
-        node.groupId === id
-          ? { ...node, x: Math.round(node.x + dx), y: Math.round(node.y + dy) }
-          : node,
-      ),
-    )
-  }, [])
+  const moveGroup = useCallback(
+    (id: string, dx: number, dy: number) => {
+      if (dx === 0 && dy === 0) return
+      markHistory()
+      setGroups((previous) =>
+        previous.map((group) =>
+          group.id === id
+            ? { ...group, x: Math.round(group.x + dx), y: Math.round(group.y + dy) }
+            : group,
+        ),
+      )
+      setNodes((previous) =>
+        previous.map((node) =>
+          node.groupId === id
+            ? { ...node, x: Math.round(node.x + dx), y: Math.round(node.y + dy) }
+            : node,
+        ),
+      )
+    },
+    [markHistory],
+  )
 
   /** 手动调框：成员不移动，框可大于成员包围盒（便于预留放入空间）；成员下次变化时自动重算贴合。 */
   const resizeGroup = useCallback(
     (id: string, box: { x: number; y: number; w: number; h: number }) => {
+      markHistory()
       setGroups((previous) =>
         previous.map((group) =>
           group.id === id
@@ -446,29 +549,27 @@ export function useSceneStore(): SceneStore {
         ),
       )
     },
-    [],
+    [markHistory],
   )
 
   /** 建立有向连线；同向重复静默忽略，自连直接拒绝。 */
   const connect = useCallback(
     (from: string, to: string, fromHandle?: string, toHandle?: string) => {
       if (from === to) return
-      setEdges((previous) =>
-        previous.some((edge) => edge.from === from && edge.to === to)
-          ? previous
-          : [
-              ...previous,
-              {
-                id: `edge-${crypto.randomUUID()}`,
-                from,
-                to,
-                fromHandle: fromHandle || undefined,
-                toHandle: toHandle || undefined,
-              },
-            ],
-      )
+      if (edges.some((edge) => edge.from === from && edge.to === to)) return
+      markHistory()
+      setEdges((previous) => [
+        ...previous,
+        {
+          id: `edge-${crypto.randomUUID()}`,
+          from,
+          to,
+          fromHandle: fromHandle || undefined,
+          toHandle: toHandle || undefined,
+        },
+      ])
     },
-    [],
+    [edges, markHistory],
   )
 
   /** 用当前选中对象的包围盒创建持久空间，并把对象归入该空间。 */
@@ -478,6 +579,7 @@ export function useSceneStore(): SceneStore {
         .map((id) => nodeById.get(id))
         .filter((node): node is SceneNode => Boolean(node))
       if (targets.length === 0) return null
+      markHistory()
 
       // 单次扫描代替 Math.min(...map)：全选后建空间时展开 10 万个参数会超出调用栈。
       let minX = Infinity
@@ -533,7 +635,7 @@ export function useSceneStore(): SceneStore {
       setSelectedIds([])
       return group
     },
-    [annotatedIds, groups, nodeById, nodes, selectedIds],
+    [annotatedIds, groups, markHistory, nodeById, nodes, selectedIds],
   )
 
   /**
@@ -559,7 +661,7 @@ export function useSceneStore(): SceneStore {
           .map((node) => nodeRect(node, annotatedIds.has(node.id))),
       ]
       const offset = findFreeOffset([nextBox], obstacles, LAYOUT_GAP, 16, 16, 16)
-      undoRef.current = { nodes, groups, edges, annotations }
+      markHistory()
       setGroups((previous) =>
         previous.map((item) =>
           item.id === id
@@ -582,37 +684,49 @@ export function useSceneStore(): SceneStore {
       )
       return members.length
     },
-    [annotatedIds, annotations, edges, groupById, groups, nodes],
+    [annotatedIds, groupById, groups, markHistory, nodes],
   )
 
   /** 空间标题即空间标注，重命名后立即显示在空间框上。 */
-  const renameGroup = useCallback((id: string, title: string) => {
-    const next = title.trim()
-    if (!next) return
-    setGroups((previous) =>
-      previous.map((group) => (group.id === id ? { ...group, title: next } : group)),
-    )
-  }, [])
+  const renameGroup = useCallback(
+    (id: string, title: string) => {
+      const next = title.trim()
+      if (!next) return
+      markHistory()
+      setGroups((previous) =>
+        previous.map((group) => (group.id === id ? { ...group, title: next } : group)),
+      )
+    },
+    [markHistory],
+  )
 
-  const setGroupColor = useCallback((id: string, color: string) => {
-    setGroups((previous) =>
-      previous.map((group) => (group.id === id ? { ...group, color } : group)),
-    )
-  }, [])
+  const setGroupColor = useCallback(
+    (id: string, color: string) => {
+      markHistory()
+      setGroups((previous) =>
+        previous.map((group) => (group.id === id ? { ...group, color } : group)),
+      )
+    },
+    [markHistory],
+  )
 
   /** 连线颜色写进 `styleJson`，与已有样式字段合并。 */
-  const setEdgeColor = useCallback((id: string, color: string) => {
-    setEdges((previous) =>
-      previous.map((edge) =>
-        edge.id === id ? { ...edge, styleJson: withEdgeColor(edge.styleJson, color) } : edge,
-      ),
-    )
-  }, [])
+  const setEdgeColor = useCallback(
+    (id: string, color: string) => {
+      markHistory()
+      setEdges((previous) =>
+        previous.map((edge) =>
+          edge.id === id ? { ...edge, styleJson: withEdgeColor(edge.styleJson, color) } : edge,
+        ),
+      )
+    },
+    [markHistory],
+  )
 
   /** 删除按目标执行：节点连带边与标注，空间只删框，连线只删边。返回是否执行。 */
   const deleteTarget = useCallback(
     (target: { kind: 'node' | 'group' | 'edge'; id: string }) => {
-      undoRef.current = { nodes, groups, edges, annotations }
+      markHistory()
       if (target.kind === 'edge') {
         setEdges((previous) => previous.filter((edge) => edge.id !== target.id))
         setSelectedEdgeId(null)
@@ -631,14 +745,7 @@ export function useSceneStore(): SceneStore {
         return
       }
       const ids = new Set([target.id])
-      setNodes((previous) =>
-        previous
-          .filter((node) => !ids.has(node.id))
-          // 被删父节点的子节点卸载为独立对象，坐标不变。
-          .map((node) =>
-            ids.has(node.parentNodeId ?? '') ? { ...node, parentNodeId: undefined } : node,
-          ),
-      )
+      setNodes((previous) => previous.filter((node) => !ids.has(node.id)))
       setEdges((previous) => previous.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to)))
       setAnnotations((previous) =>
         previous
@@ -659,7 +766,7 @@ export function useSceneStore(): SceneStore {
       setSelectedIds([])
       setDetailsNodeId((current) => (current === target.id ? null : current))
     },
-    [annotations, edges, groups, nodes, refitGroupsOf],
+    [markHistory, nodes, refitGroupsOf],
   )
 
   /** 按当前选择删除；返回是否真的删了东西（空选择时返回 false）。 */
@@ -673,7 +780,7 @@ export function useSceneStore(): SceneStore {
       return true
     }
     if (selectedIds.length === 0) return false
-    undoRef.current = { nodes, groups, edges, annotations }
+    markHistory()
     const ids = new Set(selectedIds)
     // 被删成员涉及的空间都要重新贴合。
     const affectedGroups = new Set<string>()
@@ -681,14 +788,7 @@ export function useSceneStore(): SceneStore {
       const groupId = nodeById.get(id)?.groupId
       if (groupId) affectedGroups.add(groupId)
     })
-    setNodes((previous) =>
-      previous
-        .filter((node) => !ids.has(node.id))
-        // 被删父节点的子节点卸载为独立对象，坐标不变。
-        .map((node) =>
-          ids.has(node.parentNodeId ?? '') ? { ...node, parentNodeId: undefined } : node,
-        ),
-    )
+    setNodes((previous) => previous.filter((node) => !ids.has(node.id)))
     setEdges((previous) => previous.filter((edge) => !ids.has(edge.from) && !ids.has(edge.to)))
     setAnnotations((previous) =>
       previous
@@ -708,10 +808,8 @@ export function useSceneStore(): SceneStore {
     setDetailsNodeId(null)
     return true
   }, [
-    annotations,
     deleteTarget,
-    edges,
-    groups,
+    markHistory,
     nodeById,
     nodes,
     refitGroupsOf,
@@ -719,20 +817,6 @@ export function useSceneStore(): SceneStore {
     selectedGroupId,
     selectedIds,
   ])
-
-  const undo = useCallback(() => {
-    const snapshot = undoRef.current
-    if (!snapshot) return false
-    undoRef.current = null
-    setNodes(snapshot.nodes)
-    setGroups(snapshot.groups)
-    setEdges(snapshot.edges)
-    setAnnotations(snapshot.annotations)
-    setSelectedIds([])
-    setActiveAnnotationId(null)
-    setDetailsMode('details')
-    return true
-  }, [])
 
   // ---------- 标注与文字 ----------
 
@@ -760,6 +844,7 @@ export function useSceneStore(): SceneStore {
         color: 'teal',
         text: '补充说明：把关键结论或下一步动作写在这里。',
       }
+      markHistory()
       setAnnotations((previous) => [...previous, annotation])
       // 标注让成员变高，涉及空间重新贴合；annotatedIds 尚未包含新标注，用覆盖判定。
       const annotated = new Set(targetIds)
@@ -774,12 +859,22 @@ export function useSceneStore(): SceneStore {
       setActiveAnnotationId(annotation.id)
       setDetailsMode('annotation')
     },
-    [annotations, annotatedIds, nodeById, nodes, openAnnotation, refitGroupsOf, selectedIds],
+    [
+      annotations,
+      annotatedIds,
+      markHistory,
+      nodeById,
+      nodes,
+      openAnnotation,
+      refitGroupsOf,
+      selectedIds,
+    ],
   )
 
   const saveAnnotation = useCallback(
     (text: string) => {
       if (!activeAnnotation) return
+      markHistory()
       setAnnotations((previous) =>
         previous.map((annotation) =>
           annotation.id === activeAnnotation.id
@@ -788,11 +883,12 @@ export function useSceneStore(): SceneStore {
         ),
       )
     },
-    [activeAnnotation],
+    [activeAnnotation, markHistory],
   )
 
   const removeAnnotation = useCallback(() => {
     if (!activeAnnotation) return
+    markHistory()
     setAnnotations((previous) =>
       previous.filter((annotation) => annotation.id !== activeAnnotation.id),
     )
@@ -809,7 +905,7 @@ export function useSceneStore(): SceneStore {
     )
     setActiveAnnotationId(null)
     setDetailsMode('details')
-  }, [activeAnnotation, annotatedIds, nodeById, nodes, refitGroupsOf])
+  }, [activeAnnotation, annotatedIds, markHistory, nodeById, nodes, refitGroupsOf])
 
   /**
    * 内容写回节点：`live` 为真时只同步显示，收尾时才判定是否保存。
@@ -832,6 +928,7 @@ export function useSceneStore(): SceneStore {
         subtitle: plain,
         body,
       }
+      if (!live) markHistory()
       setNodes((previous) => previous.map((item) => (item.id === id ? changed : item)))
       // 收尾保存时名称可能改变行数 → 成员高度变化，所属空间重新贴合。
       if (!live && node.groupId) {
@@ -841,16 +938,20 @@ export function useSceneStore(): SceneStore {
         )
       }
     },
-    [nodes, refitGroupsOf],
+    [markHistory, nodes, refitGroupsOf],
   )
 
-  const toggleEdgeLabel = useCallback((id: string, label: string) => {
-    setEdges((previous) =>
-      previous.map((edge) =>
-        edge.id === id ? { ...edge, label: label.trim() || undefined } : edge,
-      ),
-    )
-  }, [])
+  const toggleEdgeLabel = useCallback(
+    (id: string, label: string) => {
+      markHistory()
+      setEdges((previous) =>
+        previous.map((edge) =>
+          edge.id === id ? { ...edge, label: label.trim() || undefined } : edge,
+        ),
+      )
+    },
+    [markHistory],
+  )
 
   return {
     nodes,
@@ -883,12 +984,11 @@ export function useSceneStore(): SceneStore {
     closeDetails,
     addNode,
     moveNodes,
+    nudgeSelected,
     moveGroup,
     resizeGroup,
     connect,
     raiseNode,
-    mountNode,
-    unmountNode,
     updateNodeDataJson,
     createGroup,
     arrangeGroup,
@@ -897,7 +997,9 @@ export function useSceneStore(): SceneStore {
     setEdgeColor,
     deleteSelection,
     deleteTarget,
+    markHistory,
     undo,
+    redo,
     openAnnotation,
     addAnnotation,
     saveAnnotation,
