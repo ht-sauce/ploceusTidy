@@ -14,7 +14,7 @@
 
 | 渠道 | 地址 |
 | --- | --- |
-| 最新安装包（v0.1.2） | [release/络雀_0.1.2_x64-setup.exe](release/络雀_0.1.2_x64-setup.exe) |
+| 最新安装包（v0.1.3） | [release/络雀_0.1.3_x64-setup.exe](release/络雀_0.1.3_x64-setup.exe) |
 | GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
 
 安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。
@@ -109,5 +109,5 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.1.2 发布已完成。）
+- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.1.3 发布已完成。）
 - 媒体上传已补大小/非空校验、Windows BMP MIME 兼容与真实路径边界，仅含媒体的富文本也可保存；Rust 10 项测试与内容保存 5 项回归通过。拖出到外部程序、编辑器媒体展示、视频进度条与粘贴截图的真机验收已由用户确认完成（2026-10-27），见 [docs/spec/08-adr.md](docs/spec/08-adr.md) §5。
