@@ -16,8 +16,8 @@ use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::models::{
-    ImportError, ImportRequest, ImportResult, RefStatus, SceneAnnotation, SceneData, SceneDelta,
-    SceneEdge, SceneNode, WorkspaceInfo,
+    ExportRequest, ExportResult, ImportError, ImportRequest, ImportResult, RefStatus,
+    SceneAnnotation, SceneData, SceneDelta, SceneEdge, SceneNode, WorkspaceInfo,
 };
 use crate::platform::{
     clean_path, file_icon_and_kind, normalize_path_key, now_ms, subtitle_for_path,
@@ -61,7 +61,7 @@ impl AppState {
 }
 
 /// 当前 schema 版本；迁移按 `PRAGMA user_version` 递增执行。
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// 初始化表结构；只做 `CREATE ... IF NOT EXISTS`，不破坏已有数据。
 /// 关系表使用复合主键，`refs` 只在文件/文件夹上建立部分唯一索引用于去重。
@@ -90,6 +90,7 @@ fn schema() -> &'static str {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         color TEXT,
+        collapsed INTEGER NOT NULL DEFAULT 0,
         x REAL NOT NULL,
         y REAL NOT NULL,
         w REAL NOT NULL,
@@ -201,6 +202,7 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
         ("nodes", "parent_node_id", "TEXT"),
         ("nodes", "data_json", "TEXT"),
         ("groups", "color", "TEXT"),
+        ("groups", "collapsed", "INTEGER NOT NULL DEFAULT 0"),
         ("edges", "from_handle", "TEXT"),
         ("edges", "to_handle", "TEXT"),
         ("edges", "label", "TEXT"),
@@ -325,6 +327,16 @@ const NODE_SELECT: &str = r#"
     LEFT JOIN refs r ON r.id = n.ref_id
 "#;
 
+/// 首屏紧凑索引：字段顺序与 `row_to_node` 一致，但 `body` 直接给 NULL。
+/// 正文可能很长（富文本 HTML），全量拉取会让首屏变慢、内存翻倍；按 `node_body` 单独取。
+const NODE_SELECT_BRIEF: &str = r#"
+    SELECT n.id, n.type, n.icon, n.name, n.subtitle, NULL AS body, n.group_id, n.z,
+           n.parent_node_id, n.data_json, n.x, n.y, n.w, n.h,
+           COALESCE(r.is_exists, 1), r.thumb_key, r.path, r.url
+    FROM nodes n
+    LEFT JOIN refs r ON r.id = n.ref_id
+"#;
+
 fn load_node_by_id(connection: &Connection, node_id: &str) -> rusqlite::Result<Option<SceneNode>> {
     connection
         .query_row(
@@ -342,7 +354,7 @@ pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
     let connection = state.reader.lock().map_err(|error| error.to_string())?;
 
     let mut node_statement = connection
-        .prepare(NODE_SELECT)
+        .prepare(NODE_SELECT_BRIEF)
         .map_err(|error| format!("读取节点失败：{error}"))?;
     let nodes = node_statement
         .query_map([], row_to_node)
@@ -352,7 +364,7 @@ pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
     drop(node_statement);
 
     let mut group_statement = connection
-        .prepare("SELECT id, title, color, x, y, w, h FROM groups")
+        .prepare("SELECT id, title, color, collapsed, x, y, w, h FROM groups")
         .map_err(|error| format!("读取分组失败：{error}"))?;
     let groups = group_statement
         .query_map([], |row| {
@@ -360,10 +372,11 @@ pub fn scene_load(state: &AppState) -> Result<SceneData, String> {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 color: row.get(2)?,
-                x: row.get(3)?,
-                y: row.get(4)?,
-                w: row.get(5)?,
-                h: row.get(6)?,
+                collapsed: row.get::<_, i64>(3)? != 0,
+                x: row.get(4)?,
+                y: row.get(5)?,
+                w: row.get(6)?,
+                h: row.get(7)?,
             })
         })
         .map_err(|error| format!("读取分组失败：{error}"))?
@@ -605,7 +618,7 @@ const NODE_UPSERT_SQL: &str = r#"
         icon = excluded.icon,
         name = excluded.name,
         subtitle = excluded.subtitle,
-        body = excluded.body,
+        body = COALESCE(excluded.body, nodes.body),
         ref_id = excluded.ref_id,
         group_id = excluded.group_id,
         z = excluded.z,
@@ -619,11 +632,12 @@ const NODE_UPSERT_SQL: &str = r#"
 "#;
 
 const GROUP_UPSERT_SQL: &str = r#"
-    INSERT INTO groups (id, title, color, x, y, w, h, created_at, updated_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+    INSERT INTO groups (id, title, color, collapsed, x, y, w, h, created_at, updated_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
     ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         color = excluded.color,
+        collapsed = excluded.collapsed,
         x = excluded.x,
         y = excluded.y,
         w = excluded.w,
@@ -809,6 +823,7 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
                     &group.id,
                     &group.title,
                     &group.color,
+                    group.collapsed,
                     group.x,
                     group.y,
                     group.w,
@@ -964,6 +979,7 @@ pub fn scene_save_delta(state: &AppState, delta: &SceneDelta) -> Result<(), Stri
                     &group.id,
                     &group.title,
                     &group.color,
+                    group.collapsed,
                     group.x,
                     group.y,
                     group.w,
@@ -1070,190 +1086,355 @@ pub fn scene_save_delta(state: &AppState, delta: &SceneDelta) -> Result<(), Stri
     Ok(())
 }
 
-/// 批量导入绝对路径：
+/// 分批大小：每批一个事务，批间上报进度并检查取消。
+/// 20 项一批在 3000 文件量级约有 150 次进度回调，足以让进度条连续走动。
+const IMPORT_CHUNK: usize = 20;
+
+/// 批量导入绝对路径（分批、可取消）：
 /// - 用 `symlink_metadata` 拒绝符号链接，再 `canonicalize` 得到真实路径；
 /// - 文件/文件夹按 `(kind, dedupe_key)` 去重，命中的节点进入 `existing`；
-/// - 失败项带路径与原因进入 `errors`，不允许静默跳过（HC-14）。
-pub fn import_paths(state: &AppState, request: &ImportRequest) -> Result<ImportResult, String> {
-    let mut connection = state.db.lock().map_err(|error| error.to_string())?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("开启事务失败：{error}"))?;
-
-    let mut created = Vec::new();
-    let mut existing = Vec::new();
-    let mut errors = Vec::new();
-    let timestamp = now_ms();
-
-    for (index, raw_path) in request.paths.iter().enumerate() {
-        let link_metadata = match fs::symlink_metadata(raw_path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                errors.push(ImportError {
-                    path: raw_path.clone(),
-                    reason: format!("路径不存在或无法访问：{error}"),
-                });
-                continue;
-            }
-        };
-        if link_metadata.file_type().is_symlink() {
-            errors.push(ImportError {
-                path: raw_path.clone(),
-                reason: "不支持符号链接，请拖入目标文件本身".to_string(),
-            });
-            continue;
-        }
-
-        let canonical = match fs::canonicalize(raw_path) {
-            Ok(path) => path,
-            Err(error) => {
-                errors.push(ImportError {
-                    path: raw_path.clone(),
-                    reason: format!("路径不存在或无法访问：{error}"),
-                });
-                continue;
-            }
-        };
-
-        let metadata = match fs::metadata(&canonical) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                errors.push(ImportError {
-                    path: raw_path.clone(),
-                    reason: format!("读取文件信息失败：{error}"),
-                });
-                continue;
-            }
-        };
-
-        let (kind, icon) = file_icon_and_kind(&canonical);
-        let dedupe_key = normalize_path_key(&canonical);
-        let existing_node: Option<SceneNode> = transaction
-            .query_row(
-                &format!(
-                    "{NODE_SELECT} WHERE r.dedupe_key = ?1 AND r.kind IN ('file','folder') LIMIT 1"
-                ),
-                params![&dedupe_key],
-                row_to_node,
-            )
-            .optional()
-            .map_err(|error| format!("查询重复文件失败：{error}"))?;
-
-        if let Some(mut node) = existing_node {
-            // 旧版本可能把快捷方式记成文本文档；导入时刷新类型与图标，避免继续显示通用图标。
-            if node.kind != kind || node.icon != icon {
-                transaction
-                    .execute(
-                        "UPDATE nodes SET type = ?2, icon = ?3, updated_at = ?4 WHERE id = ?1",
-                        params![&node.id, kind, icon, timestamp],
-                    )
-                    .map_err(|error| format!("刷新节点图标失败：{error}"))?;
-                node.kind = kind.to_string();
-                node.icon = icon.to_string();
-            }
-            existing.push(node);
-            continue;
-        }
-
-        let name = canonical
-            .file_name()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_else(|| raw_path.clone());
-        let subtitle = subtitle_for_path(&canonical);
-        let path = clean_path(&canonical);
-        let node_id = Uuid::new_v4().to_string();
-        // 72×64 图标格 + 8px 间距；一行 8 个，与桌面网格一致。
-        let x = request.x + (index % 8) as f64 * 80.0;
-        let y = request.y + (index / 8) as f64 * 72.0;
-        let ref_kind = if kind == "folder" { "folder" } else { "file" };
-        let ext = ext_of(Some(&path));
-        let size = metadata.len() as i64;
-        let mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_millis() as i64);
-        let search_text = format!("{name} {path} {subtitle}");
-
-        transaction
-            .execute(
-                r#"
-                INSERT INTO refs
-                    (id, kind, dedupe_key, path, url, name, ext, size, mtime,
-                     is_exists, thumb_key, search_text, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, 1, NULL, ?9, ?10, ?10)
-                "#,
-                params![
-                    &node_id,
-                    ref_kind,
-                    &dedupe_key,
-                    &path,
-                    &name,
-                    &ext,
-                    size,
-                    mtime,
-                    &search_text,
-                    timestamp
-                ],
-            )
-            .map_err(|error| format!("写入引用失败：{error}"))?;
-
-        let node = SceneNode {
-            id: node_id.clone(),
-            kind: kind.to_string(),
-            icon: icon.to_string(),
-            name,
-            path: Some(path),
-            subtitle,
-            body: None,
-            url: None,
-            group_id: String::new(),
-            z: 0,
-            parent_node_id: None,
-            data_json: None,
-            x,
-            y,
-            w: 72.0,
-            h: 64.0,
-            is_exists: true,
-            thumb_key: None,
-        };
-
-        transaction
-            .execute(
-                r#"
-                INSERT INTO nodes
-                    (id, type, icon, name, subtitle, body, ref_id, group_id,
-                     x, y, w, h, created_at, updated_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?1, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
-                "#,
-                params![
-                    &node.id,
-                    &node.kind,
-                    &node.icon,
-                    &node.name,
-                    &node.subtitle,
-                    &node.group_id,
-                    node.x,
-                    node.y,
-                    node.w,
-                    node.h,
-                    timestamp
-                ],
-            )
-            .map_err(|error| format!("写入节点失败：{error}"))?;
-
-        created.push(node);
+/// - 失败项带路径与原因进入 `errors`，不允许静默跳过（HC-14）；
+/// - 每批单独提交，取消时返回已落库的部分结果，不留下半途事务。
+pub fn import_paths_with_progress<F, C>(
+    state: &AppState,
+    request: &ImportRequest,
+    mut on_progress: F,
+    is_cancelled: C,
+) -> Result<ImportResult, String>
+where
+    F: FnMut(usize, usize, &str),
+    C: Fn() -> bool,
+{
+    let total = request.paths.len();
+    let mut created: Vec<SceneNode> = Vec::new();
+    let mut existing: Vec<SceneNode> = Vec::new();
+    let mut errors: Vec<ImportError> = Vec::new();
+    let mut cancelled = false;
+    on_progress(0, total, "");
+    if total == 0 {
+        return Ok(ImportResult {
+            created,
+            existing,
+            errors,
+            cancelled,
+        });
     }
 
-    transaction
-        .commit()
-        .map_err(|error| format!("提交导入失败：{error}"))?;
+    let mut start = 0;
+    while start < total {
+        if is_cancelled() {
+            cancelled = true;
+            break;
+        }
+        let end = (start + IMPORT_CHUNK).min(total);
+        // 每批单独取写锁：批间让出连接，防抖保存与缩略图查询不必等到整批结束。
+        let mut connection = state.db.lock().map_err(|error| error.to_string())?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| format!("开启事务失败：{error}"))?;
+        let timestamp = now_ms();
 
+        for (offset, raw_path) in request.paths[start..end].iter().enumerate() {
+            // 批内也响应取消：已扫过的项照常提交，未扫的直接放弃。
+            if is_cancelled() {
+                cancelled = true;
+                break;
+            }
+            let index = start + offset;
+            let link_metadata = match fs::symlink_metadata(raw_path) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    errors.push(ImportError {
+                        path: raw_path.clone(),
+                        reason: format!("路径不存在或无法访问：{error}"),
+                    });
+                    continue;
+                }
+            };
+            if link_metadata.file_type().is_symlink() {
+                errors.push(ImportError {
+                    path: raw_path.clone(),
+                    reason: "不支持符号链接，请拖入目标文件本身".to_string(),
+                });
+                continue;
+            }
+
+            let canonical = match fs::canonicalize(raw_path) {
+                Ok(path) => path,
+                Err(error) => {
+                    errors.push(ImportError {
+                        path: raw_path.clone(),
+                        reason: format!("路径不存在或无法访问：{error}"),
+                    });
+                    continue;
+                }
+            };
+
+            let metadata = match fs::metadata(&canonical) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    errors.push(ImportError {
+                        path: raw_path.clone(),
+                        reason: format!("读取文件信息失败：{error}"),
+                    });
+                    continue;
+                }
+            };
+
+            let (kind, icon) = file_icon_and_kind(&canonical);
+            let dedupe_key = normalize_path_key(&canonical);
+            let existing_node: Option<SceneNode> = transaction
+                .query_row(
+                    &format!(
+                        "{NODE_SELECT} WHERE r.dedupe_key = ?1 AND r.kind IN ('file','folder') LIMIT 1"
+                    ),
+                    params![&dedupe_key],
+                    row_to_node,
+                )
+                .optional()
+                .map_err(|error| format!("查询重复文件失败：{error}"))?;
+
+            if let Some(mut node) = existing_node {
+                // 旧版本可能把快捷方式记成文本文档；导入时刷新类型与图标，避免继续显示通用图标。
+                if node.kind != kind || node.icon != icon {
+                    transaction
+                        .execute(
+                            "UPDATE nodes SET type = ?2, icon = ?3, updated_at = ?4 WHERE id = ?1",
+                            params![&node.id, kind, icon, timestamp],
+                        )
+                        .map_err(|error| format!("刷新节点图标失败：{error}"))?;
+                    node.kind = kind.to_string();
+                    node.icon = icon.to_string();
+                }
+                existing.push(node);
+                continue;
+            }
+
+            let name = canonical
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| raw_path.clone());
+            let subtitle = subtitle_for_path(&canonical);
+            let path = clean_path(&canonical);
+            let node_id = Uuid::new_v4().to_string();
+            // 72×64 图标格 + 8px 间距；一行 8 个，与桌面网格一致。
+            let x = request.x + (index % 8) as f64 * 80.0;
+            let y = request.y + (index / 8) as f64 * 72.0;
+            let ref_kind = if kind == "folder" { "folder" } else { "file" };
+            let ext = ext_of(Some(&path));
+            let size = metadata.len() as i64;
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64);
+            let search_text = format!("{name} {path} {subtitle}");
+
+            transaction
+                .execute(
+                    r#"
+                    INSERT INTO refs
+                        (id, kind, dedupe_key, path, url, name, ext, size, mtime,
+                         is_exists, thumb_key, search_text, created_at, updated_at)
+                    VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, 1, NULL, ?9, ?10, ?10)
+                    "#,
+                    params![
+                        &node_id,
+                        ref_kind,
+                        &dedupe_key,
+                        &path,
+                        &name,
+                        &ext,
+                        size,
+                        mtime,
+                        &search_text,
+                        timestamp
+                    ],
+                )
+                .map_err(|error| format!("写入引用失败：{error}"))?;
+
+            let node = SceneNode {
+                id: node_id.clone(),
+                kind: kind.to_string(),
+                icon: icon.to_string(),
+                name,
+                path: Some(path),
+                subtitle,
+                body: None,
+                url: None,
+                group_id: String::new(),
+                z: 0,
+                parent_node_id: None,
+                data_json: None,
+                x,
+                y,
+                w: 72.0,
+                h: 64.0,
+                is_exists: true,
+                thumb_key: None,
+            };
+
+            transaction
+                .execute(
+                    r#"
+                    INSERT INTO nodes
+                        (id, type, icon, name, subtitle, body, ref_id, group_id,
+                         x, y, w, h, created_at, updated_at)
+                    VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?1, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+                    "#,
+                    params![
+                        &node.id,
+                        &node.kind,
+                        &node.icon,
+                        &node.name,
+                        &node.subtitle,
+                        &node.group_id,
+                        node.x,
+                        node.y,
+                        node.w,
+                        node.h,
+                        timestamp
+                    ],
+                )
+                .map_err(|error| format!("写入节点失败：{error}"))?;
+
+            created.push(node);
+        }
+
+        transaction
+            .commit()
+            .map_err(|error| format!("提交导入失败：{error}"))?;
+        start = end;
+        let current = request.paths[end - 1].as_str();
+        on_progress(start, total, current);
+    }
+
+    if is_cancelled() {
+        cancelled = true;
+    }
     Ok(ImportResult {
         created,
         existing,
         errors,
+        cancelled,
+    })
+}
+
+/// 读取单个节点的正文：首屏只加载紧凑索引，编辑与导出前按需拉取。
+pub fn node_body(state: &AppState, node_id: &str) -> Result<Option<String>, String> {
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
+    connection
+        .query_row(
+            "SELECT body FROM nodes WHERE id = ?1",
+            params![node_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map(|value| value.flatten())
+        .map_err(|error| format!("读取正文失败：{error}"))
+}
+
+/// 文件名清洗：Windows 非法字符替换成下划线，去掉首尾空白与结尾的点，限制长度。
+/// 只影响导出文件名，不触碰用户原文件。
+fn sanitize_export_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches('.').trim();
+    let limited: String = trimmed.chars().take(60).collect();
+    if limited.is_empty() {
+        "未命名".to_string()
+    } else {
+        limited
+    }
+}
+
+/// 同名文件已存在时追加 ` (2)`、` (3)`…，避免静默覆盖用户已有文件。
+fn unique_export_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let first = dir.join(format!("{stem}.{ext}"));
+    if !first.exists() {
+        return first;
+    }
+    for index in 2..1000 {
+        let candidate = dir.join(format!("{stem} ({index}).{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dir.join(format!("{stem}-{}.{ext}", now_ms()))
+}
+
+/// 收集富文本正文里引用的本地媒体名（`assets/<name>`），按出现顺序去重。
+fn collect_asset_names(html: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (index, _) in html.match_indices("assets/") {
+        let rest = &html[index + "assets/".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+            .collect();
+        if !name.is_empty() && !names.iter().any(|item| item == &name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// 导出文本/富文本到目标目录：
+/// - 纯文本写 `名称.txt`（原文）；
+/// - 富文本写 `名称.html`，把 `assets/<文件>` 重写成同目录相对文件名，并把媒体复制过去，
+///   导出的 html 可直接双击在浏览器里看（HC-12：只读取工作空间内的资产副本）。
+pub fn export_contents(state: &AppState, request: &ExportRequest) -> Result<ExportResult, String> {
+    if request.items.is_empty() {
+        return Err("没有可导出的内容".to_string());
+    }
+    let dir = PathBuf::from(&request.dir);
+    fs::create_dir_all(&dir).map_err(|error| format!("创建导出目录失败：{error}"))?;
+
+    let mut files: Vec<String> = Vec::new();
+    let mut media = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+    let single = request.items.len() == 1;
+
+    for item in &request.items {
+        let is_rich = item.kind == "richtext";
+        let ext = if is_rich { "html" } else { "txt" };
+        let stem = sanitize_export_name(&item.name);
+        let target = match request.file_name.as_deref().filter(|_| single) {
+            Some(name) => dir.join(name),
+            None => unique_export_path(&dir, &stem, ext),
+        };
+
+        let mut content = item.body.clone();
+        if is_rich {
+            for name in collect_asset_names(&item.body) {
+                let Ok(source) = rich_asset_file(state, &name) else {
+                    warnings.push(format!("媒体缺失：assets/{name}"));
+                    continue;
+                };
+                if let Err(error) = fs::copy(&source, dir.join(&name)) {
+                    warnings.push(format!("媒体复制失败：assets/{name}（{error}）"));
+                    continue;
+                }
+                media += 1;
+            }
+            content = content.replace("assets/", "");
+        }
+
+        fs::write(&target, content.as_bytes())
+            .map_err(|error| format!("写入导出文件失败：{}（{error}）", target.display()))?;
+        files.push(target.to_string_lossy().to_string());
+    }
+
+    Ok(ExportResult {
+        files,
+        media,
+        warnings,
     })
 }
 
@@ -1541,6 +1722,121 @@ pub fn ref_check(state: &AppState, node_ids: &[String]) -> Result<Vec<RefStatus>
             }
         }
     }
+    Ok(statuses)
+}
+
+/// 列出所有文件引用所在目录（去重）：供文件监听决定 watch 哪些目录。
+/// 只取父目录，不逐个文件 watch——目录数量通常比文件少两个数量级。
+pub fn ref_dirs(state: &AppState) -> Result<Vec<PathBuf>, String> {
+    let connection = state.reader.lock().map_err(|error| error.to_string())?;
+    let mut statement = connection
+        .prepare("SELECT DISTINCT path FROM refs WHERE path IS NOT NULL AND kind IN ('file','folder')")
+        .map_err(|error| format!("读取引用目录失败：{error}"))?;
+    let paths = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("读取引用目录失败：{error}"))?
+        .filter_map(|result| result.ok())
+        .collect::<Vec<_>>();
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for path in paths {
+        let dir = Path::new(&path).parent().map(|value| value.to_path_buf());
+        if let Some(dir) = dir {
+            if !dirs.iter().any(|item| item == &dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    Ok(dirs)
+}
+
+/// 目录级校验：只检查位于 `dirs` 下的引用，供文件监听做增量刷新。
+/// 只返回 `is_exists` 真正变化的条目，前端不必为每次事件重刷整批节点。
+pub fn ref_check_under_dirs(state: &AppState, dirs: &[String]) -> Result<Vec<RefStatus>, String> {
+    if dirs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let roots: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
+    let mut connection = state.db.lock().map_err(|error| error.to_string())?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开启事务失败：{error}"))?;
+
+    // 候选按目录前缀过滤：路径比对在内存里做，避免给 refs.path 建额外索引。
+    let candidates: Vec<(String, String, bool)> = {
+        let mut statement = transaction
+            .prepare(
+                "SELECT n.id, r.path, r.is_exists FROM nodes n
+                 JOIN refs r ON r.id = n.ref_id
+                 WHERE r.path IS NOT NULL AND r.dedupe_key IS NOT NULL",
+            )
+            .map_err(|error| format!("读取待校验引用失败：{error}"))?;
+        let mut rows = statement
+            .query([])
+            .map_err(|error| format!("读取待校验引用失败：{error}"))?;
+        let mut list = Vec::new();
+        while let Some(row) = rows.next().map_err(|error| error.to_string())? {
+            let node_id: String = row.get(0).map_err(|error| error.to_string())?;
+            let path: String = row.get(1).map_err(|error| error.to_string())?;
+            let existed: bool = row.get(2).map_err(|error| error.to_string())?;
+            let parent = Path::new(&path).parent();
+            if let Some(parent) = parent {
+                if roots.iter().any(|root| parent == root.as_path()) {
+                    list.push((node_id, path, existed));
+                }
+            }
+        }
+        list
+    };
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let timestamp = now_ms();
+    let mut statuses = Vec::new();
+    {
+        let mut update = transaction
+            .prepare(
+                r#"
+                UPDATE refs SET is_exists = ?2, size = ?3, mtime = ?4, updated_at = ?5
+                WHERE id = (SELECT ref_id FROM nodes WHERE id = ?1)
+                "#,
+            )
+            .map_err(|error| format!("准备校验引用失败：{error}"))?;
+
+        for (node_id, path, existed) in candidates {
+            let exists = fs::symlink_metadata(&path)
+                .map(|meta| !meta.file_type().is_symlink())
+                .unwrap_or(false);
+            if exists == existed {
+                continue;
+            }
+            let metadata = if exists { fs::metadata(&path).ok() } else { None };
+            let size = metadata.as_ref().map(|meta| meta.len() as i64);
+            let mtime = metadata
+                .as_ref()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as i64);
+
+            update
+                .execute(params![&node_id, exists, &size, &mtime, timestamp])
+                .map_err(|error| format!("校验引用失败：{error}"))?;
+            if let Ok(mut cache) = state.thumb_meta.lock() {
+                cache.remove(&node_id);
+            }
+            statuses.push(RefStatus {
+                node_id,
+                path: Some(path),
+                is_exists: exists,
+                size,
+                mtime,
+            });
+        }
+    }
+
+    transaction
+        .commit()
+        .map_err(|error| format!("提交校验失败：{error}"))?;
     Ok(statuses)
 }
 
@@ -2116,4 +2412,146 @@ mod tests {
             .expect("读取分组失败");
         assert_eq!(group_id, "");
     }
+    /// 落盘测试夹具：读写连接指向同一个临时库文件（内存库无法在两条连接间共享）。
+    struct DbFixture {
+        state: AppState,
+        root: PathBuf,
+    }
+
+    impl DbFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("ploceus-db-test-{}", Uuid::new_v4()));
+            fs::create_dir_all(root.join("assets")).expect("创建测试目录失败");
+            let db_path = root.join("test.db");
+            let mut connection = Connection::open(&db_path).expect("打开测试库失败");
+            migrate(&mut connection).expect("建表失败");
+            let reader = Connection::open(&db_path).expect("打开测试读连接失败");
+            let state = AppState {
+                db: Mutex::new(connection),
+                reader: Mutex::new(reader),
+                workspace: Mutex::new(root.clone()),
+                assets: Mutex::new(root.join("assets")),
+                thumb_meta: Mutex::new(HashMap::new()),
+            };
+            Self { state, root }
+        }
+    }
+
+    impl Drop for DbFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn text_node(body: Option<&str>) -> SceneNode {
+        SceneNode {
+            id: "node-text-1".to_string(),
+            kind: "text".to_string(),
+            icon: "text".to_string(),
+            name: "标题".to_string(),
+            path: None,
+            subtitle: "正文".to_string(),
+            body: body.map(|value| value.to_string()),
+            url: None,
+            group_id: String::new(),
+            z: 0,
+            parent_node_id: None,
+            data_json: None,
+            x: 0.0,
+            y: 0.0,
+            w: 72.0,
+            h: 64.0,
+            is_exists: true,
+            thumb_key: None,
+        }
+    }
+
+    fn empty_delta(nodes: Vec<SceneNode>) -> SceneDelta {
+        SceneDelta {
+            nodes,
+            removed_node_ids: Vec::new(),
+            groups: Vec::new(),
+            removed_group_ids: Vec::new(),
+            edges: Vec::new(),
+            removed_edge_ids: Vec::new(),
+            annotations: Vec::new(),
+            removed_annotation_ids: Vec::new(),
+        }
+    }
+
+    /// 首屏只加载紧凑索引（body 为 None）：拖动这类节点后保存，正文不能被 NULL 覆盖。
+    #[test]
+    fn saving_without_body_keeps_existing_content() {
+        let fixture = DbFixture::new();
+        let created = text_node(Some("原始正文"));
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![created],
+                groups: Vec::new(),
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("首次保存失败");
+
+        let mut moved = text_node(None);
+        moved.x = 120.0;
+        scene_save_delta(&fixture.state, &empty_delta(vec![moved])).expect("增量保存失败");
+
+        let body = node_body(&fixture.state, "node-text-1").expect("读取正文失败");
+        assert_eq!(body.as_deref(), Some("原始正文"));
+    }
+
+    /// 显式带上正文时仍要能覆盖（编辑后保存的主路径）。
+    #[test]
+    fn saving_with_body_overwrites_content() {
+        let fixture = DbFixture::new();
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![text_node(Some("旧正文"))],
+                groups: Vec::new(),
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("首次保存失败");
+        scene_save_delta(
+            &fixture.state,
+            &empty_delta(vec![text_node(Some("新正文"))]),
+        )
+        .expect("增量保存失败");
+        let body = node_body(&fixture.state, "node-text-1").expect("读取正文失败");
+        assert_eq!(body.as_deref(), Some("新正文"));
+    }
+
+    /// 空间折叠状态要能持久化：默认不折叠，写入后读回为 true。
+    #[test]
+    fn group_collapsed_roundtrip() {
+        let fixture = DbFixture::new();
+        let group = crate::models::SceneGroup {
+            id: "group-1".to_string(),
+            title: "空间".to_string(),
+            color: None,
+            collapsed: true,
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 160.0,
+        };
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: Vec::new(),
+                groups: vec![group],
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("保存空间失败");
+        let loaded = scene_load(&fixture.state).expect("读取场景失败");
+        assert!(loaded.groups[0].collapsed);
+    }
+
 }

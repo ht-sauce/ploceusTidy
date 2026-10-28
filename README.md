@@ -14,7 +14,7 @@
 
 | 渠道 | 地址 |
 | --- | --- |
-| 最新安装包（v0.1.3） | [release/络雀_0.1.3_x64-setup.exe](release/络雀_0.1.3_x64-setup.exe) |
+| 最新安装包（v0.1.4） | [release/络雀_0.1.4_x64-setup.exe](release/络雀_0.1.4_x64-setup.exe) |
 | GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
 
 安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。
@@ -28,7 +28,7 @@
 | 画布 | Konva 10 + react-konva + rbush：常驻增量空间索引 + 视口裁剪、高清倍率（≥2）、任意缩放都绘制完整对象；对象/空间不重叠、拖动吸附对齐、拖到边缘自动平移 |
 | 搜索 | 内存子串 + 拼音首字母（`pinyin-pro`），覆盖对象、标注、空间标题与连线标签 |
 | 内容 | 文字卡与富文本卡都在弹窗里编辑；富文本用 wangEditor-next（按需加载），正文以 HTML 持久化，支持本地插入图片与视频（二进制直传到 `assets/`，粘贴截图直传） |
-| 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制 |
+| 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制、目录级文件监听（notify）、全局热键、本地滚动日志（chrono） |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
 | 安装包 | NSIS 安装包中英双语（跟随系统语言，可手动选择） |
 | 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名），产物自动收集到项目根 `release/`（入库，可直接下载），同时发布到 GitHub Releases |
@@ -44,7 +44,10 @@
 - 定位：顶部模糊搜索（支持拼音首字母，覆盖对象、标注、空间标题与连线标签）、定位高亮、迷你地图点击/拖拽定位；有连线的对象可右键跳转到关联对象（一对多时弹出选择）。
 - 外观：四套浅色主题（灰雾紫 / 石板蓝灰 / 青禾灰绿 / 石墨灰），语义色令牌统一 React、Ant Design 与 Konva。
 - 文件：双击用系统默认程序打开原文件/文件夹/URL/图片/视频（无内置预览）；右键在资源管理器中定位，并可调用 Windows 原生 Shell 右键菜单（含 WinRAR、Git 等第三方扩展）；快捷方式显示目标程序图标；缺失文件校验与重新关联（设置内可手动全量校验）。
-- 可靠性：自动保存 + `Ctrl+S` 立即落库，关窗前强制落库（失败则阻止关闭并提示）；状态栏显示真实保存结果；30 步撤销与重做；导入失败逐条列出路径与原因；窗口最小化/隐藏时按设置暂停渲染；工作空间可打开、迁移、重建。
+- 导航：右侧标题栏可展开**左侧大纲树**（空间可逐个展开/收起，点标题定位）；空间在画布上也能折叠成标题条，成员暂时隐藏。
+- 外部入口：全局热键 `Ctrl+Alt+Space` 唤起并聚焦搜索；安装包会写入「发送到」菜单，右键文件即可丢进画布；也支持 `络雀.exe <文件…>` 命令行导入（已运行时转发给现有窗口）。
+- 内容管理：齿轮菜单里有「内容管理」，集中列出所有文字/富文本，可定位、编辑、移动到空间（排在末尾）、导出（纯文本 `.txt`、富文本 `.html` 并复制本地媒体）。
+- 可靠性：自动保存 + `Ctrl+S` 立即落库，关窗前强制落库（失败则阻止关闭并提示）；状态栏显示真实保存结果；30 步撤销与重做；导入分批执行并显示进度（可取消），失败逐条列出路径与原因；文件被移动/删除时目录监听即时把卡片标回缺失；最小化/隐藏时暂停渲染；日志写在 `dataWorkSpace/logs/app.log`（含前端上报与 panic）；工作空间可打开、迁移、重建。
 
 ## 项目结构
 
@@ -64,7 +67,7 @@ ploceusTidy/
 ├── desktop/               # Tauri 2 桌面壳与 Rust 平台层
 │   └── src/               # main.rs / lib.rs / db.rs / models.rs / platform.rs
 ├── docs/                  # 规范入口、需求基线、文件地图、spec/00–08
-├── scripts/               # check-spec 规范扫描
+├── scripts/               # check-spec 规范扫描 / bump-version 版本号 / collect-installer 收集安装包
 ├── assets/                # 品牌图
 └── dataWorkSpace/         # 运行时生成，不入库
 ```
@@ -78,13 +81,16 @@ ploceusTidy/
 | 开发启动（桌面客户端，release） | `pnpm tauri:dev` |
 | 构建前端 | `pnpm build` |
 | 构建桌面安装包 | `pnpm tauri:build`（安装包输出到 `release/`） |
+| 前端测试 | `pnpm test`（vitest，domain 纯逻辑） |
 | Rust 测试 | `cargo test --manifest-path desktop/Cargo.toml --lib` |
 | 静态检查 | `pnpm lint` / `pnpm lint:fix` |
 | 格式化 | `pnpm format` / `pnpm format:check` |
 | 规范扫描 | `pnpm check-spec` |
+| 提升版本号 | `pnpm version:bump patch` / `minor` / `0.2.0`（同步四处副本） |
 
 - debug exe 会被本机应用控制策略阻止（os error 4551），开发统一使用 release 模式。
-- 提交前手动执行 `pnpm lint`、`pnpm format:check`、`pnpm check-spec`。
+- 提交前手动执行 `pnpm lint`、`pnpm format:check`、`pnpm check-spec`、`pnpm test`。
+- **每次需求更新与 bug 修复都要提升版本号**：`pnpm version:bump` 改版本，补 `release/log.md` 条目；`pnpm check-spec` 会校验四处版本号一致、当前版本有日志（`HC-17`，见 `docs/spec/08-adr.md` ADR-037）。
 
 ## 核心原则
 
@@ -109,5 +115,5 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.1.3 发布已完成。）
+- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.1.4 发布已完成。）
 - 媒体上传已补大小/非空校验、Windows BMP MIME 兼容与真实路径边界，仅含媒体的富文本也可保存；Rust 10 项测试与内容保存 5 项回归通过。拖出到外部程序、编辑器媒体展示、视频进度条与粘贴截图的真机验收已由用户确认完成（2026-10-27），见 [docs/spec/08-adr.md](docs/spec/08-adr.md) §5。

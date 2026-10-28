@@ -3,6 +3,7 @@
  * 只维护视口状态与定位脉冲，不处理选择、拖动等交互会话。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { groupDisplayBox } from '@/domain/layout'
 import type { SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasViewport, StageSize } from './types'
 import { clamp } from './geometry'
@@ -82,7 +83,8 @@ export function useCanvasViewport({
 
   const fitView = useCallback(() => {
     // 空间与游离对象一起纳入包围盒：只按空间算会把空间外的对象漏在视口外。
-    const boxes = groups.length > 0 ? [...groups, ...nodes] : nodes
+    // 折叠空间按标题条计算，适配后不会为看不见的成员留白。
+    const boxes = groups.length > 0 ? [...groups.map(groupDisplayBox), ...nodes] : nodes
     if (!boxes.length) return
     const bounds = boxes.reduce(
       (result, box) => ({

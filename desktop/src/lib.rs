@@ -4,21 +4,73 @@
 //! SQLite 都留在这里的 Rust 侧处理（HC-12、HC-13）。
 
 mod db;
+mod logging;
 mod models;
 mod platform;
+mod watcher;
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::Engine;
 use std::borrow::Cow;
 use std::path::Path;
 use tauri::ipc::InvokeBody;
-use tauri::{http, AppHandle, Manager, State};
+use tauri::{http, AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 
 use db::AppState;
 use models::{
-    ImportRequest, ImportResult, RefStatus, RelinkResult, SceneData, SceneDelta, WorkspaceInfo,
+    ExportRequest, ExportResult, ImportProgress, ImportRequest, ImportResult, RefStatus,
+    RelinkResult, SceneData, SceneDelta, WorkspaceInfo,
 };
+
+/// 导入任务的取消标记：`job_id → 是否已取消`，由 `cancel_import` 置位。
+/// 放静态表而不放 `AppState`，避免测试夹具与状态结构互相牵动。
+static IMPORT_JOBS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+fn import_jobs() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    IMPORT_JOBS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 启动参数里带进来的待导入路径（双击/「发送到」/命令行 `ploceus.exe <文件…>`）。
+static PENDING_IMPORTS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn pending_imports() -> &'static Mutex<Vec<String>> {
+    PENDING_IMPORTS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 从命令行参数里挑出真实存在的路径：`--add` 只作语义标记，其余按「存在即可导入」处理。
+fn extract_paths<I: IntoIterator<Item = String>>(args: I) -> Vec<String> {
+    let mut paths = Vec::new();
+    for arg in args {
+        if arg.starts_with('-') {
+            continue;
+        }
+        if Path::new(&arg).exists() && !paths.iter().any(|item| item == &arg) {
+            paths.push(arg);
+        }
+    }
+    paths
+}
+
+/// 把外部传入的路径排进待导入队列；由前端启动后主动取走。
+fn queue_imports(paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    if let Ok(mut slot) = pending_imports().lock() {
+        for path in paths {
+            if !slot.iter().any(|item| item == &path) {
+                slot.push(path);
+            }
+        }
+    }
+}
+
 
 /// 返回工作空间路径、数据库路径与节点数量，供设置面板展示。
 /// 异步命令：占用统计要递归扫描整个工作空间目录，属磁盘 IO，不能占主线程。
@@ -74,14 +126,118 @@ async fn scene_save_delta(app: AppHandle, delta: String) -> Result<(), String> {
 }
 
 /// 批量导入绝对路径：Rust 侧负责规范化、符号链接校验与去重，失败项带路径与原因返回。
+/// 分批提交并推送 `import://progress`，用户可随时 `cancel_import` 取消（已处理的部分保留）。
 #[tauri::command]
-async fn import_paths(app: AppHandle, request: ImportRequest) -> Result<ImportResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        db::import_paths(&state, &request)
+async fn import_paths(
+    app: AppHandle,
+    request: ImportRequest,
+    job_id: String,
+) -> Result<ImportResult, String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Ok(mut jobs) = import_jobs().lock() {
+        jobs.insert(job_id.clone(), cancel.clone());
+    }
+
+    let progress_job = job_id.clone();
+    let progress_app = app.clone();
+    let task_app = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let state = task_app.state::<AppState>();
+        db::import_paths_with_progress(
+            &state,
+            &request,
+            |done, total, current| {
+                let payload = ImportProgress {
+                    job_id: progress_job.clone(),
+                    done,
+                    total,
+                    current: current.to_string(),
+                };
+                let _ = progress_app.emit("import://progress", payload);
+            },
+            || cancel.load(Ordering::Relaxed),
+        )
     })
     .await
-    .map_err(|error| format!("导入任务失败：{error}"))?
+    .map_err(|error| format!("导入任务失败：{error}"))?;
+
+    if let Ok(mut jobs) = import_jobs().lock() {
+        jobs.remove(&job_id);
+    }
+
+    match &outcome {
+        Ok(result) => {
+            logging::info(&format!(
+                "导入结束：新建 {}，已存在 {}，失败 {}，取消 {}",
+                result.created.len(),
+                result.existing.len(),
+                result.errors.len(),
+                result.cancelled
+            ));
+            // 新导入的文件可能落在尚未监听的目录里。
+            watcher::resync(&app);
+        }
+        Err(error) => logging::error(&format!("导入失败：{error}")),
+    }
+    outcome
+}
+
+/// 取消正在进行的导入：只置标记，具体停止由分批循环检查。
+#[tauri::command]
+fn cancel_import(job_id: String) {
+    if let Ok(jobs) = import_jobs().lock() {
+        if let Some(flag) = jobs.get(&job_id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+/// 取走启动参数里带来的待导入路径（双击文件 / 「发送到」/ 命令行）。
+#[tauri::command]
+fn take_pending_imports() -> Vec<String> {
+    pending_imports()
+        .lock()
+        .map(|mut slot| std::mem::take(&mut *slot))
+        .unwrap_or_default()
+}
+
+/// 读取单个节点的正文：首屏只加载紧凑索引，编辑与导出前按需拉取。
+#[tauri::command]
+fn node_body(state: State<'_, AppState>, node_id: String) -> Result<Option<String>, String> {
+    db::node_body(&state, &node_id)
+}
+
+/// 导出文本/富文本：纯文本写 `.txt`，富文本写 `.html` 并复制正文引用的本地媒体。
+#[tauri::command]
+async fn export_contents(
+    app: AppHandle,
+    request: ExportRequest,
+) -> Result<ExportResult, String> {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        db::export_contents(&state, &request)
+    })
+    .await
+    .map_err(|error| format!("导出任务失败：{error}"))?;
+    match &outcome {
+        Ok(result) => logging::info(&format!(
+            "导出完成：{} 个文件，{} 个媒体",
+            result.files.len(),
+            result.media
+        )),
+        Err(error) => logging::error(&format!("导出失败：{error}")),
+    }
+    outcome
+}
+
+/// 前端日志上报：把渲染层的失败写进同一个滚动日志，便于用户反馈时取证。
+#[tauri::command]
+fn log_write(level: String, message: String) {
+    match level.as_str() {
+        "error" => logging::error(&message),
+        "warn" => logging::warn(&message),
+        _ => logging::info(&message),
+    }
 }
 
 /// 读取剪贴板中的文件路径列表；仅 Windows 实现，只在用户主动粘贴时调用。
@@ -463,6 +619,19 @@ async fn pick_file(app: AppHandle) -> Result<Option<String>, String> {
         .map(|path| path.to_string_lossy().to_string()))
 }
 
+/// 选择导出文件的保存位置（单条导出）；取消返回 `None`。
+#[tauri::command]
+async fn pick_export_file(app: AppHandle, default_name: String) -> Result<Option<String>, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_file_name(default_name)
+        .blocking_save_file();
+    Ok(picked
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.to_string_lossy().to_string()))
+}
+
 /// 选择一个空目录用于迁移工作空间；取消时返回 `None`。
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
@@ -473,16 +642,41 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 pub fn run() {
+    // panic 也必须留痕：用户只会说「闪退了」，日志里得有栈。
+    logging::install_panic_hook();
+
     tauri::Builder::default()
         // 单实例必须最先注册：第二个进程启动时直接把已有窗口拉到前台并退出，
         // 避免同一 dataWorkSpace 被两个窗口同时写库。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+            // 「发送到」与命令行再次启动时，把路径转交给已在运行的实例。
+            let paths = extract_paths(args.into_iter().skip(1));
+            if !paths.is_empty() {
+                queue_imports(paths.clone());
+                let _ = app.emit("import://external", paths);
+            }
         }))
+        // 全局热键：最小化或不在前台时也能一键唤起搜索。
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit("shortcut://focus-search", ());
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         // 富文本媒体回读：`richasset` 协议直接映射到工作空间 assets 目录，
@@ -497,6 +691,16 @@ pub fn run() {
                     error,
                 ))
             })?;
+            match state.workspace_path() {
+                Ok(workspace) => {
+                    if let Err(error) = logging::init(&workspace) {
+                        eprintln!("日志初始化失败：{error}");
+                    }
+                }
+                Err(error) => eprintln!("读取工作空间路径失败：{error}"),
+            }
+            // 首次启动就带参数（双击文件 / 「发送到」）时，先排队等前端取走。
+            queue_imports(extract_paths(std::env::args().skip(1)));
             // 桌面常驻是持久配置：启动时先读，再交给 state 托管。
             let pinned = db::meta_get(&state, "desktop_pin")
                 .ok()
@@ -539,6 +743,14 @@ pub fn run() {
                 }
             }
 
+            // 全局热键失败只记日志：被其他程序占用时不应阻止应用启动。
+            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+            if let Err(error) = app.global_shortcut().register(shortcut) {
+                logging::warn(&format!("注册全局快捷键 Ctrl+Alt+Space 失败：{error}"));
+            }
+            // 文件变更监听：已导入引用所在目录的增删改会即时刷新卡片状态。
+            watcher::start(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -547,6 +759,11 @@ pub fn run() {
             scene_save,
             scene_save_delta,
             import_paths,
+            cancel_import,
+            take_pending_imports,
+            node_body,
+            export_contents,
+            log_write,
             read_clipboard_files,
             open_devtools,
             open_ref,
@@ -567,6 +784,7 @@ pub fn run() {
             drag_out_refs,
             pick_file,
             pick_folder,
+            pick_export_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

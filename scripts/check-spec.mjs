@@ -73,6 +73,71 @@ if (docFiles.length > 1) {
   report(root, 1, 'HC-4', `仓库根目录多余 Markdown：${docFiles.join(', ')}`)
 }
 
+// ---------- HC-17：版本号四处一致 + 发布日志有当前版本条目 ----------
+// 「每次需求改动与 bug 修复都要变版本号」无法静态判定有没有改，
+// 但能判定两件必然后果：版本号副本不同步、改了版本却没写发布日志。
+function checkVersion() {
+  const read = (path) => readFileSync(join(root, path), 'utf8')
+  const four = [
+    ['package.json', read('package.json').match(/"version":\s*"([^"]+)"/)?.[1]],
+    [
+      'desktop/tauri.conf.json',
+      read('desktop/tauri.conf.json').match(/"version":\s*"([^"]+)"/)?.[1],
+    ],
+  ]
+  const cargo = read('desktop/Cargo.toml')
+  const packageIndex = cargo.indexOf('[package]')
+  four.push(['desktop/Cargo.toml', cargo.slice(packageIndex).match(/^version = "([^"]+)"/m)?.[1]])
+  const lock = read('desktop/Cargo.lock')
+  four.push([
+    'desktop/Cargo.lock',
+    lock.match(/name = "ploceus-desktop"\r?\nversion = "([^"]+)"/)?.[1],
+  ])
+
+  const versions = four.map(([, value]) => value)
+  if (versions.some((value) => !value)) {
+    const missing = four.filter(([, value]) => !value).map(([name]) => name)
+    report(root, 1, 'HC-17', `读不到版本号：${missing.join(', ')}`)
+    return null
+  }
+  const distinct = [...new Set(versions)]
+  if (distinct.length > 1) {
+    const detail = four.map(([name, value]) => `${name}=${value}`).join('，')
+    report(
+      join(root, 'package.json'),
+      1,
+      'HC-17',
+      `版本号不一致：${detail}；用 pnpm version:bump 同步（HC-17）`,
+    )
+    return null
+  }
+
+  // 发布日志：当前版本必须有独立段落，且至少写了一条改动说明。
+  const version = distinct[0]
+  const log = read('release/log.md')
+  const heading = `## v${version}`
+  const start = log.indexOf(heading)
+  if (start < 0) {
+    report(
+      join(root, 'release', 'log.md'),
+      1,
+      'HC-17',
+      `缺少「${heading}」条目：改了版本就要写发布日志（HC-17）`,
+    )
+    return version
+  }
+  const rest = log.slice(start + heading.length)
+  const end = rest.search(/^## v/m)
+  const section = end < 0 ? rest : rest.slice(0, end)
+  const bullets = section.split(/\r?\n/).filter((line) => /^-\s+\S{4,}/.test(line.trim()))
+  if (bullets.length === 0) {
+    report(join(root, 'release', 'log.md'), 1, 'HC-17', `「${heading}」没有任何改动条目（HC-17）`)
+  }
+  return version
+}
+
+const version = checkVersion()
+
 // ---------- 源码扫描 ----------
 for (const file of collectFiles(join(root, 'desktop', 'src'), ['.rs'])) {
   scanFile(file, rustRules)
@@ -87,4 +152,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log('check-spec：通过')
+console.log(`check-spec：通过（当前版本 v${version ?? '未知'}）`)

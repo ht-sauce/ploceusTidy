@@ -27,7 +27,7 @@ import {
 } from 'react'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { Arrow, Circle, Label, Layer, Line, Rect, Stage, Tag, Text } from 'react-konva'
+import { Arrow, Circle, Group, Label, Layer, Line, Rect, Stage, Tag, Text } from 'react-konva'
 import type { SceneAnnotation, SceneEdge, SceneGroup, SceneNode, ThemeId } from '@/types/scene'
 import { themeById } from '@/lib/theme'
 import EdgeLayer from './EdgeLayer'
@@ -37,7 +37,7 @@ import NodeShape from './NodeShape'
 import { MINIMAP_MIN_H, MINIMAP_MIN_W, STAGE_PIXEL_RATIO } from './constants'
 import type { CanvasTokens, HandleSide } from './constants'
 import { groupTone, handlePoint } from './geometry'
-import { nodeDisplayHeight } from '@/domain/layout'
+import { GROUP_COLLAPSED_HEIGHT, groupDisplayBox, nodeDisplayHeight } from '@/domain/layout'
 import { ICON_IMAGES, THUMB_IMAGES, cssVar, startIconLoad } from './icons'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import { useCanvasInteractions } from './useCanvasInteractions'
@@ -79,6 +79,8 @@ interface CanvasBoardProps {
   onScaleChange: (scale: number) => void
   /** 双击空间标题：进入重命名。 */
   onGroupTitleEdit: (id: string) => void
+  /** 折叠 / 展开空间：只影响显示，不改存储尺寸。 */
+  onToggleGroupCollapse: (id: string) => void
   /** 右键菜单由工作空间渲染，画布只上报目标与屏幕坐标。 */
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
   /** 窗口最小化/隐藏时暂停缩略图与脉冲等主动渲染。 */
@@ -125,6 +127,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onDragOut,
     onScaleChange,
     onGroupTitleEdit,
+    onToggleGroupCollapse,
     onContextMenu,
     paused,
   },
@@ -145,6 +148,11 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   const [, setIconVersion] = useState(0)
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
+  /** 折叠的空间：成员整体隐藏，但数据与选中态不变。 */
+  const collapsedGroups = useMemo(
+    () => new Set(groups.filter((group) => group.collapsed).map((group) => group.id)),
+    [groups],
+  )
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
@@ -287,7 +295,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         }
       }
       const group = groupById.get(id)
-      return group ? { x: group.x, y: group.y, w: group.w, h: group.h } : null
+      return group ? groupDisplayBox(group) : null
     },
     [annotationByNode, groupById, nodeById],
   )
@@ -466,7 +474,10 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       maxY = Math.max(maxY, y + h)
     }
     nodes.forEach((node) => consider(node.x, node.y, node.w, node.h))
-    groups.forEach((group) => consider(group.x, group.y, group.w, group.h))
+    groups.forEach((group) => {
+      const box = groupDisplayBox(group)
+      consider(box.x, box.y, box.w, box.h)
+    })
     const padX = Math.max(120, (maxX - minX) * 0.15)
     const padY = Math.max(120, (maxY - minY) * 0.15)
     return {
@@ -511,6 +522,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
   )
 
   const activeGroup = selectedGroupId ? (groupById.get(selectedGroupId) ?? null) : null
+  /** 选中空间的显示框：折叠后锚点要贴着标题条走，不能落在看不见的旧框上。 */
+  const activeGroupBox = activeGroup ? groupDisplayBox(activeGroup) : null
 
   return (
     <div
@@ -538,6 +551,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             <GroupShape
               key={group.id}
               group={group}
+              height={group.collapsed ? GROUP_COLLAPSED_HEIGHT : group.h}
               active={selectedGroupId === group.id}
               tokens={tokens}
               registerRef={registerGroupBoxRef}
@@ -597,8 +611,44 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             )
           })}
 
-          {/* 按 z 升序渲染：z 大的后画、盖在上层；稳定排序保证同 z 保持插入次序。 */}
-          {[...visibleNodes]
+          {/* 展开 / 收起按钮：贴在标题行右端，点它只切换显示，不影响选中与拖拽。 */}
+          {groups.map((group) => {
+            const color = group.color || tokens.primary
+            return (
+              <Group
+                key={`collapse-${group.id}`}
+                x={group.x + group.w - 11}
+                y={group.y - 8}
+                onMouseDown={(event) => {
+                  event.cancelBubble = true
+                }}
+                onClick={(event) => {
+                  event.cancelBubble = true
+                  onToggleGroupCollapse(group.id)
+                }}
+              >
+                <Circle radius={7} fill={tokens.surface} stroke={color} strokeWidth={1} />
+                <Text
+                  text={group.collapsed ? '+' : '−'}
+                  width={14}
+                  height={14}
+                  x={-7}
+                  y={-7}
+                  align="center"
+                  verticalAlign="middle"
+                  fontSize={11}
+                  fill={color}
+                  listening={false}
+                  fontFamily='"Segoe UI", "Microsoft YaHei", system-ui, sans-serif'
+                />
+              </Group>
+            )
+          })}
+
+          {/* 按 z 升序渲染：z 大的后画、盖在上层；稳定排序保证同 z 保持插入次序。
+              折叠空间的成员整体不渲染（数据仍在，展开即恢复）。 */}
+          {visibleNodes
+            .filter((node) => !node.groupId || !collapsedGroups.has(node.groupId))
             .sort((left, right) => left.z - right.z)
             .map((node) => {
               const entry = annotationByNode.get(node.id)
@@ -632,7 +682,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           {activeGroup
             ? Array.from({ length: 4 }).map((_, index) => {
                 const side = (['top', 'right', 'bottom', 'left'] as HandleSide[])[index]
-                const point = handlePoint(activeGroup, side)
+                const point = handlePoint(activeGroupBox ?? activeGroup, side)
                 return (
                   <Circle
                     key={`group-handle-${side}`}
@@ -649,8 +699,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
               })
             : null}
 
-          {/* 选中空间的四角调框手柄：方角标记，拖动即缩放框本身。 */}
-          {activeGroup
+          {/* 选中空间的四角调框手柄：方角标记，拖动即缩放框本身。折叠时不提供调框。 */}
+          {activeGroup && !activeGroup.collapsed
             ? (['nw', 'ne', 'sw', 'se'] as GroupResizeCorner[]).map((corner) => (
                 <Rect
                   key={`group-resize-${corner}`}

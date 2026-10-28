@@ -8,9 +8,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MessageInstance } from 'antd/es/message/interface'
+import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { WorkspaceInfo } from '@/types/scene'
+import type { RefStatus, WorkspaceInfo } from '@/types/scene'
 import { desktopApi, isDesktopClient, subscribeSaveState, type SaveState } from '@/lib/tauri-api'
 import type { SceneStore } from './useSceneStore'
 
@@ -208,6 +209,35 @@ export function useScenePersistence({
       window.clearTimeout(timer)
     }
   }, [hydrated, setNodes])
+
+  // 文件监听推送的引用状态：只回写变化的节点，不额外发起校验。
+  // 目录事件已经在 Rust 侧防抖并落库，这里只负责让界面跟上。
+  useEffect(() => {
+    if (!isDesktopClient) return
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    void listen<RefStatus[]>('refs://changed', (event) => {
+      const statuses = event.payload
+      if (!statuses || statuses.length === 0) return
+      const statusMap = new Map(statuses.map((item) => [item.nodeId, item.isExists]))
+      setNodes((previous) =>
+        previous.map((node) =>
+          statusMap.has(node.id) ? { ...node, isExists: statusMap.get(node.id) ?? true } : node,
+        ),
+      )
+    })
+      .then((dispose) => {
+        if (disposed) dispose()
+        else unlisten = dispose
+      })
+      .catch(() => {
+        // 订阅失败时仍有启动校验与「立即校验」兜底。
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [setNodes])
 
   // 窗口重新聚焦时补查当前选中项，覆盖「离开期间文件被移动或删除」。
   const selectedKey = store.selectedIds.join(',')

@@ -5,10 +5,12 @@
 ```text
 dataWorkSpace/
 ├── ploceus.db          # SQLite 主库
-├── assets/             # 粘贴的截图/图片副本
+├── assets/             # 粘贴的截图/图片副本、富文本媒体
 │   └── <uuid>.<ext>
-└── thumbnails/         # 系统缩略图/图标缓存
-    └── <refId>.png
+├── thumbnails/         # 系统缩略图/图标缓存
+│   └── <refId>.png
+└── logs/               # 本地滚动日志（app.log + app.1.log，2MB 轮转，不外传）
+    └── app.log
 ```
 
 - 默认位置：安装目录下的 `dataWorkSpace/`（仅当目录可写）。
@@ -21,7 +23,7 @@ dataWorkSpace/
 
 - `PRAGMA journal_mode=WAL`；`foreign_keys=ON`；`busy_timeout=5000`；`synchronous=NORMAL`（WAL 下安全，省掉逐次 fsync）；`temp_store=MEMORY`；`cache_size=-8000`；`mmap_size=256MB`。
 - 读写分离：写连接由 `Mutex` 串行化；读（场景加载、配置、单节点、缩略图元信息）走同一文件的独立只读连接，WAL 下读走快照、不等待写事务提交。场景加载一次性拿完，不在操作过程中按需查库。
-- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行；当前 `SCHEMA_VERSION = 3`（新增 `edges(from_node)` / `edges(to_node)` / `annotation_targets(node_id)` 索引）。
+- 迁移用 `PRAGMA user_version`，迁移脚本按版本顺序执行；当前 `SCHEMA_VERSION = 4`（v3：`edges(from_node)` / `edges(to_node)` / `annotation_targets(node_id)` 索引；v4：`groups.collapsed` 折叠状态）。
 - 每条命令一个事务；失败整体回滚。视图操作（拖动/框选/平移）不触发数据库写入；写集中在操作结束后的防抖保存（350ms），启动引用校验按空闲分批执行（每批一个短事务，批间等待空闲帧）。
 - `scene_save` / `scene_save_delta` 按 ID 增量 upsert：先读现有 `nodes` / `refs` 可变字段指纹，只写真正变化的行（10 万画布的常规保存从约 20 万次 upsert 降到个位数）；全量保存清理快照之外的对象，增量保存靠显式删除 ID + 悬空兜底清理。传输层同样是增量：前端按对象引用对比上次成功保存的基线自动求差，只传变化与删除的行；每 20 次与失败后首存强制全量对账。`refs` 的 `size` / `mtime` / `is_exists` / `thumb_key` 由导入与校验流程维护，保存流程不覆盖。
 - 缩略图元信息（path / is_exists / thumb_key）走进程内缓存：每个节点只在首次请求时查一次库，缓存文件命中时完全不碰数据库；重关联与引用校验后按 id 失效。
@@ -58,6 +60,7 @@ dataWorkSpace/
 | `id` | TEXT PK | UUID |
 | `title` | TEXT | 空间标题，同时作为空间标注展示 |
 | `color` | TEXT NULL | 空间主色 `#RRGGBB`；为空时前端回退主题主色 |
+| `collapsed` | INTEGER NOT NULL DEFAULT 0 | 折叠状态：只画标题条、隐藏成员；不改变 `x/y/w/h` |
 | `x`,`y`,`w`,`h` | REAL | 世界坐标与尺寸（按内容收高） |
 | `created_at` / `updated_at` | INTEGER | epoch ms |
 
@@ -75,6 +78,7 @@ dataWorkSpace/
 | `group_id` | TEXT NOT NULL DEFAULT '' | 所属分组框 `groups.id`；空字符串表示未分组 |
 | `z` | INTEGER NOT NULL DEFAULT 0 | 叠放层级 |
 | `parent_node_id` | TEXT NULL | 保留列：嵌套挂载未做，客户端已不再读写（后续若做挂载再启用） |
+| `body` | TEXT NULL | 文字/富文本正文；首屏不随场景加载，按 `node_body` 取。保存用 COALESCE 保护，未加载不会覆盖 |
 | `data_json` | TEXT NULL | 规划字段：扩展样式，当前未写入 |
 | `x`,`y`,`w`,`h` | REAL | 画布坐标与尺寸（默认 72 宽；渲染高度按名称行数与标注自适应） |
 | `created_at` | INTEGER | epoch ms |

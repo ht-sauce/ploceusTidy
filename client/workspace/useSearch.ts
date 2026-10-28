@@ -1,12 +1,48 @@
 /**
  * 顶部搜索：按需构建搜索条目并按匹配质量排序。
  * 空查询不构建全量条目——10 万对象下每次场景变化（拖动落点、选中、校验）都要重建，
- * 是选中与拖动「反应慢」的主因之一；此时只给前几条对象作为建议。
+ * 是选中与拖动「反应慢」的主因之一；此时按「最近定位/打开」给出建议。
  * 拼音首字母在空闲时分批预热，首个查询不会因全量转换而冻结。
  */
 import { useEffect, useMemo } from 'react'
 import type { SearchEntry, SceneAnnotation, SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import { normalizeSearch, pinyinInitials, prepareSearch, preparedRank } from '@/domain/search'
+
+/** 搜索筛选：只按对象大类过滤，不做多重组合，保持「一键切换」。 */
+export type SearchFilter = 'all' | 'file' | 'content' | 'group' | 'edge' | 'annotation'
+
+const CONTENT_KINDS = new Set(['text', 'richtext'])
+const FILE_KINDS = new Set(['file', 'folder', 'image', 'video', 'link'])
+
+function matchesFilter(entry: SearchEntry, filter: SearchFilter) {
+  switch (filter) {
+    case 'file':
+      return FILE_KINDS.has(entry.type)
+    case 'content':
+      return CONTENT_KINDS.has(entry.type)
+    case 'group':
+      return Boolean(entry.groupId)
+    case 'edge':
+      return Boolean(entry.edgeId)
+    case 'annotation':
+      return Boolean(entry.annotationId)
+    default:
+      return true
+  }
+}
+
+/** 节点 → 搜索条目：空查询的建议与命中结果共用同一造型。 */
+function nodeEntry(node: SceneNode): SearchEntry {
+  return {
+    nodeId: node.id,
+    type: node.kind,
+    title: node.name,
+    subtitle: node.path ?? node.url ?? node.subtitle,
+    icon: node.icon,
+    searchText: node.name,
+    pinyin: '',
+  }
+}
 
 export function useSearch(
   query: string,
@@ -15,6 +51,8 @@ export function useSearch(
   edges: SceneEdge[],
   annotations: SceneAnnotation[],
   nodeById: Map<string, SceneNode>,
+  filter: SearchFilter,
+  recentIds: string[],
 ) {
   const normalized = normalizeSearch(query)
   const active = normalized.length > 0
@@ -28,15 +66,10 @@ export function useSearch(
       if (node.groupId) groupCounts.set(node.groupId, (groupCounts.get(node.groupId) ?? 0) + 1)
     })
     nodes.forEach((node) => {
-      // 富文本的 body 是 HTML，检索用纯文本投影，避免标签命中（搜 "div" 不该有结果）。
-      const body = node.kind === 'richtext' ? '' : (node.body ?? '')
+      // 富文本的 body 是 HTML、首屏也不加载正文，检索统一用纯文本投影。
       list.push({
-        nodeId: node.id,
-        type: node.kind,
-        title: node.name,
-        subtitle: node.path ?? node.url ?? node.subtitle,
-        icon: node.icon,
-        searchText: `${node.name} ${node.path ?? ''} ${node.subtitle} ${body} ${node.url ?? ''}`,
+        ...nodeEntry(node),
+        searchText: `${node.name} ${node.path ?? ''} ${node.subtitle} ${node.url ?? ''}`,
         pinyin: pinyinInitials(node.name),
       })
     })
@@ -89,21 +122,28 @@ export function useSearch(
 
   const results = useMemo(() => {
     if (!prepared) {
-      // 空查询只展示前几个对象作为建议，不构建全量条目。
-      return nodes.slice(0, 6).map((node) => ({
-        nodeId: node.id,
-        type: node.kind,
-        title: node.name,
-        subtitle: node.path ?? node.url ?? node.subtitle,
-        icon: node.icon,
-        searchText: node.name,
-        pinyin: '',
-      }))
+      // 空查询：先按最近定位/打开的顺序给建议，不足 6 条再用画布顺序补满。
+      const suggestions: SearchEntry[] = []
+      const seen = new Set<string>()
+      recentIds.forEach((id) => {
+        if (seen.has(id) || suggestions.length >= 6) return
+        const node = nodeById.get(id)
+        if (!node) return
+        seen.add(id)
+        suggestions.push(nodeEntry(node))
+      })
+      for (const node of nodes) {
+        if (suggestions.length >= 6) break
+        if (seen.has(node.id)) continue
+        seen.add(node.id)
+        suggestions.push(nodeEntry(node))
+      }
+      return suggestions.filter((entry) => matchesFilter(entry, filter))
     }
-    // top-9 线性选择：万级条目下省掉全量排序（O(N log N) → O(N)）；
-    // 排序键只有名次，同名次保持输入顺序（与稳定排序的结果一致）。
+    // top-9 线性选择：万级条目下省掉全量排序（O(N log N) → O(N)）。
     const top: { entry: SearchEntry; rank: number }[] = []
     prepared.forEach((item) => {
+      if (!matchesFilter(item.entry, filter)) return
       const rank = preparedRank(item, normalized)
       if (rank < 0) return
       if (top.length < 9) {
@@ -116,7 +156,7 @@ export function useSearch(
       top.sort((left, right) => left.rank - right.rank)
     })
     return top.map((hit) => hit.entry)
-  }, [nodes, normalized, prepared])
+  }, [filter, nodeById, nodes, normalized, prepared, recentIds])
 
   // 空闲预热拼音缓存：每批 2000 个、批间让出主线程，10 万对象也不会阻塞交互；
   // 场景变化后从头走一遍，缓存命中时只是 Map 查询，代价可忽略。

@@ -1,17 +1,19 @@
 {
   "name": "ploceus-tidy",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "packageManager": "pnpm@12.9.1",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check-spec": "node scripts/check-spec.mjs",
+    "version:bump": "node scripts/bump-version.mjs",
     "tauri:dev": "tauri dev --config desktop/tauri.conf.json --release",
     "tauri:build": "tauri build --config desktop/tauri.conf.json && node scripts/collect-installer.mjs"
   },
@@ -44,6 +46,7 @@
     "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.0",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "vitest": "^5.0.5"
   }
 }

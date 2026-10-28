@@ -16,6 +16,7 @@ import { asHandleSide, edgePoints } from './geometry'
 import {
   GROUP_MIN_H,
   GROUP_MIN_W,
+  groupDisplayBox,
   LAYOUT_GAP,
   SNAP_THRESHOLD,
   rectsOverlap,
@@ -474,7 +475,7 @@ export function useCanvasInteractions({
         h: session.box.h,
       }
       const hitGroup = groups.some(
-        (item) => item.id !== session.id && rectsOverlap(item, rect, LAYOUT_GAP),
+        (item) => item.id !== session.id && rectsOverlap(groupDisplayBox(item), rect, LAYOUT_GAP),
       )
       return hitGroup || landingBlocked(rect, memberIds)
     }
@@ -875,7 +876,9 @@ export function useCanvasInteractions({
           return session.items.some((item) => {
             const rect = { ...item.rect, x: item.x + offsetX, y: item.y + offsetY }
             // 落入空间即被接受：即使压住既有成员，入库后也会整组自动整理消解重叠。
-            if (groups.some((group) => rectsOverlap(group, rect, LAYOUT_GAP))) return false
+            if (groups.some((group) => rectsOverlap(groupDisplayBox(group), rect, LAYOUT_GAP))) {
+              return false
+            }
             return landingBlocked(rect, movingIds)
           })
         }
@@ -1046,7 +1049,7 @@ export function useCanvasInteractions({
       appliedY: 0,
       rawOffsetX: 0,
       rawOffsetY: 0,
-      box: { x: group.x, y: group.y, w: group.w, h: group.h },
+      box: groupDisplayBox(group),
       mode: 'box',
       members: nodes
         .filter((item) => item.groupId === groupId)
@@ -1110,7 +1113,7 @@ export function useCanvasInteractions({
       appliedY: 0,
       rawOffsetX: 0,
       rawOffsetY: 0,
-      box: { x: group.x, y: group.y, w: group.w, h: group.h },
+      box: groupDisplayBox(group),
       mode: 'title',
       members: nodes
         .filter((item) => item.groupId === groupId)

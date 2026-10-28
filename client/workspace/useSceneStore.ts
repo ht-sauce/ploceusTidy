@@ -14,6 +14,8 @@ import {
   arrangeGroupMembers,
   findFreeOffset,
   fitGroupToMembers,
+  GROUP_PADDING,
+  groupDisplayBox,
   LAYOUT_GAP,
   nodeDisplayHeight,
   nodeRect,
@@ -36,9 +38,10 @@ const COALESCE_MS = 800
 /** 点是否落在空间内；多个空间重叠时取最上层（数组靠后）的那个。 */
 function groupIdAt(groups: SceneGroup[], x: number, y: number) {
   for (let index = groups.length - 1; index >= 0; index -= 1) {
-    const group = groups[index]
-    if (x >= group.x && x <= group.x + group.w && y >= group.y && y <= group.y + group.h) {
-      return group.id
+    // 折叠的空间只剩标题条：按显示框判定，避免把对象悄悄放进看不见的空间。
+    const box = groupDisplayBox(groups[index])
+    if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) {
+      return groups[index].id
     }
   }
   return ''
@@ -131,6 +134,10 @@ export interface SceneStore {
   /** 按当前阅读顺序整理空间内对象；返回整理的对象数量。 */
   arrangeGroup: (id: string) => number
   renameGroup: (id: string, title: string) => void
+  /** 折叠只影响渲染与命中，不改存储尺寸；属于视图状态，不进撤销栈。 */
+  setGroupCollapsed: (id: string, collapsed: boolean) => void
+  /** 把对象移入空间（空串表示移出），落点排在空间内容末尾。 */
+  moveNodeToGroup: (nodeId: string, groupId: string) => void
   setGroupColor: (id: string, color: string) => void
   setEdgeColor: (id: string, color: string) => void
   deleteSelection: () => boolean
@@ -612,6 +619,7 @@ export function useSceneStore(): SceneStore {
         id: `group-${crypto.randomUUID()}`,
         title: label,
         color,
+        collapsed: false,
         x: box.x + offset.dx,
         y: box.y + offset.dy,
         w: box.w,
@@ -685,6 +693,49 @@ export function useSceneStore(): SceneStore {
       return members.length
     },
     [annotatedIds, groupById, groups, markHistory, nodes],
+  )
+
+  const setGroupCollapsed = useCallback((id: string, collapsed: boolean) => {
+    setGroups((previous) =>
+      previous.map((group) => (group.id === id ? { ...group, collapsed } : group)),
+    )
+  }, [])
+
+  /**
+   * 把对象移入空间：落点排在空间内容末尾（最下方、按空间内边距左对齐），
+   * 原始位置不再保留——「移动到空间」就是明确的空间归属动作。
+   */
+  const moveNodeToGroup = useCallback(
+    (nodeId: string, groupId: string) => {
+      const node = nodeById.get(nodeId)
+      if (!node || node.groupId === groupId) return
+      markHistory()
+      const target = groupId ? groupById.get(groupId) : null
+      const siblings = target
+        ? nodes.filter((item) => item.groupId === groupId && item.id !== nodeId)
+        : []
+      const bottom = siblings.reduce(
+        (max, item) => Math.max(max, item.y + nodeDisplayHeight(item, annotatedIds.has(item.id))),
+        target ? target.y + GROUP_PADDING * 2 : 0,
+      )
+      const placed: SceneNode = target
+        ? {
+            ...node,
+            groupId: target.id,
+            x: Math.round(target.x + GROUP_PADDING),
+            y: Math.round(bottom + LAYOUT_GAP),
+          }
+        : { ...node, groupId: '' }
+      const next = nodes.map((item) => (item.id === nodeId ? placed : item))
+      setNodes(next)
+      // 旧归属缩小、新归属放大，两边都要重新贴合。
+      const affected = new Set<string>()
+      if (node.groupId) affected.add(node.groupId)
+      if (target) affected.add(target.id)
+      refitGroupsOf(next, affected)
+      setSelectedIds([nodeId])
+    },
+    [annotatedIds, groupById, markHistory, nodeById, nodes, refitGroupsOf],
   )
 
   /** 空间标题即空间标注，重命名后立即显示在空间框上。 */
@@ -993,6 +1044,8 @@ export function useSceneStore(): SceneStore {
     createGroup,
     arrangeGroup,
     renameGroup,
+    setGroupCollapsed,
+    moveNodeToGroup,
     setGroupColor,
     setEdgeColor,
     deleteSelection,

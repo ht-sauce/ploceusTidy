@@ -992,3 +992,287 @@ button {
     height: 66px;
   }
 }
+
+/* ---------- 大纲树（左侧导航） ---------- */
+.outline-panel {
+  width: 240px;
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.outline-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.outline-count {
+  flex: 1;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.outline-tools {
+  display: flex;
+  gap: 4px;
+  padding: 2px 4px;
+}
+
+.outline-tools .ant-btn-link {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.outline-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 4px 10px;
+}
+
+.outline-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 24px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.outline-row:hover {
+  background: var(--hover-bg);
+}
+
+.outline-row.is-active {
+  background: var(--selected-bg);
+  color: var(--accent-ink, var(--text));
+}
+
+.outline-twisty {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.outline-group-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.outline-group-title.is-static {
+  cursor: default;
+}
+
+.outline-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.outline-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-badge {
+  color: var(--faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.outline-children {
+  padding-left: 14px;
+}
+
+.outline-node {
+  font-weight: 400;
+}
+
+.outline-node svg {
+  flex: 0 0 auto;
+}
+
+.outline-empty {
+  margin: 12px 8px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ---------- 搜索筛选条 ---------- */
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 6px;
+}
+
+.search-filter {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.search-filter:hover {
+  background: var(--hover-bg);
+}
+
+.search-filter.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--selected-bg);
+}
+
+/* ---------- 导入进度 ---------- */
+.import-progress {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 150;
+  width: 300px;
+  display: grid;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.import-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hover-bg);
+  overflow: hidden;
+}
+
+.import-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.import-progress-current {
+  color: var(--faint);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* ---------- 内容管理 ---------- */
+.content-manager-tools {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.content-manager-search {
+  flex: 1;
+}
+
+.content-manager-list {
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.content-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px 132px 56px 132px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.content-manager-row:last-child {
+  border-bottom: none;
+}
+
+.content-manager-row.is-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--hover-bg);
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.content-manager-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.content-manager-count {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.content-manager-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.content-manager-empty {
+  margin: 18px 0;
+  text-align: center;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.title-icon-btn.ant-btn.is-active {
+  background: var(--selected-bg);
+  color: var(--accent);
+}

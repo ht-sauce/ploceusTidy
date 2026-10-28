@@ -2,8 +2,10 @@
  * 工作空间容器：组合场景 store、桌面动作、持久化、快捷键与各功能组件。
  * 这里是唯一把「领域能力」接到「界面」上的地方，App 只负责主题壳。
  */
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AntApp from 'antd/es/app'
+import Button from 'antd/es/button'
+import { listen } from '@tauri-apps/api/event'
 import type { SceneNode, SearchEntry, ThemeId } from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/canvas/CanvasBoard'
 import { GROUP_PALETTE } from '@/canvas/constants'
@@ -19,10 +21,12 @@ import NeighborPickerDialog from '@/components/NeighborPickerDialog'
 import type { NeighborOption } from '@/components/NeighborPickerDialog'
 import ContextMenu from '@/components/ContextMenu'
 import StatusBar from '@/components/StatusBar'
+import OutlinePanel from '@/components/OutlinePanel'
+import ContentManagerDialog from '@/components/ContentManagerDialog'
 import EmptyOverlay from '@/components/EmptyOverlay'
 import { desktopApi, desktopWindow, isDesktopClient } from '@/lib/tauri-api'
 import { useSceneStore } from './useSceneStore'
-import { useSearch } from './useSearch'
+import { useSearch, type SearchFilter } from './useSearch'
 import { useNodeActions } from './useNodeActions'
 import { useImportClipboard, isTypingTarget } from './useImportClipboard'
 import { useScenePersistence } from './useScenePersistence'
@@ -34,6 +38,9 @@ interface WorkspaceProps {
   themeId: ThemeId
   onThemeChange: (id: ThemeId) => void
 }
+
+/** 最近定位/打开记录的存储键：纯界面状态，换机不迁移。 */
+const RECENT_KEY = 'ploceus.recent'
 
 /** 富文本编辑器按需加载：wangEditor 及其依赖不进首屏分包，只在打开富文本时拉取。 */
 const RichTextDialog = lazy(() => import('@/components/RichTextDialog'))
@@ -59,8 +66,23 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     fallback: string
   } | null>(null)
   const [neighbors, setNeighbors] = useState<{ options: NeighborOption[] } | null>(null)
-  /** 内容编辑：文字与富文本统一走弹窗，不在画布上内联编辑。 */
-  const [contentEditorId, setContentEditorId] = useState<string | null>(null)
+  /** 内容编辑：文字与富文本统一走弹窗；正文按需加载，弹窗持有已取到的那份。 */
+  const [contentEditor, setContentEditor] = useState<{ id: string; body: string } | null>(null)
+  const [outlineOpen, setOutlineOpen] = useState(false)
+  const [contentManagerOpen, setContentManagerOpen] = useState(false)
+  const [searchFilter, setSearchFilter] = useState<SearchFilter>('all')
+  /** 最近定位/打开的对象：只存在本机 localStorage，纯界面记忆，不进数据库。 */
+  const [recentIds, setRecentIds] = useState<string[]>(() => {
+    try {
+      const raw = window.localStorage.getItem(RECENT_KEY)
+      const parsed: unknown = raw ? JSON.parse(raw) : []
+      return Array.isArray(parsed)
+        ? parsed.filter((id): id is string => typeof id === 'string')
+        : []
+    } catch {
+      return []
+    }
+  })
   /** 「最小化时暂停渲染」偏好；真正的暂停状态由窗口事件驱动。 */
   const [pauseWhenMinimized, setPauseWhenMinimized] = useState(true)
 
@@ -74,7 +96,22 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     store.edges,
     store.annotations,
     store.nodeById,
+    searchFilter,
+    recentIds,
   )
+
+  /** 记一条「最近」：定位或打开时调用，最多保留 12 条。 */
+  const rememberRecent = useCallback((id: string) => {
+    setRecentIds((previous) => {
+      const next = [id, ...previous.filter((item) => item !== id)].slice(0, 12)
+      try {
+        window.localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+      } catch {
+        // 存储不可用时只保留内存态，不影响定位。
+      }
+      return next
+    })
+  }, [])
 
   const suspended = useWindowSuspended(pauseWhenMinimized)
 
@@ -95,7 +132,22 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   // 这些回调会进入拖入/导入 hook 的依赖链，保持稳定，避免重复订阅拖放事件。
   const locateById = useCallback((id: string) => canvasRef.current?.locateTarget(id), [])
-  const openContentEditor = useCallback((id: string) => setContentEditorId(id), [])
+  /** 打开内容弹窗：首屏不加载正文，这里按需取一次并交给弹窗。 */
+  const openContentEditor = useCallback(
+    (id: string) => {
+      const node = store.nodeById.get(id)
+      if (!node) return
+      if (node.body !== undefined) {
+        setContentEditor({ id, body: node.body })
+        return
+      }
+      void desktopApi
+        .nodeBody(id)
+        .then((body) => setContentEditor({ id, body: body ?? '' }))
+        .catch((error) => message.error(`读取内容失败：${String(error)}`))
+    },
+    [message, store.nodeById],
+  )
   const selectNode = store.selectNode
   const selectById = useCallback((id: string) => selectNode(id, false), [selectNode])
   const getCenterWorld = useCallback(
@@ -143,7 +195,8 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     getImportCenter: getCenterWorld,
     locate: locateById,
   })
-  const { importPaths, importClipboardFiles, pasteImage, pasteText } = importers
+  const { importPaths, importClipboardFiles, pasteImage, pasteText, importProgress, cancelImport } =
+    importers
 
   const onHydrated = useCallback((isEmpty: boolean) => setEmptyDismissed(!isEmpty), [])
   const onImportPaths = useCallback(
@@ -489,6 +542,56 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     },
   })
 
+  // ---------- 外部入口 ----------
+
+  // 全局热键 Ctrl+Alt+Space：窗口被唤起后直接聚焦搜索。
+  useEffect(() => {
+    if (!isDesktopClient) return
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    void listen('shortcut://focus-search', () => titleBarRef.current?.focusSearch())
+      .then((dispose) => {
+        if (disposed) dispose()
+        else unlisten = dispose
+      })
+      .catch(() => {
+        // 热键事件订阅失败只影响「唤起即搜索」，窗口仍会正常激活。
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
+
+  // 双击文件 /「发送到」/ 命令行带进来的路径：启动时取一次，运行中由单实例转发。
+  useEffect(() => {
+    if (!isDesktopClient) return
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    void desktopApi
+      .takePendingImports()
+      .then((paths) => {
+        if (!disposed && paths.length > 0) void importPaths(paths)
+      })
+      .catch(() => {
+        // 没有待导入项或读取失败都不影响启动。
+      })
+    void listen<string[]>('import://external', (event) => {
+      void importPaths(event.payload)
+    })
+      .then((dispose) => {
+        if (disposed) dispose()
+        else unlisten = dispose
+      })
+      .catch(() => {
+        // 订阅失败时仍可通过拖入/粘贴导入。
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [importPaths])
+
   // ---------- 粘贴 ----------
 
   useEffect(() => {
@@ -549,6 +652,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     }
     canvasRef.current?.locateNode(entry.nodeId)
     store.selectNode(entry.nodeId, false)
+    rememberRecent(entry.nodeId)
     if (entry.annotationId) {
       const annotation = store.annotations.find((item) => item.id === entry.annotationId)
       if (annotation) store.openAnnotation(annotation)
@@ -562,10 +666,17 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       return
     }
     const node = store.nodeById.get(entry.nodeId)
-    if (node) void actions.openNode(node)
+    if (!node) return
+    rememberRecent(node.id)
+    void actions.openNode(node)
   }
 
-  const contentNode = contentEditorId ? (store.nodeById.get(contentEditorId) ?? null) : null
+  const contentNode = contentEditor ? (store.nodeById.get(contentEditor.id) ?? null) : null
+  /** 只把文字与富文本两类交给内容管理，文件引用不在其中。 */
+  const managedNodes = useMemo(
+    () => store.nodes.filter((node) => node.kind === 'text' || node.kind === 'richtext'),
+    [store.nodes],
+  )
 
   return (
     <div className="app-shell">
@@ -584,12 +695,36 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           message.info('双击新富文本卡片开始写作')
         }}
         onSettings={() => setSettingsOpen(true)}
+        onOpenContentManager={() => setContentManagerOpen(true)}
+        outlineOpen={outlineOpen}
+        onToggleOutline={() => setOutlineOpen((previous) => !previous)}
+        filter={searchFilter}
+        onFilterChange={setSearchFilter}
         onMinimize={() => void desktopWindow.minimize()}
         onMaximize={() => void desktopWindow.toggleMaximize()}
         onClose={() => void desktopWindow.close()}
       />
 
       <div className="workspace">
+        {outlineOpen ? (
+          <OutlinePanel
+            nodes={store.nodes}
+            groups={store.groups}
+            selectedIds={store.selectedIds}
+            selectedGroupId={store.selectedGroupId}
+            onLocateNode={(id) => {
+              canvasRef.current?.locateNode(id)
+              store.selectNode(id, false)
+              rememberRecent(id)
+            }}
+            onLocateGroup={(id) => {
+              canvasRef.current?.locateTarget(id)
+              store.selectGroup(id)
+            }}
+            onClose={() => setOutlineOpen(false)}
+          />
+        ) : null}
+
         <CanvasBoard
           ref={canvasRef}
           themeId={themeId}
@@ -621,8 +756,33 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           onEditContent={openContentEditor}
           onDragOut={dragOut}
           onScaleChange={setScale}
+          onToggleGroupCollapse={(id) => {
+            const group = store.groupById.get(id)
+            if (group) store.setGroupCollapsed(id, !group.collapsed)
+          }}
           onContextMenu={contextMenu.open}
         />
+
+        {importProgress ? (
+          <div className="import-progress" role="status" aria-live="polite">
+            <div className="import-progress-head">
+              <span>
+                正在导入 {importProgress.done} / {importProgress.total}
+              </span>
+              <Button size="small" type="text" onClick={cancelImport}>
+                取消
+              </Button>
+            </div>
+            <div className="import-progress-bar">
+              <span
+                style={{
+                  width: `${importProgress.total > 0 ? Math.round((importProgress.done / importProgress.total) * 100) : 0}%`,
+                }}
+              />
+            </div>
+            <span className="import-progress-current">{importProgress.current}</span>
+          </div>
+        ) : null}
 
         {store.detailsNode || (store.detailsMode === 'annotation' && store.activeAnnotation) ? (
           <DetailsPanel
@@ -726,15 +886,16 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           <Suspense fallback={null}>
             <RichTextDialog
               key={contentNode.id}
-              initialHtml={contentNode.body ?? ''}
-              onCancel={() => setContentEditorId(null)}
+              initialHtml={contentEditor?.body ?? ''}
+              onCancel={() => setContentEditor(null)}
               onQuickSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
+                setContentEditor({ id: contentNode.id, body: html })
                 message.success('已保存，可继续编辑')
               }}
               onSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
-                setContentEditorId(null)
+                setContentEditor(null)
                 message.success('富文本已保存')
               }}
             />
@@ -742,20 +903,42 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         ) : (
           <TextContentDialog
             key={contentNode.id}
-            initialText={contentNode.body ?? contentNode.subtitle ?? ''}
-            onCancel={() => setContentEditorId(null)}
+            initialText={contentEditor?.body ?? contentNode.subtitle ?? ''}
+            onCancel={() => setContentEditor(null)}
             onQuickSave={(text) => {
               store.commitContent(contentNode.id, text, text)
+              setContentEditor({ id: contentNode.id, body: text })
               message.success('已保存，可继续编辑')
             }}
             onSave={(text) => {
               store.commitContent(contentNode.id, text, text)
-              setContentEditorId(null)
+              setContentEditor(null)
               message.success('文字已保存')
             }}
           />
         )
       ) : null}
+
+      <ContentManagerDialog
+        open={contentManagerOpen}
+        nodes={managedNodes}
+        groups={store.groups}
+        onClose={() => setContentManagerOpen(false)}
+        onLocate={(id) => {
+          canvasRef.current?.locateNode(id)
+          store.selectNode(id, false)
+          rememberRecent(id)
+        }}
+        onEdit={openContentEditor}
+        onMoveToGroup={(id, groupId) => {
+          store.moveNodeToGroup(id, groupId)
+          message.success(groupId ? '已移动到空间末尾' : '已移出空间')
+        }}
+        onDelete={(id) => {
+          store.deleteTarget({ kind: 'node', id })
+          message.info('已删除；Ctrl+Z 可撤销')
+        }}
+      />
     </div>
   )
 }

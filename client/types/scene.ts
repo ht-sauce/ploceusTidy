@@ -61,6 +61,8 @@ export interface SceneGroup {
   title: string
   /** 空间主色（#RRGGBB）；为空时回退主题主色。 */
   color?: string
+  /** 折叠后只画标题条、隐藏成员；存储尺寸不变，展开即恢复。 */
+  collapsed: boolean
   x: number
   y: number
   w: number
@@ -144,6 +146,36 @@ export interface ImportResult {
   created: SceneNode[]
   existing: SceneNode[]
   errors: ImportError[]
+  /** 用户中途取消：`created` / `existing` 是已落库的部分结果。 */
+  cancelled: boolean
+}
+
+/** 导入进度（`import://progress` 事件）：每处理完一批推一次。 */
+export interface ImportProgress {
+  jobId: string
+  done: number
+  total: number
+  current: string
+}
+
+/** 导出请求：内容由前端按需加载后随请求传入，Rust 只负责落盘。 */
+export interface ExportItem {
+  name: string
+  kind: 'text' | 'richtext'
+  body: string
+}
+
+export interface ExportRequest {
+  items: ExportItem[]
+  dir: string
+  /** 单条导出时指定的文件名（含扩展名）；批量导出留空。 */
+  fileName?: string
+}
+
+export interface ExportResult {
+  files: string[]
+  media: number
+  warnings: string[]
 }
 
 /** 工作空间信息，供设置面板展示。 */

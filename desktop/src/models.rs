@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 画布节点。`path` / `url` 只保存引用，不保存文件内容。
+/// `body` 在首屏加载时为空（紧凑索引），编辑或导出时按 `node_body` 单独拉取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneNode {
@@ -45,6 +46,9 @@ pub struct SceneGroup {
     /// 空间主色（#RRGGBB）；为空时前端回退主题主色。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// 折叠后只画标题条、隐藏成员；存储尺寸不变，展开即恢复。
+    #[serde(default)]
+    pub collapsed: bool,
     pub x: f64,
     pub y: f64,
     pub w: f64,
@@ -115,11 +119,55 @@ pub struct ImportError {
 }
 
 /// 批量导入结果：新建、命中去重、失败三部分都返回，不允许静默丢弃。
+/// `cancelled` 为真表示用户中途取消，`created` / `existing` 是已提交的部分结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportResult {
     pub created: Vec<SceneNode>,
     pub existing: Vec<SceneNode>,
     pub errors: Vec<ImportError>,
+    #[serde(default)]
+    pub cancelled: bool,
+}
+
+/// 导入进度事件（`import://progress`）：每处理完一批推一次，前端画进度条。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportProgress {
+    pub job_id: String,
+    pub done: usize,
+    pub total: usize,
+    /// 刚处理完的那一项；批量时只用于「当前项」展示。
+    pub current: String,
+}
+
+/// 文本/富文本导出请求：内容由前端按需加载后随请求传入，Rust 只负责落盘。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportItem {
+    /// 导出文件名（不含扩展名，已由前端做过非法字符替换）。
+    pub name: String,
+    /// `text` 或 `richtext`。
+    pub kind: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportRequest {
+    pub items: Vec<ExportItem>,
+    /// 目标目录；单条导出时由前端用「另存为」对话框解析出目录与文件名。
+    pub dir: String,
+    /// 单条导出时使用的文件名（含扩展名）；批量导出留空，按内容自动命名。
+    pub file_name: Option<String>,
+}
+
+/// 导出结果：写了哪些文件、复制了多少个富文本媒体。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResult {
+    pub files: Vec<String>,
+    pub media: usize,
+    pub warnings: Vec<String>,
 }
 
 /// 工作空间信息，供设置面板展示；占用大小由文件系统统计。

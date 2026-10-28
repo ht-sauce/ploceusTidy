@@ -62,6 +62,10 @@ sequenceDiagram
 - `Konva.pixelRatio` 固定不低于 2，低 DPI 屏上文字边缘保持清晰；放大后不额外提高倍率，避免显存失控。
 - 迷你地图只用紧凑索引绘制简化色块，不复用完整卡片。
 - 缩略图只在可见且停留超过阈值时加载，缓存到 `dataWorkSpace/thumbnails`。
+- **正文按需**：`scene_load` 只取紧凑索引，`body` 一律为 NULL；编辑或导出前用 `node_body` 单独拉取。保存时用 `COALESCE(excluded.body, nodes.body)`，未加载正文的节点被移动后不会把正文写成 NULL（`db::tests` 有回归用例）。
+- 导入分批提交（20 项/事务）并向渲染层推 `import://progress`，`cancel_import` 在批次边界生效；已处理部分保持已落库。
+- 本地日志在 Rust 侧统一写 `dataWorkSpace/logs/app.log`（2MB 轮转一份 `app.1.log`）；前端所有 IPC 失败经 `tauri-api.ts` 的 `call` 上报一条 `log_write`，另有 `panic` 钩子。
+- 目录级文件监听独立成 `watcher.rs`：只 watch 引用所在目录，事件防抖 800ms 后做增量校验并推 `refs://changed`，不阻塞主线程。
 - 渲染按需：无动画时停止 `requestAnimationFrame`；窗口隐藏/最小化/失焦时暂停绘制与加载。
 - 边只绘制有效端点（节点或空间），任何缩放都保留完整关系网。
 - 容量目标：存储 10 万引用；同屏绘制控制在数百到两千个对象。

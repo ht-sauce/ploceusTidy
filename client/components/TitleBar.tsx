@@ -19,9 +19,11 @@ import {
   QuestionCircleOutlined,
   SearchOutlined,
   SettingOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons'
 import logoUrl from '../../assets/ploceusTidy.jpg'
 import type { SearchEntry } from '@/types/scene'
+import type { SearchFilter } from '@/workspace/useSearch'
 import SystemIcon from './SystemIcon'
 
 interface TitleBarProps {
@@ -33,6 +35,13 @@ interface TitleBarProps {
   onNewText: () => void
   onNewRichText: () => void
   onSettings: () => void
+  /** 内容管理：文字与富文本的集中列表。 */
+  onOpenContentManager: () => void
+  /** 左侧大纲树的开关状态。 */
+  outlineOpen: boolean
+  onToggleOutline: () => void
+  filter: SearchFilter
+  onFilterChange: (filter: SearchFilter) => void
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
@@ -71,6 +80,16 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Delete / Ctrl+Z / Ctrl+Shift+Z', label: '删除 / 撤销 / 重做' },
   { keys: 'Ctrl+S', label: '立即保存（编辑弹窗内也不关闭）' },
   { keys: 'Ctrl+A / Ctrl+K', label: '全选 / 聚焦搜索' },
+  { keys: 'Ctrl+Alt+Space', label: '任意位置唤起并搜索' },
+]
+
+const FILTERS: { key: SearchFilter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'file', label: '文件' },
+  { key: 'content', label: '文字' },
+  { key: 'group', label: '空间' },
+  { key: 'edge', label: '连线' },
+  { key: 'annotation', label: '标注' },
 ]
 
 const HELP_PANEL = (
@@ -95,6 +114,11 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
     onNewText,
     onNewRichText,
     onSettings,
+    onOpenContentManager,
+    outlineOpen,
+    onToggleOutline,
+    filter,
+    onFilterChange,
     onMinimize,
     onMaximize,
     onClose,
@@ -121,6 +145,18 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
     onClick: ({ key }) => {
       if (key === 'text') onNewText()
       else onNewRichText()
+    },
+  }
+
+  // 齿轮拆成两块：系统设置（外观/工作空间/窗口/数据）与内容管理（文字与富文本）。
+  const settingsMenu: MenuProps = {
+    items: [
+      { key: 'system', label: '系统设置' },
+      { key: 'content', label: '内容管理' },
+    ],
+    onClick: ({ key }) => {
+      if (key === 'content') onOpenContentManager()
+      else onSettings()
     },
   }
 
@@ -194,7 +230,21 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
           <div className="search-panel" role="listbox">
             {results.length > 0 ? (
               <>
-                <div className="search-caption">{query.trim() ? '搜索结果' : '最近 / 建议'}</div>
+                <div className="search-caption">{query.trim() ? '搜索结果' : '最近'}</div>
+                <div className="search-filters" role="group" aria-label="按类型筛选">
+                  {FILTERS.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      className={`search-filter${filter === item.key ? ' is-active' : ''}`}
+                      aria-pressed={filter === item.key}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => onFilterChange(item.key)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
                 {results.map((entry, index) => (
                   <button
                     key={`${entry.type}-${entry.nodeId}-${index}`}
@@ -240,15 +290,24 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
             />
           </Dropdown>
         </Tooltip>
-        <Tooltip title="设置">
+        <Tooltip title={outlineOpen ? '收起大纲' : '展开大纲'}>
+          <Button
+            className={`title-icon-btn${outlineOpen ? ' is-active' : ''}`}
+            type="text"
+            icon={<UnorderedListOutlined />}
+            aria-label="大纲"
+            aria-pressed={outlineOpen}
+            onClick={onToggleOutline}
+          />
+        </Tooltip>
+        <Dropdown menu={settingsMenu} placement="bottomRight" trigger={['click']}>
           <Button
             className="title-icon-btn"
             type="text"
             icon={<SettingOutlined />}
-            aria-label="设置"
-            onClick={onSettings}
+            aria-label="设置与内容管理"
           />
-        </Tooltip>
+        </Dropdown>
         <Popover
           content={HELP_PANEL}
           placement="bottomRight"

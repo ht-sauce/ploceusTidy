@@ -13,6 +13,8 @@ import type { SceneGroup } from '@/types/scene'
 
 interface GroupShapeProps {
   group: SceneGroup
+  /** 显示高度：折叠时只有标题条，与 `groupDisplayBox` 一致。 */
+  height: number
   active: boolean
   tokens: CanvasTokens
   /** 稳定的引用注册器：按 id 存取 Konva.Rect，供拖动期直接驱动位置。 */
@@ -24,6 +26,7 @@ interface GroupShapeProps {
 
 function GroupShape({
   group,
+  height,
   active,
   tokens,
   registerRef,
@@ -44,9 +47,9 @@ function GroupShape({
       x={group.x}
       y={group.y}
       width={group.w}
-      height={group.h}
-      // 始终铺一层极浅的空间色，多个空间靠颜色即可区分；选中时加深。
-      fill={active ? tone.fill : mixHex(color, '#ffffff', 0.94)}
+      height={height}
+      // 始终铺一层极浅的空间色，多个空间靠颜色即可区分；选中时加深，折叠时更实一点。
+      fill={active ? tone.fill : mixHex(color, '#ffffff', group.collapsed ? 0.9 : 0.94)}
       opacity={active ? 0.9 : 1}
       stroke={color}
       strokeWidth={active ? 2 : 1.6}

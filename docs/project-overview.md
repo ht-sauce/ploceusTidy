@@ -29,8 +29,10 @@ ploceusTidy/
 ├── package.json                    # 前端/Tauri 依赖与脚本
 ├── pnpm-lock.yaml
 ├── scripts/
-│   ├── check-spec.mjs             # 硬约束静态扫描（pnpm check-spec）
-│   └── collect-installer.mjs      # NSIS 安装包复制到项目根 release/（tauri:build 后自动执行）
+│   ├── check-spec.mjs             # 硬约束静态扫描（pnpm check-spec；含版本号一致性与发布日志条目）
+│   ├── bump-version.mjs           # 版本号提升：同步四处副本（pnpm version:bump）
+│   └── collect-installer.mjs      # 只收集当前版本的 NSIS 安装包到 release/（tauri:build 后自动执行）
+├── vitest.config.ts                # 前端单测配置（client/**/*.test.ts，别名 @）
 ├── release/                        # 安装包固定产物地址（入库，README 直链下载）
 ├── vite.config.ts                  # root: client，127.0.0.1:5173
 ├── tsconfig.json / tsconfig.app.json / tsconfig.node.json
@@ -49,8 +51,10 @@ ploceusTidy/
 │   │   ├── sceneSerialize.worker.ts # 场景 JSON 序列化 Worker（stringify 出主线程）
 │   │   └── theme.ts                # 四套主题令牌与 applyTheme/normalizeTheme
 │   ├── domain/                     # 领域纯函数（布局与搜索，不依赖 React/Konva）
-│   │   ├── layout.ts               # 矩形碰撞、吸附参考线、空位查找、空间自动整理与贴合
-│   │   └── search.ts               # 搜索归一化、拼音首字母缓存与分级排序
+│   │   ├── layout.ts               # 矩形碰撞、吸附参考线、空位查找、空间自动整理/贴合/折叠显示框
+│   │   ├── layout.test.ts          # 布局用例（碰撞、吸附、避让、贴合、整理、折叠）
+│   │   ├── search.ts               # 搜索归一化、拼音首字母缓存与分级排序
+│   │   └── search.test.ts          # 搜索用例（归一化、拼音、分级排序）
 │   ├── types/
 │   │   └── scene.ts                # SceneNode / SceneGroup / SceneEdge / 标注 / IPC DTO
 │   ├── workspace/                  # 业务编排层（场景命令、持久化、快捷键、菜单）
@@ -70,15 +74,15 @@ ploceusTidy/
 │   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线/空间拖动与四角调框/边缘自动平移/悬停会话（世界坐标增量）
 │   │   ├── useVisibleThumbnails.ts # 可见图片 / 可执行对象的缩略图与图标延迟加载
 │   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条（独占底部区域）、扩展色描边、四向锚点
-│   │   ├── GroupShape.tsx          # 空间实线框与命中区域
+│   │   ├── GroupShape.tsx          # 空间实线框与命中区域（折叠时只画标题条高度）
 │   │   ├── EdgeLayer.tsx           # 有向连线、标签、连线菜单
-│   │   ├── Minimap.tsx             # 迷你地图与点击定位
+│   │   ├── Minimap.tsx             # 迷你地图与点击定位（折叠空间按标题条绘制）
 │   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（纯函数）
 │   │   ├── icons.tsx               # 系统图标与缩略图缓存（缩略图有 400 张上界）
 │   │   ├── constants.ts            # 迷你地图、名称预算、标注高度、空间调色板、渲染倍率等常量
 │   │   └── types.ts                # 右键目标、视口、舞台尺寸类型
 │   ├── components/                 # 通用界面组件
-│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索、新建内容菜单、设置、操作说明、窗口按钮
+│   │   ├── TitleBar.tsx            # 无边框标题栏：搜索（含类型筛选）、新建内容、大纲开关、设置下拉（系统设置/内容管理）、操作说明、窗口按钮
 │   │   ├── SystemIcon.tsx          # 文件夹 / PDF / Word / Excel / DWG / EXE / 图片 / 视频 / TXT / 链接 / 富文本
 │   │   ├── DetailsPanel.tsx        # 右键「属性」面板与标注编辑（只读属性，动作走右键菜单；标注 Ctrl+S 保存）
 │   │   ├── ContextMenu.tsx         # 画布右键菜单渲染
@@ -87,6 +91,8 @@ ploceusTidy/
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
 │   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本；Ctrl+S 就地保存、取消确认）
 │   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor；Ctrl+S 就地保存、取消确认；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换
+│   │   ├── OutlinePanel.tsx        # 左侧大纲树：按空间分组，可逐个展开/收起并定位
+│   │   ├── ContentManagerDialog.tsx # 内容管理：文字/富文本列表、移动到空间末尾、导出 txt / html+媒体
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器
 │   │   ├── NeighborPickerDialog.tsx # 一对多关联对象跳转选择
 │   │   └── SettingsDialog.tsx      # 外观主题 / 工作空间 / 窗口 / 数据（含引用校验）/ 关于（版本读 package.json）
@@ -95,10 +101,13 @@ ploceusTidy/
 │   ├── Cargo.toml / Cargo.lock / build.rs
 │   ├── tauri.conf.json             # decorations:false 无边框自定义标题栏、frontendDist ../client/dist、仅 nsis
 │   ├── capabilities/default.json   # core / opener / dialog 权限；窗口拖动、最小化、关闭/销毁（关窗前落库后放行）与可见性查询
+│   ├── installer-hooks.nsh         # NSIS 钩子：写入/删除「发送到」快捷方式
 │   ├── icons/                      # 仅桌面图标
 │   └── src/
-│       ├── main.rs / lib.rs        # Tauri 启动（单实例）、命令注册
-│       ├── db.rs                   # dataWorkSpace、迁移、场景加载/增量保存、导入去重与图标刷新、校验/重连、缩略图、app_meta；媒体大小与真实路径边界及回归测试
+│       ├── main.rs / lib.rs        # Tauri 启动（单实例 + 命令行/「发送到」转发）、全局热键、命令注册
+│       ├── db.rs                   # dataWorkSpace、迁移（v4：groups.collapsed）、紧凑索引加载、增量保存（正文 COALESCE 保护）、分批可取消导入、按需取正文、导出、目录级校验/重连、缩略图、app_meta 与回归测试
+│       ├── logging.rs              # 本地滚动日志（2MB 轮转、panic 钩子、前端上报）
+│       ├── watcher.rs              # 目录级文件监听：防抖后增量校验并推送 refs://changed
 │       ├── models.rs               # IPC DTO
 │       └── platform.rs             # 路径规范化、文件类型、剪贴板文件读写、Shell 缩略图、原生右键菜单、窗口置底、OLE 拖出
 ├── docs/
@@ -134,7 +143,13 @@ client/
 | 打开/定位/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |
 | 文字/富文本弹窗、加号新建菜单 | `client/components/TextContentDialog.tsx`、`RichTextDialog.tsx`、`TitleBar.tsx`、`client/workspace/Workspace.tsx` |
 | 原文件复制与拖出（CF_HDROP / OLE 拖放） | `desktop/src/platform.rs`、`desktop/src/lib.rs`、`client/canvas/useCanvasInteractions.ts`、`client/workspace/Workspace.tsx` |
-| 安装包语言 | `desktop/tauri.conf.json`（`bundle.windows.nsis.languages`） |
+| 安装包语言 / 「发送到」快捷方式 | `desktop/tauri.conf.json`（`bundle.windows.nsis`）、`desktop/installer-hooks.nsh` |
+| 版本号（四处一致 + 发布日志） | `scripts/bump-version.mjs`、`scripts/check-spec.mjs`（HC-17）、`release/log.md` |
+| 本地日志（含前端上报与 panic） | `desktop/src/logging.rs`、`desktop/src/lib.rs`（`log_write`）、`client/lib/tauri-api.ts`（`call` 统一上报） |
+| 文件变更监听 | `desktop/src/watcher.rs`、`db.rs`（`ref_dirs` / `ref_check_under_dirs`）、`client/workspace/useScenePersistence.ts`（订阅 `refs://changed`） |
+| 导入进度与取消 | `desktop/src/db.rs`（`import_paths_with_progress`）、`desktop/src/lib.rs`（`import://progress` / `cancel_import`）、`client/workspace/useImportClipboard.ts` |
+| 大纲树 / 空间折叠 / 内容管理与导出 | `client/components/OutlinePanel.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/ContentManagerDialog.tsx`、`desktop/src/db.rs`（`export_contents`） |
+| 全局热键与外部导入 | `desktop/src/lib.rs`（global-shortcut / `take_pending_imports`）、`client/workspace/Workspace.tsx` |
 | 主题切换与语义令牌 | `client/lib/theme.ts`、`client/styles/global.css`、`docs/spec/03-ui-interaction.md` §10 |
 | 富文本节点与编辑器（`richtext`、`body` 存 HTML、纯文本投影；媒体本地资产化见 ADR-029） | `client/components/RichTextDialog.tsx`、`client/workspace/useSceneStore.ts`（`commitContent`）、`docs/spec/08-adr.md` ADR-025 |
 | 搜索归一化、拼音首字母与排序 | `client/domain/search.ts`、`client/workspace/useSearch.ts` |

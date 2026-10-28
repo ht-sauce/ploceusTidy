@@ -5,6 +5,8 @@
 import { convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type {
+  ExportRequest,
+  ExportResult,
   ImportResult,
   RefStatus,
   RelinkResult,
@@ -163,13 +165,13 @@ async function doSave(scene: SceneData): Promise<void> {
     if (full) {
       // 全量：整场景序列化走 Worker；Rust 侧按指纹只写变化行。
       const json = await stringifyScene(scene).catch(() => JSON.stringify(scene))
-      await invoke<void>('scene_save', { scene: json })
+      await call<void>('scene_save', { scene: json })
     } else {
       const delta = diffScene(scene, baseline)
       // 增量通常是个位数对象：直接主线程 stringify，不值得付 Worker 往返；
       // 无变化时跳过写库，但状态仍算已保存。
       if (!deltaIsEmpty(delta)) {
-        await invoke<void>('scene_save_delta', { delta: JSON.stringify(delta) })
+        await call<void>('scene_save_delta', { delta: JSON.stringify(delta) })
       }
     }
   } catch (error) {
@@ -191,32 +193,63 @@ function saveScene(scene: SceneData): Promise<void> {
   return saveChain
 }
 
+/**
+ * 统一 IPC 调用：失败时先写一条本地日志再抛出。
+ * 日志走 `log_write`，自身失败一律吞掉——日志永远不能影响主流程。
+ */
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(command, args)
+  } catch (error) {
+    logLine('error', `${command} 失败：${String(error)}`)
+    throw error
+  }
+}
+
+/** 前端日志上报；浏览器调试模式（无桌面壳）直接忽略。 */
+export function logLine(level: 'info' | 'warn' | 'error', message: string) {
+  if (!isDesktopClient) return
+  void invoke<void>('log_write', { level, message }).catch(() => {
+    // 日志通道本身失败时不再上报，避免递归。
+  })
+}
+
 export const desktopApi = {
-  loadScene: () => invoke<SceneData>('scene_load'),
+  loadScene: () => call<SceneData>('scene_load'),
   // 常规为增量保存（只传变化行）；全量与失败恢复见上方增量协议说明。
   saveScene,
-  /** 批量导入绝对路径；去重与失败明细由 Rust 侧统一处理。 */
-  importPaths: (paths: string[], x: number, y: number) =>
-    invoke<ImportResult>('import_paths', { request: { paths, x, y } }),
+  /** 批量导入绝对路径；去重与失败明细由 Rust 侧统一处理，进度走 `import://progress`。 */
+  importPaths: (paths: string[], x: number, y: number, jobId: string) =>
+    call<ImportResult>('import_paths', { request: { paths, x, y }, jobId }),
+  /** 取消进行中的导入：Rust 在批次边界停止，已处理的部分保留。 */
+  cancelImport: (jobId: string) => call<void>('cancel_import', { jobId }),
+  /** 取走启动参数里带来的待导入路径（双击文件 / 「发送到」/ 命令行）。 */
+  takePendingImports: () => call<string[]>('take_pending_imports'),
+  /** 读取单个节点的正文：首屏只加载紧凑索引。 */
+  nodeBody: (nodeId: string) => call<string | null>('node_body', { nodeId }),
+  /** 导出文本/富文本到指定目录。 */
+  exportContents: (request: ExportRequest) => call<ExportResult>('export_contents', { request }),
+  logWrite: (level: 'info' | 'warn' | 'error', message: string) =>
+    call<void>('log_write', { level, message }),
   /** 读取资源管理器复制到剪贴板的文件路径（Windows CF_HDROP）。 */
-  readClipboardFiles: () => invoke<string[]>('read_clipboard_files'),
+  readClipboardFiles: () => call<string[]>('read_clipboard_files'),
   /** 打开节点对应的原文件或 URL。 */
-  openRef: (nodeId: string) => invoke<void>('open_ref', { nodeId }),
+  openRef: (nodeId: string) => call<void>('open_ref', { nodeId }),
   /** 在资源管理器中定位节点对应的文件。 */
-  revealRef: (nodeId: string) => invoke<void>('reveal_ref', { nodeId }),
+  revealRef: (nodeId: string) => call<void>('reveal_ref', { nodeId }),
   /**
    * 复制原文件到剪贴板（Windows CF_HDROP）：粘贴到资源管理器或 IDE 即可拿到原始地址。
    * 只传节点 ID，路径由 Rust 侧查库解析；返回实际写入剪贴板的文件数。
    */
-  copyRefFiles: (nodeIds: string[]) => invoke<number>('copy_ref_files', { nodeIds }),
+  copyRefFiles: (nodeIds: string[]) => call<number>('copy_ref_files', { nodeIds }),
   /**
    * 把原文件拖到外部程序（Windows OLE DoDragDrop）。命令会阻塞到拖放结束，
    * 因此不在前端等待结果，直接按「发出即成功」处理，失败由命令层返回原因。
    */
-  startDragOut: (nodeIds: string[]) => invoke<void>('drag_out_refs', { nodeIds }),
+  startDragOut: (nodeIds: string[]) => call<void>('drag_out_refs', { nodeIds }),
   /** 把粘贴的截图写入 dataWorkSpace/assets，返回落盘路径。 */
   saveClipboardImage: (data: string, ext: string) =>
-    invoke<string>('save_clipboard_image', { data, ext }),
+    call<string>('save_clipboard_image', { data, ext }),
   /**
    * 富文本媒体上传：Raw IPC 二进制直传（body = [ext_len][ext][文件字节]），不经 base64。
    * 返回 `assets/<文件名>` 相对引用（存 HTML 用）与 `richasset` 协议回读 URL（编辑器展示用）。
@@ -236,36 +269,42 @@ export const desktopApi = {
     body[0] = extBytes.length
     body.set(extBytes, 1)
     body.set(fileBytes, 1 + extBytes.length)
-    const relative = await invoke<string>('save_rich_asset', body)
+    // Raw IPC：body 本身就是二进制体，不能套进 { args } 的对象参数里。
+    const relative = await invoke<string>('save_rich_asset', body).catch((error: unknown) => {
+      logLine('error', `save_rich_asset 失败：${String(error)}`)
+      throw error
+    })
     const name = relative.slice('assets/'.length)
     return { name, url: convertFileSrc(name, 'richasset') }
   },
   /** 富文本媒体回读 URL：`richasset` 协议映射到工作空间 assets 目录。 */
   richAssetUrl: (name: string) => convertFileSrc(name, 'richasset'),
-  workspaceGet: () => invoke<WorkspaceInfo>('workspace_get'),
+  workspaceGet: () => call<WorkspaceInfo>('workspace_get'),
   /** 用 Windows Shell 生成缩略图；不可用时返回 null。 */
-  thumbGet: (nodeId: string, size = 96) => invoke<string | null>('thumb_get', { nodeId, size }),
+  thumbGet: (nodeId: string, size = 96) => call<string | null>('thumb_get', { nodeId, size }),
   /** 校验引用是否仍存在；传空数组表示全量。 */
-  refCheck: (nodeIds: string[] = []) => invoke<RefStatus[]>('ref_check', { nodeIds }),
+  refCheck: (nodeIds: string[] = []) => call<RefStatus[]>('ref_check', { nodeIds }),
   /** 重新关联缺失引用到新路径。 */
-  refRelink: (nodeId: string, path: string) => invoke<RelinkResult>('ref_relink', { nodeId, path }),
+  refRelink: (nodeId: string, path: string) => call<RelinkResult>('ref_relink', { nodeId, path }),
   /** 读取应用配置（主题、桌面常驻等）。 */
-  metaGet: (key: string) => invoke<string | null>('meta_get', { key }),
-  metaSet: (key: string, value: string) => invoke<void>('meta_set', { key, value }),
-  workspaceOpen: () => invoke<void>('workspace_open'),
-  workspaceRebuild: () => invoke<void>('workspace_rebuild'),
-  workspaceMigrate: (target: string) => invoke<WorkspaceInfo>('workspace_migrate', { target }),
+  metaGet: (key: string) => call<string | null>('meta_get', { key }),
+  metaSet: (key: string, value: string) => call<void>('meta_set', { key, value }),
+  workspaceOpen: () => call<void>('workspace_open'),
+  workspaceRebuild: () => call<void>('workspace_rebuild'),
+  workspaceMigrate: (target: string) => call<WorkspaceInfo>('workspace_migrate', { target }),
   /** 桌面常驻：把窗口压到普通窗口之下。 */
-  windowSetPin: (pinned: boolean) => invoke<void>('window_set_pin', { pinned }),
+  windowSetPin: (pinned: boolean) => call<void>('window_set_pin', { pinned }),
   /** 在指定屏幕坐标弹出 Windows 原生文件右键菜单（含 Shell 扩展）。 */
   showSystemMenu: (nodeId: string, x: number, y: number) =>
-    invoke<void>('show_system_menu', { nodeId, x: Math.round(x), y: Math.round(y) }),
+    call<void>('show_system_menu', { nodeId, x: Math.round(x), y: Math.round(y) }),
   /** 选择一个文件用于重新关联；取消返回 null。 */
-  pickFile: () => invoke<string | null>('pick_file'),
+  pickFile: () => call<string | null>('pick_file'),
   /** 选择迁移目标目录；取消返回 null。 */
-  pickFolder: () => invoke<string | null>('pick_folder'),
+  pickFolder: () => call<string | null>('pick_folder'),
+  /** 选择导出文件的保存路径（单条导出）；取消返回 null。 */
+  pickExportFile: (defaultName: string) => call<string | null>('pick_export_file', { defaultName }),
   /** F12 调试；release 构建同样可用。 */
-  openDevtools: () => invoke<void>('open_devtools'),
+  openDevtools: () => call<void>('open_devtools'),
 }
 
 /**

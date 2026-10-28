@@ -3,6 +3,7 @@
  * 视口框保留为 DOM 以便平移时只更新一个元素；点击/拖动把对应世界坐标移到视口中心。
  */
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { groupDisplayBox } from '@/domain/layout'
 import { MINIMAP_MAX_DOTS } from './constants'
 import { clamp } from './geometry'
 import { cssVar } from './icons'
@@ -61,10 +62,12 @@ function Minimap({ bounds, nodes, groups, viewport, size, themeId, onMoveTo }: M
       context.strokeStyle = cssVar('--border', '#C9CDD4')
       context.lineWidth = 1
       groups.forEach((group) => {
-        const x = toX(group.x)
-        const y = toY(group.y)
-        const w = (group.w / bounds.width) * width
-        const h = (group.h / bounds.height) * height
+        // 折叠空间在迷你地图上只占一条标题，和画布上的观感一致。
+        const box = groupDisplayBox(group)
+        const x = toX(box.x)
+        const y = toY(box.y)
+        const w = (box.w / bounds.width) * width
+        const h = (box.h / bounds.height) * height
         context.fillRect(x, y, w, h)
         context.strokeRect(x + 0.5, y + 0.5, w, h)
       })
