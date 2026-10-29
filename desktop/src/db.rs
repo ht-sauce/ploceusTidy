@@ -903,13 +903,15 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
     }
 
     // 清理本次快照之外的对象；连线若指向已删除节点也一并移除。
+    // 端点判定必须同时豁免 groups：空间连线的一端是 group id，不在 nodes 表，
+    // 只按 nodes 过滤会把空间边在每次全量保存时静默删光（重启后首存即全量）。
     transaction
         .execute_batch(
             r#"
             DELETE FROM edges
             WHERE id NOT IN (SELECT id FROM keep_edges)
-               OR from_node NOT IN (SELECT id FROM nodes)
-               OR to_node NOT IN (SELECT id FROM nodes);
+               OR (from_node NOT IN (SELECT id FROM nodes) AND from_node NOT IN (SELECT id FROM groups))
+               OR (to_node NOT IN (SELECT id FROM nodes) AND to_node NOT IN (SELECT id FROM groups));
             DELETE FROM nodes WHERE id NOT IN (SELECT id FROM keep_nodes);
             DELETE FROM groups WHERE id NOT IN (SELECT id FROM keep_groups);
             UPDATE nodes SET group_id = ''
@@ -1066,14 +1068,15 @@ pub fn scene_save_delta(state: &AppState, delta: &SceneDelta) -> Result<(), Stri
 
     // 兜底清理只在真有删除时执行（全表扫描有成本）：删除的节点会带出悬空 refs、
     // 边与标注目标；前端删除逻辑已同步处理，这里防遗漏漂移。
+    // 端点豁免 groups：与全量保存同理，空间边不因端点不在 nodes 表而被误删。
     if !delta.removed_node_ids.is_empty() {
         transaction
             .execute_batch(
                 r#"
                 DELETE FROM refs WHERE id NOT IN (SELECT ref_id FROM nodes WHERE ref_id IS NOT NULL);
                 DELETE FROM edges
-                WHERE from_node NOT IN (SELECT id FROM nodes)
-                   OR to_node NOT IN (SELECT id FROM nodes);
+                WHERE (from_node NOT IN (SELECT id FROM nodes) AND from_node NOT IN (SELECT id FROM groups))
+                   OR (to_node NOT IN (SELECT id FROM nodes) AND to_node NOT IN (SELECT id FROM groups));
                 DELETE FROM annotation_targets WHERE node_id NOT IN (SELECT id FROM nodes);
                 "#,
             )
@@ -2554,4 +2557,90 @@ mod tests {
         assert!(loaded.groups[0].collapsed);
     }
 
+    fn test_group(id: &str) -> crate::models::SceneGroup {
+        crate::models::SceneGroup {
+            id: id.to_string(),
+            title: "空间".to_string(),
+            color: None,
+            collapsed: false,
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 160.0,
+        }
+    }
+
+    fn test_edge(id: &str, from: &str, to: &str) -> SceneEdge {
+        SceneEdge {
+            id: id.to_string(),
+            from: from.to_string(),
+            to: to.to_string(),
+            from_handle: Some("right".to_string()),
+            to_handle: Some("left".to_string()),
+            label: None,
+            style_json: None,
+        }
+    }
+
+    /// 空间连线不能被保存清理误删：端点是 group id，不在 nodes 表。
+    /// 回归背景：全量清理与增量兜底都按「端点必须在 nodes 表」过滤，
+    /// 空间边在每次全量保存（新会话首存、每 20 次）时被静默删光，重启后消失。
+    #[test]
+    fn full_and_delta_save_keep_group_edges() {
+        let fixture = DbFixture::new();
+        let node = text_node(Some("正文"));
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![node],
+                groups: vec![test_group("group-1")],
+                edges: vec![
+                    test_edge("edge-n2g", "node-text-1", "group-1"),
+                    test_edge("edge-g2n", "group-1", "node-text-1"),
+                    test_edge("edge-n2n", "node-text-1", "node-text-1"),
+                ],
+                annotations: Vec::new(),
+            },
+        )
+        .expect("首次全量保存失败");
+        let loaded = scene_load(&fixture.state).expect("读取场景失败");
+        assert_eq!(
+            loaded.edges.len(),
+            3,
+            "全量保存不得删除空间连线或普通连线"
+        );
+        assert!(
+            loaded
+                .edges
+                .iter()
+                .all(|edge| edge.from_handle.as_deref() == Some("right")),
+            "锚点字段必须随 camelCase 序列化往返保留"
+        );
+
+        // 删除节点的增量兜底清理同样不得带出空间边。
+        scene_save_delta(&fixture.state, &empty_delta(Vec::new())).expect("增量保存失败");
+        let after_delta = scene_load(&fixture.state).expect("增量后读取失败");
+        assert_eq!(after_delta.edges.len(), 3);
+    }
+
+    /// 真正的悬空边仍要被清理：端点既不在 nodes 也不在 groups 时删除。
+    #[test]
+    fn full_save_still_removes_dangling_edges() {
+        let fixture = DbFixture::new();
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![text_node(Some("正文"))],
+                groups: Vec::new(),
+                edges: vec![test_edge("edge-dangling", "node-text-1", "ghost-node")],
+                annotations: Vec::new(),
+            },
+        )
+        .expect("全量保存失败");
+        let loaded = scene_load(&fixture.state).expect("读取场景失败");
+        assert!(
+            loaded.edges.is_empty(),
+            "指向已删除节点的悬空边应被清理"
+        );
+    }
 }

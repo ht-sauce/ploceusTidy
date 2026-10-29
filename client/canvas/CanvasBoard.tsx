@@ -87,6 +87,8 @@ interface CanvasBoardProps {
   onContextMenu: (target: CanvasContextTarget, clientX: number, clientY: number) => void
   /** 窗口最小化/隐藏时暂停缩略图与脉冲等主动渲染。 */
   paused: boolean
+  /** 场景加载完成后才允许视口持久化，避免启动期把默认视口写进配置。 */
+  viewportPersistReady: boolean
 }
 
 export interface CanvasBoardHandle {
@@ -96,6 +98,8 @@ export interface CanvasBoardHandle {
   /** 定位连线中点，供搜索结果使用。 */
   locateEdge: (id: string) => void
   fitView: () => void
+  /** 恢复上次视口；无记录返回 false，由调用方兜底适配内容。 */
+  restoreViewport: () => Promise<boolean>
   zoomBy: (factor: number) => void
   getCenterWorld: () => { x: number; y: number }
   /** 鼠标在画布上的最后位置（世界坐标）；指针从未进入画布时为 null。 */
@@ -133,6 +137,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onToggleGroupCollapse,
     onContextMenu,
     paused,
+    viewportPersistReady,
   },
   ref,
 ) {
@@ -236,6 +241,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     fitView,
     zoomBy,
     getCenterWorld,
+    restoreViewport,
     pulseId,
   } = useCanvasViewport({
     nodes,
@@ -245,6 +251,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     size,
     detailsOpen,
     onScaleChange,
+    persistEnabled: viewportPersistReady,
   })
 
   /** 展示高度解析：索引、碰撞与渲染统一用它，标注节点才不会漏判底部区域。 */
@@ -426,11 +433,20 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
       locateTarget,
       locateEdge,
       fitView,
+      restoreViewport,
       zoomBy,
       getCenterWorld,
       getPointerWorld: interactions.getPointerWorld,
     }),
-    [fitView, getCenterWorld, interactions.getPointerWorld, locateEdge, locateTarget, zoomBy],
+    [
+      fitView,
+      getCenterWorld,
+      interactions.getPointerWorld,
+      locateEdge,
+      locateTarget,
+      restoreViewport,
+      zoomBy,
+    ],
   )
 
   // 定位后的脉冲高亮：只对当前定位对象做一次淡出，不持续渲染；窗口不可见时跳过。

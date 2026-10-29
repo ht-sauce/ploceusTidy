@@ -4,6 +4,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { groupDisplayBox } from '@/domain/layout'
+import { isDesktopClient, desktopApi } from '@/lib/tauri-api'
 import type { SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasViewport, StageSize } from './types'
 import { clamp } from './geometry'
@@ -16,7 +17,13 @@ interface UseCanvasViewportOptions {
   size: StageSize
   detailsOpen: boolean
   onScaleChange: (scale: number) => void
+  /** 场景加载完成后才启用持久化：避免启动期把默认视口写进配置。 */
+  persistEnabled: boolean
 }
+
+/** 视口持久化键：存在 app_meta，重启后恢复上次的位置与缩放。 */
+const VIEWPORT_META_KEY = 'canvas_viewport'
+const VIEWPORT_SAVE_DEBOUNCE = 600
 
 export function useCanvasViewport({
   nodes,
@@ -26,11 +33,23 @@ export function useCanvasViewport({
   size,
   detailsOpen,
   onScaleChange,
+  persistEnabled,
 }: UseCanvasViewportOptions) {
   const [viewport, setViewport] = useState<CanvasViewport>({ x: 0, y: 0, scale: 0.82 })
   const viewportRef = useRef(viewport)
   const [pulseId, setPulseId] = useState<string | null>(null)
   const pulseTimer = useRef<number | null>(null)
+  // 恢复动作只做一次；恢复完成前的视口变化（启动默认值）不落库。
+  const restoredRef = useRef(false)
+
+  // 恢复完成后的视口变更才写配置；平移/缩放高频触发，防抖后只落最终位置。
+  useEffect(() => {
+    if (!persistEnabled || !isDesktopClient || !restoredRef.current) return
+    const timer = window.setTimeout(() => {
+      void desktopApi.metaSet(VIEWPORT_META_KEY, JSON.stringify(viewportRef.current))
+    }, VIEWPORT_SAVE_DEBOUNCE)
+    return () => window.clearTimeout(timer)
+  }, [persistEnabled, viewport])
 
   // 事件处理器需要读取最新视口；在绘制前同步，避免读到上一帧的值。
   useLayoutEffect(() => {
@@ -120,6 +139,37 @@ export function useCanvasViewport({
     }
   }, [size.height, size.width])
 
+  /** 启动恢复：读取上次视口；无记录或数据非法返回 false，由调用方兜底适配内容。 */
+  const restoreViewport = useCallback(async () => {
+    if (restoredRef.current) return true
+    if (!isDesktopClient) {
+      restoredRef.current = true
+      return false
+    }
+    try {
+      const raw = await desktopApi.metaGet(VIEWPORT_META_KEY)
+      const parsed = raw ? (JSON.parse(raw) as Partial<CanvasViewport> | null) : null
+      const { x, y, scale } = parsed ?? {}
+      if (
+        typeof x === 'number' &&
+        Number.isFinite(x) &&
+        typeof y === 'number' &&
+        Number.isFinite(y) &&
+        typeof scale === 'number' &&
+        Number.isFinite(scale) &&
+        scale > 0
+      ) {
+        setViewport({ x, y, scale: clamp(scale, 0.22, 2) })
+        restoredRef.current = true
+        return true
+      }
+    } catch {
+      // 读取或解析失败按无记录处理。
+    }
+    restoredRef.current = true
+    return false
+  }, [])
+
   return {
     viewport,
     viewportRef,
@@ -129,6 +179,7 @@ export function useCanvasViewport({
     fitView,
     zoomBy,
     getCenterWorld,
+    restoreViewport,
     pulseId,
   }
 }

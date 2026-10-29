@@ -206,12 +206,23 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [importPaths],
   )
 
-  const { workspace, setWorkspace, saveState, flush } = useScenePersistence({
+  const { workspace, setWorkspace, hydrated, saveState, flush } = useScenePersistence({
     store,
     message,
     onHydrated,
     onImportPaths,
   })
+
+  // 场景加载完成后恢复上次视口；无记录时适配全部内容，避免启动后停在空白处。
+  const viewportRestored = useRef(false)
+  useEffect(() => {
+    if (!hydrated || viewportRestored.current) return
+    viewportRestored.current = true
+    void (async () => {
+      const restored = await canvasRef.current?.restoreViewport()
+      if (!restored) canvasRef.current?.fitView()
+    })()
+  }, [hydrated])
 
   // ---------- 右键菜单动作 ----------
 
@@ -745,6 +756,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           selectedEdgeId={store.selectedEdgeId}
           detailsOpen={Boolean(store.detailsNode)}
           paused={suspended}
+          viewportPersistReady={hydrated && isDesktopClient}
           onSelect={store.selectNode}
           onBoxSelect={store.boxSelect}
           onClearSelection={store.clearSelection}
