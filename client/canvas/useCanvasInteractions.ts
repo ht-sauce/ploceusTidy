@@ -12,7 +12,7 @@ import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import type { Rect } from '@/domain/layout'
 import { GHOST_DRAG_LIMIT, type HandleSide } from './constants'
-import { asHandleSide, edgePoints } from './geometry'
+import { asHandleSide, edgePoints, routeEdgePath } from './geometry'
 import {
   GROUP_MIN_H,
   GROUP_MIN_W,
@@ -58,6 +58,18 @@ function resizedBoxOf(box: Rect, corner: GroupResizeCorner, dx: number, dy: numb
   return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) }
 }
 
+/** 落点侧边：按指针在目标框内的相对位置取最近边中点。 */
+function nearestSideOf(box: Box, world: Point): string {
+  const relX = (world.x - box.x) / box.w
+  const relY = (world.y - box.y) / box.h
+  const dist = { left: relX, right: 1 - relX, top: relY, bottom: 1 - relY }
+  let best: keyof typeof dist = 'left'
+  for (const side of ['right', 'top', 'bottom'] as const) {
+    if (dist[side] < dist[best]) best = side
+  }
+  return best
+}
+
 interface UseCanvasInteractionsOptions {
   nodes: SceneNode[]
   groups: SceneGroup[]
@@ -84,6 +96,14 @@ interface UseCanvasInteractionsOptions {
   landingBlocked: (rect: Rect, movingIds: Set<string>) => boolean
   /** 对齐吸附邻居查询：rbush 取矩形 pad 范围内的非移动对象矩形，替代逐帧全量扫描。 */
   nearbyRects: (rect: Rect, pad: number, excludeIds: Set<string>) => Rect[]
+  /** 连线会话落点命中：rbush 点查节点 + 空间线性判定，拉线高亮与提交目标共用。 */
+  hitTarget: (
+    x: number,
+    y: number,
+    excludeIds: Set<string>,
+  ) => { kind: 'node' | 'group'; id: string } | null
+  /** 避障连线障碍查询：节点走索引、空间线性，返回与矩形相交的展示框。 */
+  obstaclesNear: (rect: Rect, excludeIds: Set<string>) => Rect[]
   onSelect: (id: string, additive: boolean) => void
   onBoxSelect: (ids: string[], additive: boolean) => void
   onClearSelection: () => void
@@ -93,6 +113,8 @@ interface UseCanvasInteractionsOptions {
   onResizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   onMoveNodes: (moves: { id: string; x: number; y: number }[]) => void
   onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
+  /** 拖动选中连线的端点到新目标后提交改接。 */
+  onReconnectEdge: (edgeId: string, end: 'from' | 'to', targetId: string, handle: string) => void
   onActivate: (id: string) => void
   /** 双击文字/富文本：打开内容编辑弹窗（内容编辑不再在画布上内联进行）。 */
   onEditContent: (id: string) => void
@@ -130,6 +152,8 @@ export function useCanvasInteractions({
   nodeRectOf,
   landingBlocked,
   nearbyRects,
+  hitTarget,
+  obstaclesNear,
   onSelect,
   onBoxSelect,
   onClearSelection,
@@ -138,6 +162,7 @@ export function useCanvasInteractions({
   onResizeGroup,
   onMoveNodes,
   onConnect,
+  onReconnectEdge,
   onActivate,
   onEditContent,
   onDragOut,
@@ -150,6 +175,17 @@ export function useCanvasInteractions({
     side: HandleSide
     x: number
     y: number
+  } | null>(null)
+  /** 拉线/改端点会话中指针悬停的候选目标：驱动画布上的高亮框。 */
+  const [connectTargetId, setConnectTargetId] = useState<string | null>(null)
+  /** 改端点会话的预览线：固定端锚点 → 当前指针。 */
+  const [reconnectPreview, setReconnectPreview] = useState<{
+    edgeId: string
+    end: 'from' | 'to'
+    x1: number
+    y1: number
+    x2: number
+    y2: number
   } | null>(null)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node: SceneNode } | null>(null)
   // 空格键按住时才允许拖动画布，避免左键拖空白被误当成平移。
@@ -185,6 +221,16 @@ export function useCanvasInteractions({
     side: HandleSide
     x: number
     y: number
+  } | null>(null)
+  /** 连线端点改接会话：固定端锚点供预览线使用，excludeIds 排除线的两端。 */
+  const edgeReconnect = useRef<{
+    edgeId: string
+    end: 'from' | 'to'
+    fixedX: number
+    fixedY: number
+    x: number
+    y: number
+    excludeIds: Set<string>
   } | null>(null)
   const groupDrag = useRef<{
     id: string
@@ -338,13 +384,27 @@ export function useCanvasInteractions({
         const from = edge.from === groupBox?.id ? groupBox.box : boxOf(edge.from)
         const to = edge.to === groupBox?.id ? groupBox.box : boxOf(edge.to)
         if (!from || !to) return
-        shape.setAttr(
-          'points',
-          edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle)),
+        // 避障路由：直线段被对象/空间挡住时绕行，否则保持原贝塞尔。
+        const exclude = new Set([edge.from, edge.to])
+        const minX = Math.min(from.x, to.x)
+        const minY = Math.min(from.y, to.y)
+        const bbox = {
+          x: minX,
+          y: minY,
+          w: Math.max(from.x + from.w, to.x + to.w) - minX,
+          h: Math.max(from.y + from.h, to.y + to.h) - minY,
+        }
+        const route = routeEdgePath(
+          from,
+          to,
+          asHandleSide(edge.fromHandle),
+          asHandleSide(edge.toHandle),
+          obstaclesNear(bbox, exclude),
         )
+        shape.setAttrs({ points: route.points, bezier: route.bezier })
       })
     },
-    [boxOf, edgeIndex, edgeRefs],
+    [boxOf, edgeIndex, edgeRefs, obstaclesNear],
   )
 
   /**
@@ -568,6 +628,27 @@ export function useCanvasInteractions({
       return
     }
 
+    if (edgeReconnect.current) {
+      const session = edgeReconnect.current
+      const world = worldAt(pointer.x, pointer.y)
+      session.x = world.x
+      session.y = world.y
+      setReconnectPreview({
+        edgeId: session.edgeId,
+        end: session.end,
+        x1: session.fixedX,
+        y1: session.fixedY,
+        x2: world.x,
+        y2: world.y,
+      })
+      const target = hitTarget(world.x, world.y, session.excludeIds)
+      setConnectTargetId((previous) => {
+        const next = target?.id ?? null
+        return next === previous ? previous : next
+      })
+      return
+    }
+
     if (connectSession.current) {
       const world = worldAt(pointer.x, pointer.y)
       connectSession.current.x = world.x
@@ -577,6 +658,12 @@ export function useCanvasInteractions({
         side: connectSession.current.side,
         x: world.x,
         y: world.y,
+      })
+      // 指针下的候选目标实时高亮：rbush 点查，10 万对象也不卡。
+      const target = hitTarget(world.x, world.y, new Set([connectSession.current.from]))
+      setConnectTargetId((previous) => {
+        const next = target?.id ?? null
+        return next === previous ? previous : next
       })
       return
     }
@@ -745,13 +832,14 @@ export function useCanvasInteractions({
     const pointer = stage.getPointerPosition()
     if (!pointer) return
     applyPointer(pointer)
-    // 只有改坐标的会话才自动平移：拖对象、拖空间、调框、拉连线、框选。
+    // 只有改坐标的会话才自动平移：拖对象、拖空间、调框、拉连线、改端点、框选。
     if (
       !dragOutPending.current &&
       (dragSession.current ||
         groupDrag.current ||
         groupResize.current ||
         connectSession.current ||
+        edgeReconnect.current ||
         boxSession.current)
     ) {
       updateAutoPan(pointer)
@@ -763,54 +851,42 @@ export function useCanvasInteractions({
     const pointer = stage?.getPointerPosition()
     dragOutPending.current = null
 
+    if (edgeReconnect.current) {
+      const session = edgeReconnect.current
+      edgeReconnect.current = null
+      setReconnectPreview(null)
+      setConnectTargetId(null)
+      // 拖动端点后紧跟的 click 不能再触发选择。
+      panMoved.current = true
+      stopAutoPan()
+      const world = pointer ? worldAt(pointer.x, pointer.y) : { x: session.x, y: session.y }
+      // 落在新目标上提交改接，落到空白视为取消；两端自身不可作为目标。
+      const target = hitTarget(world.x, world.y, session.excludeIds)
+      if (target) {
+        const targetBox = boxOf(target.id)
+        const toHandle = targetBox ? nearestSideOf(targetBox, world) : 'left'
+        onReconnectEdge(session.edgeId, session.end, target.id, toHandle)
+      }
+      return
+    }
+
     if (connectSession.current) {
       const session = connectSession.current
       connectSession.current = null
       setConnectPreview(null)
+      setConnectTargetId(null)
       // 拖出连线后紧跟的 click 不能再清空选择。
       panMoved.current = true
       const world = pointer ? worldAt(pointer.x, pointer.y) : { x: session.x, y: session.y }
       // 连线会话在这里就返回了，必须自己收尾自动平移，否则视口会一直跟着指针跑。
       stopAutoPan()
-      // 命中指针下方的节点优先，其次落在某个空间框内；都没有则视为取消。
-      const hitNode = [...nodes]
-        .reverse()
-        .find(
-          (node) =>
-            node.id !== session.from &&
-            world.x >= node.x &&
-            world.x <= node.x + node.w &&
-            world.y >= node.y &&
-            world.y <= node.y + node.h,
-        )
-      const hitGroup = hitNode
-        ? null
-        : [...groups]
-            .reverse()
-            .find(
-              (group) =>
-                group.id !== session.from &&
-                world.x >= group.x &&
-                world.x <= group.x + group.w &&
-                world.y >= group.y &&
-                world.y <= group.y + group.h,
-            )
-      const targetId = hitNode?.id ?? hitGroup?.id
+      // 命中指针下方的节点优先（rbush 点查，候选取 z 最高），其次落在某个空间框内。
+      const target = hitTarget(world.x, world.y, new Set([session.from]))
+      const targetId = target?.id
       if (targetId) {
         // 落点侧边：按指针在目标框内的相对位置取最近边中点，反向即目标连线锚点。
         const targetBox = boxOf(targetId)
-        let toHandle: string = 'left'
-        if (targetBox) {
-          const relX = (world.x - targetBox.x) / targetBox.w
-          const relY = (world.y - targetBox.y) / targetBox.h
-          const dist = {
-            left: relX,
-            right: 1 - relX,
-            top: relY,
-            bottom: 1 - relY,
-          } as Record<string, number>
-          toHandle = Object.keys(dist).reduce((best, key) => (dist[key] < dist[best] ? key : best))
-        }
+        const toHandle = targetBox ? nearestSideOf(targetBox, world) : 'left'
         onConnect(session.from, targetId, session.side, toHandle)
       }
       return
@@ -934,6 +1010,7 @@ export function useCanvasInteractions({
         boxSession.current ||
         dragSession.current ||
         connectSession.current ||
+        edgeReconnect.current ||
         groupDrag.current ||
         groupResize.current ||
         panStart.current
@@ -1082,6 +1159,49 @@ export function useCanvasInteractions({
     beginSession()
   }
 
+  /** 画布空白右键：只有点在空白区域才触发；对象/空间/连线的右键会 cancelBubble。 */
+  const handleStageContextMenu = (event: KonvaEventObject<MouseEvent>) => {
+    if (event.target !== stageRef.current) return
+    event.evt.preventDefault()
+    onContextMenu({ kind: 'canvas' }, event.evt.clientX, event.evt.clientY)
+  }
+
+  /** 选中连线端点手柄按下：开启改接会话，固定端为另一端锚点，拖到新目标松手提交。 */
+  const handleEdgeHandleDown = (
+    event: KonvaEventObject<MouseEvent>,
+    edge: SceneEdge,
+    end: 'from' | 'to',
+  ) => {
+    if (event.evt.button !== 0) return
+    const pointer = stageRef.current?.getPointerPosition()
+    if (!pointer) return
+    event.cancelBubble = true
+    const from = boxOf(edge.from)
+    const to = boxOf(edge.to)
+    if (!from || !to) return
+    const base = edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle))
+    const fixed = end === 'from' ? { x: base[6], y: base[7] } : { x: base[0], y: base[1] }
+    const world = worldAt(pointer.x, pointer.y)
+    edgeReconnect.current = {
+      edgeId: edge.id,
+      end,
+      fixedX: fixed.x,
+      fixedY: fixed.y,
+      x: world.x,
+      y: world.y,
+      excludeIds: new Set([edge.from, edge.to]),
+    }
+    setReconnectPreview({
+      edgeId: edge.id,
+      end,
+      x1: fixed.x,
+      y1: fixed.y,
+      x2: world.x,
+      y2: world.y,
+    })
+    beginSession()
+  }
+
   const handleGroupClick = (event: KonvaEventObject<MouseEvent>, groupId: string) => {
     event.cancelBubble = true
     onSelectGroup(groupId)
@@ -1160,6 +1280,8 @@ export function useCanvasInteractions({
     selectionRect,
     guides,
     connectPreview,
+    connectTargetId,
+    reconnectPreview,
     tooltip,
     getPointerWorld,
     handleWheel,
@@ -1167,11 +1289,13 @@ export function useCanvasInteractions({
     handleStagePointerMove,
     handleStagePointerUp,
     handleStageClick,
+    handleStageContextMenu,
     handleNodePointerDown,
     handleNodeClick,
     handleNodeDblClick,
     handleNodeContextMenu,
     handleHandleDown,
+    handleEdgeHandleDown,
     handleGroupBoxDown,
     handleGroupResizeDown,
     handleGroupClick,

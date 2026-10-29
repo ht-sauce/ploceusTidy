@@ -22,6 +22,8 @@ interface ContextMenuOptions {
   renameGroup: (id: string) => void
   /** 按当前顺序整理空间内对象。 */
   arrangeGroup: (id: string) => void
+  /** 一键整理画布：空间收框 + 空间与散置对象装箱排列。 */
+  tidyCanvas: () => void
   pickGroupColor: (id: string) => void
   pickEdgeColor: (id: string) => void
   /** 跳转到当前对象/空间的关联对象；一对多时由调用方弹出选择。 */
@@ -40,6 +42,7 @@ export function useContextMenu({
   editEdgeLabel,
   renameGroup,
   arrangeGroup,
+  tidyCanvas,
   pickGroupColor,
   pickEdgeColor,
   locateNeighbor,
@@ -70,9 +73,9 @@ export function useContextMenu({
   /** 右键入口：先同步选中目标，再弹菜单；选中不再自动展开属性面板。 */
   const open = useCallback(
     (target: CanvasContextTarget, clientX: number, clientY: number) => {
-      if (target.kind === 'node') selectNode(target.id, false)
-      else if (target.kind === 'group') selectGroup(target.id)
-      else selectEdge(target.id)
+      if (target.kind === 'node' && target.id) selectNode(target.id, false)
+      else if (target.kind === 'group' && target.id) selectGroup(target.id)
+      else if (target.kind === 'edge' && target.id) selectEdge(target.id)
       // 菜单不能超出窗口；高度上限由 ContextMenu 按剩余空间计算，超出时内部滚动。
       setMenu({
         target,
@@ -93,7 +96,14 @@ export function useContextMenu({
       if (!current) return
       setMenu(null)
       const { target } = current
-      const node = target.kind === 'node' ? nodeById.get(target.id) : null
+      // 画布空白目标没有 id：只承接整理动作，其余菜单键直接忽略。
+      if (target.kind === 'canvas') {
+        if (key === 'canvas-tidy') tidyCanvas()
+        return
+      }
+      const id = target.id
+      if (!id) return
+      const node = target.kind === 'node' ? nodeById.get(id) : null
 
       if (key === 'open' && node) openNode(node)
       else if (key === 'reveal' && node) reveal(node)
@@ -104,15 +114,15 @@ export function useContextMenu({
       else if (key === 'layer-top' && node) store.raiseNode(node.id, 'top')
       else if (key === 'layer-bottom' && node) store.raiseNode(node.id, 'bottom')
       else if (key === 'locate-neighbor' && node) locateNeighbor(node.id)
-      else if (key === 'locate-neighbor') locateNeighbor(target.id)
-      else if (key === 'edge-label') editEdgeLabel(target.id)
-      else if (key === 'edge-color') pickEdgeColor(target.id)
-      else if (key === 'group-rename') renameGroup(target.id)
-      else if (key === 'group-arrange') arrangeGroup(target.id)
-      else if (key === 'group-color') pickGroupColor(target.id)
+      else if (key === 'locate-neighbor') locateNeighbor(id)
+      else if (key === 'edge-label') editEdgeLabel(id)
+      else if (key === 'edge-color') pickEdgeColor(id)
+      else if (key === 'group-rename') renameGroup(id)
+      else if (key === 'group-arrange') arrangeGroup(id)
+      else if (key === 'group-color') pickGroupColor(id)
       else if (key === 'system-menu' && node) {
         openSystemMenu(node.id, current.anchorX, current.anchorY)
-      } else if (key === 'delete') deleteTarget(target)
+      } else if (key === 'delete') deleteTarget({ kind: target.kind, id })
     },
     [
       addAnnotation,
@@ -132,6 +142,7 @@ export function useContextMenu({
       renameGroup,
       reveal,
       store,
+      tidyCanvas,
     ],
   )
 
@@ -139,8 +150,12 @@ export function useContextMenu({
   const entries: ContextMenuEntry[] = (() => {
     if (!menu) return []
     const { target } = menu
+    if (target.kind === 'canvas') {
+      return [{ key: 'canvas-tidy', label: '一键整理画布' }]
+    }
+    const id = target.id ?? ''
     if (target.kind === 'node') {
-      const node = nodeById.get(target.id)
+      const node = nodeById.get(id)
       if (!node) return []
       const items: ContextMenuEntry[] = []
       const hasNeighbor = edges.some((edge) => edge.from === node.id || edge.to === node.id)
@@ -184,10 +199,10 @@ export function useContextMenu({
         { key: 'delete', label: '删除连线', danger: true },
       ]
     }
-    const group = groupById.get(target.id)
+    const group = groupById.get(id)
     // 成员数来自 store 的计数 Map：菜单打开时不再对全量节点做 filter。
     const count = group ? (groupCounts.get(group.id) ?? 0) : 0
-    const hasNeighbor = edges.some((edge) => edge.from === target.id || edge.to === target.id)
+    const hasNeighbor = edges.some((edge) => edge.from === id || edge.to === id)
     return [
       { key: 'group-rename', label: '重命名空间' },
       { key: 'group-color', label: '空间颜色' },

@@ -126,6 +126,8 @@ export interface SceneStore {
   /** 手动调整空间框（四角拖拽提交）：只改框本身；下次成员变化时仍按内容自动贴合。 */
   resizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   connect: (from: string, to: string, fromHandle?: string, toHandle?: string) => void
+  /** 拖动连线端点改接目标；自连拒绝、同向重复忽略，进撤销栈。 */
+  reconnectEdge: (edgeId: string, end: 'from' | 'to', targetId: string, handle: string) => void
   /** 叠放层级：置顶取当前最大 z + 1；置底取最小 z - 1。 */
   raiseNode: (id: string, to: 'top' | 'bottom') => void
   /** 扩展样式：写入 `dataJson`；空串清空。非法 JSON 由调用方在保存前校验。 */
@@ -133,6 +135,8 @@ export interface SceneStore {
   createGroup: (label: string, color?: string) => SceneGroup | null
   /** 按当前阅读顺序整理空间内对象；返回整理的对象数量。 */
   arrangeGroup: (id: string) => number
+  /** 一键整理画布：空间内部网格收框后，空间与散置对象整体装箱排列；返回整理的单元数。 */
+  tidyCanvas: () => number
   renameGroup: (id: string, title: string) => void
   /** 折叠只影响渲染与命中，不改存储尺寸；属于视图状态，不进撤销栈。 */
   setGroupCollapsed: (id: string, collapsed: boolean) => void
@@ -579,6 +583,39 @@ export function useSceneStore(): SceneStore {
     [edges, markHistory],
   )
 
+  /** 拖动连线端点改接目标：自连拒绝、与既有同向边重复则忽略，提交进撤销栈。 */
+  const reconnectEdge = useCallback(
+    (edgeId: string, end: 'from' | 'to', targetId: string, handle: string) => {
+      const edge = edges.find((item) => item.id === edgeId)
+      if (!edge) return
+      if (end === 'from') {
+        if (targetId === edge.to) return
+        if (
+          edges.some((item) => item.id !== edgeId && item.from === targetId && item.to === edge.to)
+        )
+          return
+      } else {
+        if (targetId === edge.from) return
+        if (
+          edges.some(
+            (item) => item.id !== edgeId && item.from === edge.from && item.to === targetId,
+          )
+        )
+          return
+      }
+      markHistory()
+      setEdges((previous) =>
+        previous.map((item) => {
+          if (item.id !== edgeId) return item
+          return end === 'from'
+            ? { ...item, from: targetId, fromHandle: handle || undefined }
+            : { ...item, to: targetId, toHandle: handle || undefined }
+        }),
+      )
+    },
+    [edges, markHistory],
+  )
+
   /** 用当前选中对象的包围盒创建持久空间，并把对象归入该空间。 */
   const createGroup = useCallback(
     (label: string, color?: string) => {
@@ -694,6 +731,139 @@ export function useSceneStore(): SceneStore {
     },
     [annotatedIds, groupById, groups, markHistory, nodes],
   )
+
+  /**
+   * 一键整理画布：每个空间内部按「自动整理空间」同套网格收框，空间与散置
+   * 对象作为整体单元按阅读顺序装箱排列（高度降序分排、行内垂直居中）。
+   * 先在纯数据上算完整方案，再一次提交，整体进撤销栈；返回整理的单元数。
+   */
+  const tidyCanvas = useCallback(() => {
+    const activeGroups = groups.filter((group) => nodes.some((node) => node.groupId === group.id))
+    const freeNodes = nodes.filter((node) => !node.groupId)
+    if (activeGroups.length === 0 && freeNodes.length === 0) return 0
+    markHistory()
+
+    // 1. 空间内部网格整理（原点暂不动），记下成员新坐标与收框后的尺寸。
+    const groupSizes = new Map<string, { w: number; h: number }>()
+    const memberPositions = new Map<string, { x: number; y: number }>()
+    for (const group of activeGroups) {
+      const members = nodes.filter((node) => node.groupId === group.id)
+      const arranged = arrangeGroupMembers(members, group, LAYOUT_GAP, (node) =>
+        annotatedIds.has(node.id),
+      )
+      groupSizes.set(group.id, { w: arranged.width, h: arranged.height })
+      for (const position of arranged.positions) {
+        memberPositions.set(position.id, { x: position.x, y: position.y })
+      }
+    }
+
+    // 2. 装箱单元：空间在前、散置对象在后；按高度降序排，接近按行阅读的视觉顺序。
+    type Unit = { id: string; isGroup: boolean; w: number; h: number; label: string }
+    const units: Unit[] = []
+    for (const group of activeGroups) {
+      const size = groupSizes.get(group.id)
+      units.push({
+        id: group.id,
+        isGroup: true,
+        w: size ? size.w : group.w,
+        h: size ? size.h : group.h,
+        label: group.title,
+      })
+    }
+    for (const node of freeNodes) {
+      units.push({
+        id: node.id,
+        isGroup: false,
+        w: node.w,
+        h: nodeDisplayHeight(node, annotatedIds.has(node.id)),
+        label: node.name,
+      })
+    }
+    units.sort(
+      (left, right) => right.h - left.h || left.label.localeCompare(right.label, 'zh-Hans-CN'),
+    )
+
+    // 3. 行装箱：超宽换行，行高取该行最高单元。
+    const MAX_ROW_WIDTH = 1600
+    const rows: { units: Unit[]; width: number; height: number }[] = []
+    let current: { units: Unit[]; width: number; height: number } | null = null
+    for (const unit of units) {
+      if (!current) {
+        current = { units: [unit], width: unit.w, height: unit.h }
+        continue
+      }
+      const nextWidth: number = current.width + LAYOUT_GAP + unit.w
+      if (nextWidth > MAX_ROW_WIDTH) {
+        rows.push(current)
+        current = { units: [unit], width: unit.w, height: unit.h }
+      } else {
+        current = {
+          units: [...current.units, unit],
+          width: nextWidth,
+          height: Math.max(current.height, unit.h),
+        }
+      }
+    }
+    if (current) rows.push(current)
+
+    // 4. 以画布原点为中心铺排：整体居中，避免整理后跑向单侧。
+    const totalWidth = Math.max(...rows.map((row) => row.width))
+    const totalHeight =
+      rows.reduce((sum, row) => sum + row.height, 0) + LAYOUT_GAP * (rows.length - 1)
+    const originX = Math.round(-totalWidth / 2)
+    const originY = Math.round(-totalHeight / 2)
+
+    // 5. 分配坐标：行内按最大行宽水平居中，单元在行高内垂直居中。
+    const groupOffsets = new Map<string, { dx: number; dy: number }>()
+    const freePositions = new Map<string, { x: number; y: number }>()
+    let rowY = originY
+    for (const row of rows) {
+      let x = originX + Math.round((totalWidth - row.width) / 2)
+      for (const unit of row.units) {
+        const y = rowY + Math.round((row.height - unit.h) / 2)
+        if (unit.isGroup) {
+          const group = groups.find((item) => item.id === unit.id)
+          if (group) {
+            groupOffsets.set(unit.id, { dx: x - group.x, dy: y - group.y })
+          }
+        } else {
+          freePositions.set(unit.id, { x, y })
+        }
+        x += unit.w + LAYOUT_GAP
+      }
+      rowY += row.height + LAYOUT_GAP
+    }
+
+    // 6. 一次性提交：空间平移并收框；空间成员跟随空间平移；散置对象落到新位。
+    setGroups((previous) =>
+      previous.map((group) => {
+        const offset = groupOffsets.get(group.id)
+        if (!offset) return group
+        const size = groupSizes.get(group.id)
+        return {
+          ...group,
+          x: group.x + offset.dx,
+          y: group.y + offset.dy,
+          w: size ? size.w : group.w,
+          h: size ? size.h : group.h,
+        }
+      }),
+    )
+    setNodes((previous) =>
+      previous.map((node) => {
+        if (memberPositions.has(node.id)) {
+          const position = memberPositions.get(node.id)
+          const offset = node.groupId ? groupOffsets.get(node.groupId) : undefined
+          return position
+            ? { ...node, x: position.x + (offset?.dx ?? 0), y: position.y + (offset?.dy ?? 0) }
+            : node
+        }
+        const position = freePositions.get(node.id)
+        return position ? { ...node, x: position.x, y: position.y } : node
+      }),
+    )
+    return units.length
+  }, [annotatedIds, groups, markHistory, nodes])
 
   const setGroupCollapsed = useCallback((id: string, collapsed: boolean) => {
     setGroups((previous) =>
@@ -1039,10 +1209,12 @@ export function useSceneStore(): SceneStore {
     moveGroup,
     resizeGroup,
     connect,
+    reconnectEdge,
     raiseNode,
     updateNodeDataJson,
     createGroup,
     arrangeGroup,
+    tidyCanvas,
     renameGroup,
     setGroupCollapsed,
     moveNodeToGroup,

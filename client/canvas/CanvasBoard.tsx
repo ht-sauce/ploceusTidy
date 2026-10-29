@@ -70,6 +70,8 @@ interface CanvasBoardProps {
   onSelectEdge: (id: string) => void
   onEdgeLabelEdit: (id: string) => void
   onConnect: (from: string, to: string, fromHandle: string, toHandle: string) => void
+  /** 拖动选中连线的端点到新目标后提交改接。 */
+  onReconnectEdge: (edgeId: string, end: 'from' | 'to', targetId: string, handle: string) => void
   onAnnotation: (annotation: SceneAnnotation) => void
   onActivate: (id: string) => void
   /** 双击文字/富文本：打开内容编辑弹窗。 */
@@ -121,6 +123,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onSelectEdge,
     onEdgeLabelEdit,
     onConnect,
+    onReconnectEdge,
     onAnnotation,
     onActivate,
     onEditContent,
@@ -250,15 +253,16 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     [annotationByNode],
   )
 
-  const { visibleNodes, visibleEdges, landingBlocked, nearbyRects } = useVisibleScene({
-    nodes,
-    edges,
-    nodeById,
-    groupById,
-    viewport,
-    nodeHeightOf,
-    size,
-  })
+  const { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget, obstaclesNear } =
+    useVisibleScene({
+      nodes,
+      edges,
+      nodeById,
+      groupById,
+      viewport,
+      nodeHeightOf,
+      size,
+    })
 
   useVisibleThumbnails(visibleNodes, !paused)
 
@@ -321,6 +325,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     nodeRectOf,
     landingBlocked,
     nearbyRects,
+    hitTarget,
+    obstaclesNear,
     onSelect,
     onBoxSelect,
     onClearSelection,
@@ -329,6 +335,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     onResizeGroup,
     onMoveNodes,
     onConnect,
+    onReconnectEdge,
     onActivate,
     onEditContent,
     onDragOut,
@@ -383,6 +390,8 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     () => ({
       onContextMenu: (event: KonvaEventObject<MouseEvent>, id: string) =>
         interactionsRef.current.handleEdgeContextMenu(event, id),
+      onHandleDown: (event: KonvaEventObject<MouseEvent>, edge: SceneEdge, end: 'from' | 'to') =>
+        interactionsRef.current.handleEdgeHandleDown(event, edge, end),
     }),
     [],
   )
@@ -544,6 +553,7 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
         onPointerMove={interactions.handleStagePointerMove}
         onPointerUp={interactions.handleStagePointerUp}
         onClick={interactions.handleStageClick}
+        onContextMenu={interactions.handleStageContextMenu}
       >
         {/* 空间（分组框）：点框内空白即可选中并整体拖动，也可作为连线端点。 */}
         <Layer>
@@ -569,11 +579,13 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
             selectedEdgeId={selectedEdgeId}
             tokens={tokens}
             boxOf={boxOf}
+            obstaclesNear={obstaclesNear}
             surfaceColor={tokens.surface}
             registerRef={registerEdgeRef}
             onSelect={onSelectEdge}
             onLabelEdit={onEdgeLabelEdit}
             onContextMenu={edgeHandlers.onContextMenu}
+            onHandleDown={edgeHandlers.onHandleDown}
           />
         </Layer>
 
@@ -815,6 +827,44 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
                 return (
                   <Arrow
                     points={[box.x + offset.x, box.y + offset.y, preview.x, preview.y]}
+                    stroke={tokens.primary}
+                    fill={tokens.primary}
+                    strokeWidth={1.5}
+                    dash={[5, 4]}
+                    listening={false}
+                  />
+                )
+              })()
+            : null}
+
+          {/* 连线会话的目标高亮：拉线/改端点悬停到的对象或空间给一圈描边提示。 */}
+          {interactions.connectTargetId
+            ? (() => {
+                const box = boxOf(interactions.connectTargetId)
+                if (!box) return null
+                return (
+                  <Rect
+                    x={box.x - 5}
+                    y={box.y - 5}
+                    width={box.w + 10}
+                    height={box.h + 10}
+                    stroke={tokens.primary}
+                    strokeWidth={2}
+                    dash={[6, 4]}
+                    cornerRadius={8}
+                    listening={false}
+                  />
+                )
+              })()
+            : null}
+
+          {/* 改端点预览线：固定端锚点 → 当前指针，落点提交或取消。 */}
+          {interactions.reconnectPreview
+            ? (() => {
+                const preview = interactions.reconnectPreview
+                return (
+                  <Arrow
+                    points={[preview.x1, preview.y1, preview.x2, preview.y2]}
                     stroke={tokens.primary}
                     fill={tokens.primary}
                     strokeWidth={1.5}

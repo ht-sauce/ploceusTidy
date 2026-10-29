@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import RBush from 'rbush'
 import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
-import { LAYOUT_GAP, type Rect } from '@/domain/layout'
+import { LAYOUT_GAP, groupDisplayBox, type Rect } from '@/domain/layout'
 import type { CanvasViewport, StageSize } from './types'
 
 interface BoundsItem {
@@ -177,5 +177,81 @@ export function useVisibleScene({
       }))
   }, [])
 
-  return { visibleNodes, visibleEdges, landingBlocked, nearbyRects }
+  /**
+   * 连线会话的落点命中：优先节点（rbush 点查，多个候选取 z 最高），其次空间
+   * （数量少，线性倒序）。与画布 z 序渲染保持一致，供拉线高亮与提交目标共用。
+   */
+  const hitTarget = useCallback(
+    (
+      x: number,
+      y: number,
+      excludeIds: Set<string>,
+    ): { kind: 'node' | 'group'; id: string } | null => {
+      const tree = indexRef.current?.tree
+      if (tree) {
+        const hits = tree.search({ minX: x, minY: y, maxX: x, maxY: y })
+        let best: SceneNode | null = null
+        for (const item of hits) {
+          if (excludeIds.has(item.id)) continue
+          const node = nodeById.get(item.id)
+          if (node && (!best || node.z > best.z)) best = node
+        }
+        if (best) return { kind: 'node', id: best.id }
+      }
+      const groups = Array.from(groupById.values())
+      for (let i = groups.length - 1; i >= 0; i--) {
+        const group = groups[i]
+        if (excludeIds.has(group.id)) continue
+        const box = groupDisplayBox(group)
+        if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) {
+          return { kind: 'group', id: group.id }
+        }
+      }
+      return null
+    },
+    [groupById, nodeById],
+  )
+
+  /**
+   * 避障连线的障碍查询：节点走常驻索引（O(log N + k)），空间数量少线性过滤。
+   * 返回与查询矩形相交的对象展示框，供 routeEdgePath 判定与搜索使用。
+   */
+  const obstaclesNear = useCallback(
+    (rect: Rect, excludeIds: Set<string>): Rect[] => {
+      const tree = indexRef.current?.tree
+      const rects: Rect[] = []
+      if (tree) {
+        for (const item of tree.search({
+          minX: rect.x,
+          minY: rect.y,
+          maxX: rect.x + rect.w,
+          maxY: rect.y + rect.h,
+        })) {
+          if (excludeIds.has(item.id)) continue
+          rects.push({
+            x: item.minX,
+            y: item.minY,
+            w: item.maxX - item.minX,
+            h: item.maxY - item.minY,
+          })
+        }
+      }
+      for (const group of groupById.values()) {
+        if (excludeIds.has(group.id)) continue
+        const box = groupDisplayBox(group)
+        if (
+          box.x <= rect.x + rect.w &&
+          box.x + box.w >= rect.x &&
+          box.y <= rect.y + rect.h &&
+          box.y + box.h >= rect.y
+        ) {
+          rects.push(box)
+        }
+      }
+      return rects
+    },
+    [groupById],
+  )
+
+  return { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget, obstaclesNear }
 }

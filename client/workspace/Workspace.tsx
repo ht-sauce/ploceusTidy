@@ -307,6 +307,13 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [message, store],
   )
 
+  /** 一键整理画布：空间收框 + 空间与散置对象装箱排列。 */
+  const tidyWholeCanvas = useCallback(() => {
+    const count = store.tidyCanvas()
+    if (count > 0) message.success(`已整理 ${count} 个单元`)
+    else message.info('画布上还没有内容')
+  }, [message, store])
+
   // ---------- 原文件复制与拖出 ----------
 
   /** 拖出到外部程序：只传有真实路径的对象 ID，路径由 Rust 侧查库解析（不信任前端路径）。 */
@@ -348,6 +355,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     editEdgeLabel: openEdgeLabel,
     renameGroup: openGroupTitle,
     arrangeGroup: arrangeSpace,
+    tidyCanvas: tidyWholeCanvas,
     pickGroupColor: openGroupColor,
     pickEdgeColor: openEdgeColor,
     locateNeighbor,
@@ -748,6 +756,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           onEdgeLabelEdit={openEdgeLabel}
           onGroupTitleEdit={openGroupTitle}
           onConnect={store.connect}
+          onReconnectEdge={store.reconnectEdge}
           onAnnotation={store.openAnnotation}
           onActivate={(id) => {
             const node = store.nodeById.get(id)
