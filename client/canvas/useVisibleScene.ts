@@ -212,46 +212,5 @@ export function useVisibleScene({
     [groupById, nodeById],
   )
 
-  /**
-   * 避障连线的障碍查询：节点走常驻索引（O(log N + k)），空间数量少线性过滤。
-   * 返回与查询矩形相交的对象展示框，供 routeEdgePath 判定与搜索使用。
-   */
-  const obstaclesNear = useCallback(
-    (rect: Rect, excludeIds: Set<string>): Rect[] => {
-      const tree = indexRef.current?.tree
-      const rects: Rect[] = []
-      if (tree) {
-        for (const item of tree.search({
-          minX: rect.x,
-          minY: rect.y,
-          maxX: rect.x + rect.w,
-          maxY: rect.y + rect.h,
-        })) {
-          if (excludeIds.has(item.id)) continue
-          rects.push({
-            x: item.minX,
-            y: item.minY,
-            w: item.maxX - item.minX,
-            h: item.maxY - item.minY,
-          })
-        }
-      }
-      for (const group of groupById.values()) {
-        if (excludeIds.has(group.id)) continue
-        const box = groupDisplayBox(group)
-        if (
-          box.x <= rect.x + rect.w &&
-          box.x + box.w >= rect.x &&
-          box.y <= rect.y + rect.h &&
-          box.y + box.h >= rect.y
-        ) {
-          rects.push(box)
-        }
-      }
-      return rects
-    },
-    [groupById],
-  )
-
-  return { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget, obstaclesNear }
+  return { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget }
 }

@@ -99,6 +99,13 @@ function NodeShape({
       onMouseLeave={onHoverEnd}
       onContextMenu={(event) => onContextMenu(event, node)}
     >
+      {/*
+        卡片底：不透明，且作为整块命中区。
+        - 没有它时只有图标与文字可点，卡片的空白处会穿透到背后的连线，
+          结果是「点元素却选中了连线」，随后 G 键因为选中集里没有元素而不生效；
+        - 连线层在元素之下，靠这层底色才真正被挡住，否则虚线会从卡片里透出来。
+      */}
+      <Rect width={node.w} height={height} fill={tokens.surface} cornerRadius={6} />
       {selected ? (
         <Rect
           width={node.w}

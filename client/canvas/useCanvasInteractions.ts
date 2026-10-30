@@ -12,7 +12,7 @@ import type { SceneEdge, SceneGroup, SceneNode } from '@/types/scene'
 import type { CanvasContextTarget, CanvasViewport, StageSize } from './types'
 import type { Rect } from '@/domain/layout'
 import { GHOST_DRAG_LIMIT, type HandleSide } from './constants'
-import { asHandleSide, edgePoints, routeEdgePath } from './geometry'
+import { asHandleSide, edgePoints } from './geometry'
 import {
   GROUP_MIN_H,
   GROUP_MIN_W,
@@ -102,8 +102,6 @@ interface UseCanvasInteractionsOptions {
     y: number,
     excludeIds: Set<string>,
   ) => { kind: 'node' | 'group'; id: string } | null
-  /** 避障连线障碍查询：节点走索引、空间线性，返回与矩形相交的展示框。 */
-  obstaclesNear: (rect: Rect, excludeIds: Set<string>) => Rect[]
   onSelect: (id: string, additive: boolean) => void
   onBoxSelect: (ids: string[], additive: boolean) => void
   onClearSelection: () => void
@@ -153,7 +151,6 @@ export function useCanvasInteractions({
   landingBlocked,
   nearbyRects,
   hitTarget,
-  obstaclesNear,
   onSelect,
   onBoxSelect,
   onClearSelection,
@@ -400,27 +397,14 @@ export function useCanvasInteractions({
         const from = edge.from === groupBox?.id ? groupBox.box : boxOf(edge.from)
         const to = edge.to === groupBox?.id ? groupBox.box : boxOf(edge.to)
         if (!from || !to) return
-        // 避障路由：直线段被对象/空间挡住时绕行，否则保持原贝塞尔。
-        const exclude = new Set([edge.from, edge.to])
-        const minX = Math.min(from.x, to.x)
-        const minY = Math.min(from.y, to.y)
-        const bbox = {
-          x: minX,
-          y: minY,
-          w: Math.max(from.x + from.w, to.x + to.w) - minX,
-          h: Math.max(from.y + from.h, to.y + to.h) - minY,
-        }
-        const route = routeEdgePath(
-          from,
-          to,
-          asHandleSide(edge.fromHandle),
-          asHandleSide(edge.toHandle),
-          obstaclesNear(bbox, exclude),
-        )
-        shape.setAttrs({ points: route.points, bezier: route.bezier })
+        // 连线在最底层，遮挡由图层顺序解决：拖动期只需按新矩形重算一条贝塞尔。
+        shape.setAttrs({
+          points: edgePoints(from, to, asHandleSide(edge.fromHandle), asHandleSide(edge.toHandle)),
+          bezier: true,
+        })
       })
     },
-    [boxOf, edgeIndex, edgeRefs, obstaclesNear],
+    [boxOf, edgeIndex, edgeRefs],
   )
 
   /**

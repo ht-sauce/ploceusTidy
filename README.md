@@ -14,7 +14,7 @@
 
 | 渠道 | 地址 |
 | --- | --- |
-| 最新安装包（v0.3.1） | [release/络雀_0.3.1_x64-setup.exe](release/络雀_0.3.1_x64-setup.exe) |
+| 最新安装包（v0.3.2） | [release/络雀_0.3.2_x64-setup.exe](release/络雀_0.3.2_x64-setup.exe) |
 | GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
 
 安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。

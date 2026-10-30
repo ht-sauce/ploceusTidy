@@ -260,16 +260,15 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     [annotationByNode],
   )
 
-  const { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget, obstaclesNear } =
-    useVisibleScene({
-      nodes,
-      edges,
-      nodeById,
-      groupById,
-      viewport,
-      nodeHeightOf,
-      size,
-    })
+  const { visibleNodes, visibleEdges, landingBlocked, nearbyRects, hitTarget } = useVisibleScene({
+    nodes,
+    edges,
+    nodeById,
+    groupById,
+    viewport,
+    nodeHeightOf,
+    size,
+  })
 
   useVisibleThumbnails(visibleNodes, !paused)
 
@@ -333,7 +332,6 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
     landingBlocked,
     nearbyRects,
     hitTarget,
-    obstaclesNear,
     onSelect,
     onBoxSelect,
     onClearSelection,
@@ -588,14 +586,15 @@ const CanvasBoard = forwardRef<CanvasBoardHandle, CanvasBoardProps>(function Can
           ))}
         </Layer>
 
-        {/* 连线层必须接收事件，否则边无法选中、也无法双击编辑标签。 */}
+        {/* 连线压在元素之下、空间之上（z 序 1.5）：元素永远盖住线条，所以不需要避障寻路；
+            但不能再压到空间底色下面——空间底色不透明，空间内部的连线会整条消失。
+            该层必须接收事件，否则连线选不中、也双击不了标签。 */}
         <Layer>
           <EdgeLayer
             edges={visibleEdges}
             selectedEdgeId={selectedEdgeId}
             tokens={tokens}
             boxOf={boxOf}
-            obstaclesNear={obstaclesNear}
             surfaceColor={tokens.surface}
             registerRef={registerEdgeRef}
             onSelect={onSelectEdge}

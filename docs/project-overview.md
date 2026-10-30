@@ -73,14 +73,14 @@ ploceusTidy/
 │   ├── canvas/                     # 画布域（Konva 渲染与交互）
 │   │   ├── CanvasBoard.tsx         # 图层编排：组合视口/可见性/交互会话
 │   │   ├── useCanvasViewport.ts    # 视口缩放、定位、适配、缩放回调
-│   │   ├── useVisibleScene.ts      # rbush 常驻增量索引（按矩形增删）、视口裁剪、连线筛选、落点命中与避障障碍查询
+│   │   ├── useVisibleScene.ts      # rbush 常驻增量索引（按矩形增删）、视口裁剪、连线筛选、落点命中
 │   │   ├── useCanvasInteractions.ts # 平移/框选/拖动/连线（目标高亮）/连线端点改接/空间拖动与四角调框/边缘自动平移/悬停会话（世界坐标增量）
 │   │   ├── useVisibleThumbnails.ts # 可见图片 / 可执行对象的缩略图与图标延迟加载
 │   │   ├── NodeShape.tsx           # 对象图标格、名称、标注条（独占底部区域）、扩展色描边、四向锚点
 │   │   ├── GroupShape.tsx          # 空间实线框与命中区域（折叠时只画标题条高度）
-│   │   ├── EdgeLayer.tsx           # 有向连线（避障路由）、标签、端点拖拽手柄、连线菜单
+│   │   ├── EdgeLayer.tsx           # 有向连线（元素之下、不做避障）、标签、端点拖拽手柄、连线菜单
 │   │   ├── Minimap.tsx             # 迷你地图与点击定位（折叠空间按标题条绘制）
-│   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径、避障路由（Liang-Barsky + 粗网格 A* + Catmull-Rom，纯函数）
+│   │   ├── geometry.ts             # 坐标、名称、类型色、连线路径（锚点 + 对称贝塞尔，纯函数）
 │   │   ├── icons.tsx               # 系统图标与缩略图缓存（缩略图有 400 张上界）
 │   │   ├── constants.ts            # 迷你地图、名称预算、标注高度、空间调色板、渲染倍率等常量
 │   │   └── types.ts                # 右键目标、视口、舞台尺寸类型
@@ -140,7 +140,7 @@ client/
 | 产品定位、架构总纲 | `docs/spec/00-overview.md` |
 | 技术选型与历史决策 | `docs/spec/08-adr.md` |
 | 窗口形态、高密度 UI、系统图标 | `desktop/tauri.conf.json`、`client/components/TitleBar.tsx`、`client/canvas/CanvasBoard.tsx`、`client/components/SystemIcon.tsx`、`docs/spec/03-ui-interaction.md` |
-| 画布平移缩放、Konva 渲染、空间与锚点连线（拉线高亮、端点改接、避障路由）、不重叠与吸附（拖动期不校验、松手 rbush 判定落点）、自动整理、一键整理画布、右键菜单、迷你地图 | `client/canvas/*`、`client/domain/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
+| 画布平移缩放、Konva 渲染、空间与锚点连线（拉线高亮、端点改接、连线压在元素之下）、不重叠与吸附（拖动期不校验、松手 rbush 判定落点）、自动整理、一键整理画布、右键菜单、迷你地图 | `client/canvas/*`、`client/domain/layout.ts`、`docs/spec/02-client-architecture.md` §4 |
 | 场景命令、选择、撤销/重做栈、方向键微调、标注、空间成员自动归属与进出空间整理、空间/连线配色、空间自动整理与手动调框、tidyCanvas、reconnectEdge | `client/workspace/useSceneStore.ts` |
 | 加载/保存/flush/关窗先落库/保存状态、缺失校验、拖入、快捷键、右键菜单动作、最小化暂停 | `client/workspace/useScenePersistence.ts`、`useShortcuts.ts`、`useContextMenu.ts`、`useWindowSuspended.ts`、`lib/tauri-api.ts` |
 | 打开/定位/重连/导入与粘贴 | `client/workspace/useNodeActions.ts`、`useImportClipboard.ts` |

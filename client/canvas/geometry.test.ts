@@ -1,97 +1,52 @@
-/** 避障连线路径的纯函数测试：相交判定、绕行触发与端点精度。 */
+/**
+ * 连线路径的纯函数测试。
+ * 避障已随「连线层下沉到底层」移除（见 ADR-039），这里只锁两件事：
+ * 自动选边不能穿过卡片内容、显式锚点必须精确落在侧边中点。
+ */
 import { describe, expect, it } from 'vitest'
-import {
-  routeEdgePath,
-  segmentIntersectsRect,
-  smoothBezierPoints,
-  type RoutePoint,
-} from './geometry'
+import { asHandleSide, edgePoints } from './geometry'
 import type { Box } from './geometry'
 
-describe('segmentIntersectsRect', () => {
-  const rect: Box = { x: 100, y: 100, w: 50, h: 50 }
-  it('横穿矩形的线段判为相交', () => {
-    expect(segmentIntersectsRect(0, 125, 300, 125, rect)).toBe(true)
-  })
-  it('不接触矩形的线段判为不相交', () => {
-    expect(segmentIntersectsRect(0, 40, 300, 40, rect)).toBe(false)
-    expect(segmentIntersectsRect(0, 200, 60, 200, rect)).toBe(false)
-  })
-  it('斜线擦边也判为相交', () => {
-    expect(segmentIntersectsRect(90, 90, 160, 160, rect)).toBe(true)
-  })
-})
-
-describe('routeEdgePath', () => {
+describe('edgePoints', () => {
   const from: Box = { x: 0, y: 0, w: 100, h: 60 }
   const to: Box = { x: 400, y: 0, w: 100, h: 60 }
 
-  it('无障碍时保持直连贝塞尔（8 值单段格式）', () => {
-    const route = routeEdgePath(from, to, 'right', 'left', [])
-    expect(route.waypoints).toBeNull()
-    expect(route.bezier).toBe(true)
-    expect(route.points).toHaveLength(8)
-    expect(route.start).toEqual({ x: 100, y: 30 })
-    expect(route.end).toEqual({ x: 400, y: 30 })
+  it('水平方向的连线从右中出发、落到左中（8 值单段贝塞尔）', () => {
+    const points = edgePoints(from, to)
+    expect(points).toHaveLength(8)
+    expect(points.slice(0, 2)).toEqual([100, 30])
+    expect(points.slice(6, 8)).toEqual([400, 30])
   })
 
-  it('直线不被障碍挡住时也不绕行', () => {
-    const beside: Box = { x: 200, y: 200, w: 80, h: 80 }
-    const route = routeEdgePath(from, to, 'right', 'left', [beside])
-    expect(route.waypoints).toBeNull()
-    expect(route.points).toHaveLength(8)
+  it('垂直方向的连线从下中出发、落到上中', () => {
+    const below: Box = { x: 0, y: 300, w: 100, h: 60 }
+    const points = edgePoints(from, below)
+    expect(points.slice(0, 2)).toEqual([50, 60])
+    expect(points.slice(6, 8)).toEqual([50, 300])
   })
 
-  it('直线穿过障碍时绕行且路径不穿过障碍', () => {
-    const blocker: Box = { x: 200, y: 10, w: 80, h: 60 }
-    const route = routeEdgePath(from, to, 'right', 'left', [blocker])
-    expect(route.waypoints).not.toBeNull()
-    expect(route.points.length).toBeGreaterThan(8)
-    // 路标链中除首尾外都不落进障碍外扩区。
-    const padded = { x: blocker.x - 12, y: blocker.y - 12, w: blocker.w + 24, h: blocker.h + 24 }
-    for (const waypoint of route.waypoints ?? []) {
-      const inside =
-        waypoint.x > padded.x &&
-        waypoint.x < padded.x + padded.w &&
-        waypoint.y > padded.y &&
-        waypoint.y < padded.y + padded.h
-      expect(inside).toBe(false)
-    }
+  it('显式锚点优先于方位推断', () => {
+    const points = edgePoints(from, to, 'top', 'bottom')
+    expect(points.slice(0, 2)).toEqual([50, 0])
+    expect(points.slice(6, 8)).toEqual([450, 60])
   })
 
-  it('障碍范围过大时回退直连', () => {
-    const far: Box[] = Array.from({ length: 4 }, (_, index) => ({
-      x: 200 + index * 20000,
-      y: 30,
-      w: 12000,
-      h: 12000,
-    }))
-    const route = routeEdgePath(from, to, 'right', 'left', far)
-    expect(route.waypoints).toBeNull()
-    expect(route.points).toHaveLength(8)
+  it('控制点沿主方向外扩，保证曲线不扎进卡片', () => {
+    const points = edgePoints(from, to)
+    // 水平为主方向时，控制点只在 x 上偏移，y 与端点一致。
+    expect(points[3]).toBe(points[1])
+    expect(points[5]).toBe(points[7])
+    expect(points[2]).toBeGreaterThan(points[0])
+    expect(points[4]).toBeLessThan(points[6])
   })
 })
 
-describe('smoothBezierPoints', () => {
-  it('两点退化为单段贝塞尔（首点 + 6 值）', () => {
-    const points: RoutePoint[] = [
-      { x: 0, y: 0 },
-      { x: 10, y: 10 },
-    ]
-    expect(smoothBezierPoints(points)).toHaveLength(8)
-  })
-  it('多点输出多段贝塞尔且首尾坐标正确', () => {
-    const points: RoutePoint[] = [
-      { x: 0, y: 0 },
-      { x: 50, y: 0 },
-      { x: 50, y: 50 },
-      { x: 100, y: 50 },
-    ]
-    const out = smoothBezierPoints(points)
-    expect(out.length).toBe(2 + (points.length - 1) * 6)
-    expect(out[0]).toBe(0)
-    expect(out[1]).toBe(0)
-    expect(out[out.length - 2]).toBe(100)
-    expect(out[out.length - 1]).toBe(50)
+describe('asHandleSide', () => {
+  it('合法侧边原样返回，其余收敛为 null', () => {
+    expect(asHandleSide('top')).toBe('top')
+    expect(asHandleSide('right')).toBe('right')
+    expect(asHandleSide('')).toBeNull()
+    expect(asHandleSide(undefined)).toBeNull()
+    expect(asHandleSide('diagonal')).toBeNull()
   })
 })
