@@ -459,7 +459,14 @@ unsafe fn show_system_context_menu_blocking(
                 return Err(format!("获取系统菜单失败：{error}"));
             }
         };
-        let hmenu = CreatePopupMenu().map_err(|error| format!("创建菜单失败：{error}"))?;
+        // 创建失败也要先释放 PIDL：CoTaskMemAlloc 的内存不归 COM 管。
+        let hmenu = match CreatePopupMenu() {
+            Ok(handle) => handle,
+            Err(error) => {
+                cleanup(pidl);
+                return Err(format!("创建菜单失败：{error}"));
+            }
+        };
 
         let query = menu.QueryContextMenu(hmenu, 0, 1, 0x7FFF, CMF_NORMAL | CMF_EXTENDEDVERBS);
         if query.is_err() {
@@ -491,6 +498,9 @@ unsafe fn show_system_context_menu_blocking(
             Default::default(),
         );
 
+        // 执行 Shell 命令失败不能走 `?` 提前返回：那会同时漏掉 DestroyMenu 与
+        // CoTaskMemFree，反复触发会累积 USER 句柄，最终连菜单都建不出来。
+        let mut invoke_error: Option<String> = None;
         if command != 0 {
             // 菜单命令 ID 从 1 开始，转换回 Shell 约定的 0 起偏移。
             let info = CMINVOKECOMMANDINFOEX {
@@ -510,13 +520,17 @@ unsafe fn show_system_context_menu_blocking(
                 lpTitleW: windows::core::PCWSTR::null(),
                 ptInvoke: anchor,
             };
-            menu.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO)
-                .map_err(|error| format!("执行系统菜单命令失败：{error}"))?;
+            if let Err(error) = menu.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO) {
+                invoke_error = Some(format!("执行系统菜单命令失败：{error}"));
+            }
         }
 
         let _ = DestroyMenu(hmenu);
         cleanup(pidl);
-        Ok(())
+        match invoke_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     })();
 
     if initialized {

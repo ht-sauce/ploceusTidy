@@ -31,7 +31,9 @@ ploceusTidy/
 ├── scripts/
 │   ├── check-spec.mjs             # 硬约束静态扫描（pnpm check-spec；含版本号一致性与发布日志条目）
 │   ├── bump-version.mjs           # 版本号提升：同步四处副本（pnpm version:bump）
-│   └── collect-installer.mjs      # 只收集当前版本的 NSIS 安装包到 release/（tauri:build 后自动执行）
+│   ├── tauri-build.mjs            # 打包入口：注入更新签名私钥后调用 tauri build（pnpm tauri:build）
+│   ├── collect-installer.mjs      # 只收集当前版本的 NSIS 安装包到 release/（tauri-build 后自动执行）
+│   └── publish-release.mjs        # 生成 latest.json 并上传 GitHub Releases（pnpm release:publish）
 ├── vitest.config.ts                # 前端单测配置（client/**/*.test.ts，别名 @）
 ├── release/                        # 安装包固定产物地址（入库，README 直链下载）
 ├── vite.config.ts                  # root: client，127.0.0.1:5173
@@ -66,6 +68,7 @@ ploceusTidy/
 │   │   ├── useContextMenu.ts       # 右键菜单状态、条目与动作（含系统菜单入口）
 │   │   ├── useShortcuts.ts         # 全局快捷键映射（含 Ctrl+S 保存、撤销/重做、方向键微调）
 │   │   ├── useWindowSuspended.ts   # 最小化/隐藏检测，驱动暂停渲染
+│   │   ├── useAppUpdate.ts         # 自动更新：24h 节流检查、下载进度、安装前落库、重启
 │   │   └── useSearch.ts            # 搜索条目（对象/标注/空间/连线）与排序
 │   ├── canvas/                     # 画布域（Konva 渲染与交互）
 │   │   ├── CanvasBoard.tsx         # 图层编排：组合视口/可见性/交互会话
@@ -145,6 +148,8 @@ client/
 | 原文件复制与拖出（CF_HDROP / OLE 拖放） | `desktop/src/platform.rs`、`desktop/src/lib.rs`、`client/canvas/useCanvasInteractions.ts`、`client/workspace/Workspace.tsx` |
 | 安装包语言 / 「发送到」快捷方式 | `desktop/tauri.conf.json`（`bundle.windows.nsis`）、`desktop/installer-hooks.nsh` |
 | 版本号（四处一致 + 发布日志） | `scripts/bump-version.mjs`、`scripts/check-spec.mjs`（HC-17）、`release/log.md` |
+| 自动更新（检查/下载/验签/安装重启） | `client/workspace/useAppUpdate.ts`、`client/components/SettingsDialog.tsx`（关于区）、`desktop/tauri.conf.json`（plugins.updater）、`docs/spec/07-packaging.md`、ADR-038 |
+| 打包与发布（签名私钥注入、latest.json） | `scripts/tauri-build.mjs`、`scripts/publish-release.mjs`、`desktop/signing/`（不入库） |
 | 本地日志（含前端上报与 panic） | `desktop/src/logging.rs`、`desktop/src/lib.rs`（`log_write`）、`client/lib/tauri-api.ts`（`call` 统一上报） |
 | 文件变更监听 | `desktop/src/watcher.rs`、`db.rs`（`ref_dirs` / `ref_check_under_dirs`）、`client/workspace/useScenePersistence.ts`（订阅 `refs://changed`） |
 | 导入进度与取消 | `desktop/src/db.rs`（`import_paths_with_progress`）、`desktop/src/lib.rs`（`import://progress` / `cancel_import`）、`client/workspace/useImportClipboard.ts` |

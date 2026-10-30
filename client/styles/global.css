@@ -674,6 +674,34 @@ button {
   background: color-mix(in srgb, var(--canvas) 84%, transparent);
 }
 
+/* 加载失败：画面仍可看（空），但绝不写库，故用常驻提示而非一闪而过的 toast。 */
+.load-error {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  z-index: 31;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 92%;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--danger, #d4380d);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.load-error strong {
+  white-space: nowrap;
+}
+
+.load-error span {
+  color: var(--text-secondary);
+}
+
 .empty-card {
   width: 420px;
   max-width: 90%;
@@ -1275,4 +1303,20 @@ button {
 .title-icon-btn.ant-btn.is-active {
   background: var(--selected-bg);
   color: var(--accent);
+}
+
+/* 有新版本的角标：用伪元素而不是 Badge，避免包一层 span 影响 Dropdown 的点击事件。 */
+.title-icon-btn.has-update.ant-btn {
+  position: relative;
+}
+
+.title-icon-btn.has-update.ant-btn::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
 }

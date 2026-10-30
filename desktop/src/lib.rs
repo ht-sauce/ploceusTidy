@@ -679,6 +679,9 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // 自动更新：检查/下载/安装都走插件；前端只负责展示进度与安装前落库。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 富文本媒体回读：`richasset` 协议直接映射到工作空间 assets 目录，
         // 图片/视频在编辑器里以本地文件显示，全程不发起网络请求。
         .register_uri_scheme_protocol("richasset", |ctx, request| {

@@ -1,6 +1,6 @@
 [package]
 name = "ploceus-desktop"
-version = "0.2.1"
+version = "0.3.1"
 description = "络雀桌面客户端"
 edition = "2021"
 rust-version = "1.77.2"
@@ -26,6 +26,10 @@ base64 = "0.22.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 notify = "8.2.0"
 tauri-plugin-global-shortcut = "2"
+# 自动更新：只信任打包进客户端的 minisign 公钥，更新包与 latest.json 都走 GitHub Releases。
+tauri-plugin-updater = "2"
+# 更新安装完成后由前端触发重启，必须经 process 插件。
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5.4.3"

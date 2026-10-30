@@ -296,6 +296,12 @@ export function useCanvasInteractions({
   )
 
   /**
+   * 对象被删掉时 Konva 不会补发 mouseleave，tooltip 会留在屏上指向已不存在的对象。
+   * 这里按「当前场景里还有没有这个对象」派生可见值，不在 effect 里改 state。
+   */
+  const visibleTooltip = tooltip && nodeById.has(tooltip.node.id) ? tooltip : null
+
+  /**
    * 拖动期视口基准：边缘自动平移会改写视口，而 setState 要到下一帧才反映到 viewportRef。
    * 这里用「按下时的视口 + 本次累计平移量」换算世界坐标，拖动读数永远是最新的。
    */
@@ -328,6 +334,16 @@ export function useCanvasInteractions({
     panBase.current = null
     panOffset.current = { x: 0, y: 0 }
   }
+
+  // 卸载兜底：拖动中切工作空间或热更新时，边缘自动平移的 rAF 必须停掉，
+  // 否则它会在已卸载的画布上继续 setViewport。
+  useEffect(
+    () => () => {
+      if (autoPan.current.raf !== null) cancelAnimationFrame(autoPan.current.raf)
+      autoPan.current = { raf: null, vx: 0, vy: 0, pointer: null }
+    },
+    [],
+  )
 
   /**
    * 参考线只在内容变化时写入 state，避免拖动时每一帧都触发整块画布重渲染。
@@ -906,13 +922,18 @@ export function useCanvasInteractions({
       if (dragged) panMoved.current = true
       if (dragged) {
         const ids = nodes
-          .filter(
-            (node) =>
-              node.x + node.w >= rect.x &&
-              node.x <= rect.x + rect.w &&
-              node.y + node.h >= rect.y &&
-              node.y <= rect.y + rect.h,
-          )
+          .filter((node) => {
+            // 命中用「展示矩形」（含换行与标注高度），与渲染、碰撞口径一致；
+            // 直接用存储高度会出现「带标注的卡片底部选不中、矮卡片上方有隐形区域」。
+            const box = nodeRectOf(node.id)
+            if (!box) return false
+            return (
+              box.x + box.w >= rect.x &&
+              box.x <= rect.x + rect.w &&
+              box.y + box.h >= rect.y &&
+              box.y <= rect.y + rect.h
+            )
+          })
           .map((node) => node.id)
         onBoxSelect(ids, session.additive)
       }
@@ -1282,7 +1303,7 @@ export function useCanvasInteractions({
     connectPreview,
     connectTargetId,
     reconnectPreview,
-    tooltip,
+    tooltip: visibleTooltip,
     getPointerWorld,
     handleWheel,
     handleStagePointerDown,

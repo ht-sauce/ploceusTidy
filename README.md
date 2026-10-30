@@ -14,10 +14,12 @@
 
 | 渠道 | 地址 |
 | --- | --- |
-| 最新安装包（v0.2.1） | [release/络雀_0.2.1_x64-setup.exe](release/络雀_0.2.1_x64-setup.exe) |
+| 最新安装包（v0.3.1） | [release/络雀_0.3.1_x64-setup.exe](release/络雀_0.3.1_x64-setup.exe) |
 | GitHub Releases | [github.com/ht-sauce/ploceusTidy/releases](https://github.com/ht-sauce/ploceusTidy/releases/latest) |
 
 安装包使用本机自签名证书签名（`CN=ploceusTidy`），Windows SmartScreen 仍会提示未知发布者，选择「更多信息 → 仍要运行」即可。升级安装不会覆盖或删除 `dataWorkSpace/`。
+
+从 **v0.3.0** 起支持应用内自动更新：启动后自动检查（24 小时一次），也可以在「设置 → 关于」手动检查；发现新版本后点「下载并安装」，应用会先落库再重启完成升级。**v0.3.0 本身需要手动安装一次**——它是第一个带更新公钥的版本，之后的版本才有升级通道。
 
 ## 当前状态
 
@@ -30,8 +32,8 @@
 | 内容 | 文字卡与富文本卡都在弹窗里编辑；富文本用 wangEditor-next（按需加载），正文以 HTML 持久化，支持本地插入图片与视频（二进制直传到 `assets/`，粘贴截图直传） |
 | 桌面壳 | Tauri 2 + Rust，目录 `desktop/`；SQLite、剪贴板文件、Shell 缩略图与图标、原生右键菜单、打开/定位、窗口控制、目录级文件监听（notify）、全局热键、本地滚动日志（chrono） |
 | 数据 | `dataWorkSpace/`：`ploceus.db` + `assets/` + `thumbnails/`；`user_version` 迁移 |
-| 安装包 | NSIS 安装包中英双语（跟随系统语言，可手动选择） |
-| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名），产物自动收集到项目根 `release/`（入库，可直接下载），同时发布到 GitHub Releases |
+| 安装包 | NSIS 安装包中英双语（跟随系统语言，可手动选择）；自 v0.3.0 起支持应用内自动更新（minisign 验签） |
+| 本机运行 | `pnpm tauri:dev` 以 release 模式启动；安装包 `pnpm tauri:build`（自签名证书签名 + 更新签名私钥注入），产物自动收集到项目根 `release/`（入库，可直接下载），`pnpm release:publish` 发布到 GitHub Releases |
 
 ## 核心能力
 
@@ -81,6 +83,7 @@ ploceusTidy/
 | 开发启动（桌面客户端，release） | `pnpm tauri:dev` |
 | 构建前端 | `pnpm build` |
 | 构建桌面安装包 | `pnpm tauri:build`（安装包输出到 `release/`） |
+| 发布到 GitHub Releases | `pnpm release:publish`（生成 `latest.json` + 上传；`--dry-run` 只生成不上传） |
 | 前端测试 | `pnpm test`（vitest，domain 纯逻辑） |
 | Rust 测试 | `cargo test --manifest-path desktop/Cargo.toml --lib` |
 | 静态检查 | `pnpm lint` / `pnpm lint:fix` |
@@ -115,5 +118,5 @@ v1：拖入/粘贴文件、文字、截图、URL → 画布分组、连线、标
 
 ## 已知待补
 
-- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）；自动更新不在 v1。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.2.0 发布已完成。）
+- 正式代码签名证书（当前为自签名，SmartScreen 提示依旧）。自动更新已实现（v0.3.0 起，见 ADR-038），更新签名私钥在 `desktop/signing/updater.key`（不入库，须离线备份）。（1 万/10 万画布基准、NSIS 安装往返验收、v0.1.0～v0.3.0 发布已完成。）
 - 媒体上传已补大小/非空校验、Windows BMP MIME 兼容与真实路径边界，仅含媒体的富文本也可保存；Rust 10 项测试与内容保存 5 项回归通过。拖出到外部程序、编辑器媒体展示、视频进度条与粘贴截图的真机验收已由用户确认完成（2026-10-27），见 [docs/spec/08-adr.md](docs/spec/08-adr.md) §5。

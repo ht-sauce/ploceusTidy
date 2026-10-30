@@ -551,6 +551,23 @@
   - 用日期版本号（`2026.10.28`）：与已有的 `0.1.x` 序列和 GitHub Releases 标签不兼容；否决。
 - 后果：每批改动都会产生一个新版本号，安装包数量增长快于功能数量——这是有意的，版本号从此等于「一次可复现的代码状态」。`check-spec` 会让「改了代码没 bump」在提交前失败；临时调试可本地改代码不提交，但提交前必须补上。
 
+### ADR-038 自动更新：官方 updater + minisign 验签（取代「v1 不启用自动更新」）
+
+- 状态：accepted
+- 日期：2026-10-30
+- 背景：应用已经迭代到 `0.2.x`，每次发版都要让使用者手动下载安装包再覆盖安装。已有 Windows Authenticode 自签名证书，但它解决的是「这个 exe 是谁打的包」，且自签名不被系统信任；它不能用来判断下载到的更新包有没有被替换。
+- 决策：
+  - 用 `tauri-plugin-updater` + `tauri-plugin-process`，检查源是 GitHub Releases 的 `releases/latest/download/latest.json`（不计 API 限速，仓库为 public，无需 token）。
+  - 更新包用 **minisign 密钥对**签名，公钥内置在 `desktop/tauri.conf.json` 的 `plugins.updater.pubkey`，私钥在 `desktop/signing/updater.key`（不入库，需离线备份）。验签失败不执行任何下载物。
+  - 触发：启动后延迟 8s 自动检查，`app_meta.update_checked_at` 做 24h 节流；设置「关于」区可手动检查。自动检查失败只写日志，不打扰、不阻断启动。
+  - 安装链路：下载（进度回调）→ **先 `flush()` 落库**（失败即中止）→ `install()` → `relaunch()`。安装会重启进程，这是唯一可能丢数据的环节，因此复用关窗前的保存守卫。
+  - 发布：`pnpm release:publish` 生成 `latest.json` 并把安装包与同名 `.sig` 以 ASCII 名上传到对应 tag（Tauri 2 的 NSIS 更新产物就是安装包本体，下载地址直接指向 `.exe`）；`pnpm tauri:build` 由 `scripts/tauri-build.mjs` 注入签名私钥。
+- 备选方案：
+  - **自研「拉 GitHub API + 下载 exe + 静默安装」**：无需新密钥，但没有任何密码学校验（只能比同源的 SHA256，防不了篡改），且「退出进程 → 启动安装器 → 重启」的时序要自己处理，最容易出白屏/装不上；否决。
+  - **自研 + 复用现有证书钉指纹（`WinVerifyTrust` + 比对签名者证书）**：不用新密钥，但要自己写 Win32 签名解析（含放行 `CERT_E_UNTRUSTEDROOT`），且证书换发即断更新通道；否决。
+  - **改用 MSI 目标**：当前只发 NSIS，换 MSI 会推翻安装形态与「发送到」钩子；否决。
+- 后果：多了一个必须长期保管的秘密（私钥或密码），丢失后已安装客户端只能手动重装一次；`0.3.0` 是第一个带更新能力的版本，必须手动装一次才能进入自动更新通道。发布多一步 `latest.json`，已由脚本自动化。Authenticode 签名与更新验签是两条独立链路，互不替代。
+
 ## 5. 待复核
 
 | 事项 | 触发时机 | 说明 |

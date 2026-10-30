@@ -24,6 +24,12 @@ interface ShortcutOptions {
   onOpenDevtools: () => void
   /** 方向键微调选中对象；`large` 为按住 Shift 的 10px 步长。 */
   onNudge: (dx: number, dy: number) => void
+  /**
+   * 有模态弹窗（设置、内容管理、文本/富文本、取色、跳转选择）打开时为 true。
+   * 此时画布快捷键一律不响应：弹窗里焦点落在按钮上时 `isTypingTarget` 判不出来，
+   * Delete 会把弹窗背后的对象删掉。Esc 交给弹窗自己关闭。
+   */
+  blockCanvasKeys: boolean
 }
 
 /** 方向键 → 世界坐标位移；Shift 时放大到 10px。 */
@@ -49,6 +55,7 @@ export function useShortcuts({
   onFocusSearch,
   onOpenDevtools,
   onNudge,
+  blockCanvasKeys,
 }: ShortcutOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -57,6 +64,10 @@ export function useShortcuts({
         onOpenDevtools()
         return
       }
+
+      // 模态打开时让出所有画布快捷键（含 Esc）：否则 Delete / 方向键 / G / L
+      // 会作用到弹窗背后仍然选中的对象上。
+      if (blockCanvasKeys) return
 
       const mod = event.ctrlKey || event.metaKey
       const key = event.key.toLowerCase()
@@ -138,6 +149,7 @@ export function useShortcuts({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [
+    blockCanvasKeys,
     onCopyFiles,
     onDelete,
     onEscape,

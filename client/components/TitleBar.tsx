@@ -42,6 +42,8 @@ interface TitleBarProps {
   onToggleOutline: () => void
   filter: SearchFilter
   onFilterChange: (filter: SearchFilter) => void
+  /** 有可用更新时在设置按钮上打红点，不打断当前操作。 */
+  hasUpdate: boolean
   onMinimize: () => void
   onMaximize: () => void
   onClose: () => void
@@ -119,6 +121,7 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
     onToggleOutline,
     filter,
     onFilterChange,
+    hasUpdate,
     onMinimize,
     onMaximize,
     onClose,
@@ -182,13 +185,16 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
       setActiveIndex((index) => Math.max(index - 1, 0))
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      const entry = results[activeIndex]
+      // 筛选后结果变短时 activeIndex 可能已越界，夹取到末尾而不是静默无响应。
+      const entry = results[Math.min(activeIndex, results.length - 1)]
       if (!entry) return
       if (event.ctrlKey || event.metaKey) onOpenResult(entry)
       else onSelectResult(entry)
       setOpen(false)
     } else if (event.key === 'Escape') {
       event.preventDefault()
+      // 搜索框的 Esc 只关搜索面板：不再冒泡去清空画布选中。
+      event.stopPropagation()
       setOpen(false)
       inputRef.current?.blur()
     }
@@ -239,7 +245,11 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
                       className={`search-filter${filter === item.key ? ' is-active' : ''}`}
                       aria-pressed={filter === item.key}
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => onFilterChange(item.key)}
+                      onClick={() => {
+                        onFilterChange(item.key)
+                        // 结果集会变短，高亮必须回到第一条，否则 Enter 落到越界索引。
+                        setActiveIndex(0)
+                      }}
                     >
                       {item.label}
                     </button>
@@ -302,10 +312,11 @@ const TitleBar = forwardRef<TitleBarHandle, TitleBarProps>(function TitleBar(
         </Tooltip>
         <Dropdown menu={settingsMenu} placement="bottomRight" trigger={['click']}>
           <Button
-            className="title-icon-btn"
+            // 有更新时用角标提示，不弹窗打断：气泡组件会吃掉 Dropdown 需要的点击事件。
+            className={`title-icon-btn${hasUpdate ? ' has-update' : ''}`}
             type="text"
             icon={<SettingOutlined />}
-            aria-label="设置与内容管理"
+            aria-label={hasUpdate ? '设置与内容管理（有新版本）' : '设置与内容管理'}
           />
         </Dropdown>
         <Popover

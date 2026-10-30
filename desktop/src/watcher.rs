@@ -23,6 +23,11 @@ use crate::logging;
 const QUIET: Duration = Duration::from_millis(800);
 /// 目录集合的对账间隔：导入 / 重连后由 `resync` 立即推送，这里兜底轮询。
 const TICK: Duration = Duration::from_millis(600);
+/// 逐个确认监听目录是否还在：目录被删除 / 改名后底层句柄会失效，必须摘掉才能重挂。
+const EXIST_CHECK: Duration = Duration::from_secs(5);
+/// 全量重建监听句柄的间隔：兜住「目录删掉又在同一路径建回来」这种句柄已失效、
+/// 但 `exists()` 依然为真的情况——否则该目录之后的所有变化都静默丢失。
+const REWATCH: Duration = Duration::from_secs(60);
 
 static DESIRED: OnceLock<Arc<Mutex<HashSet<PathBuf>>>> = OnceLock::new();
 
@@ -66,8 +71,35 @@ pub fn start(app: AppHandle) {
         let mut watched: HashSet<PathBuf> = HashSet::new();
         let mut pending: Vec<PathBuf> = Vec::new();
         let mut last_event = Instant::now();
+        let mut last_exist_check = Instant::now();
+        let mut last_rewatch = Instant::now();
 
         loop {
+            // 目录消失：句柄随之失效，先从 watched 摘掉，等它出现时重新走 added 分支。
+            if last_exist_check.elapsed() >= EXIST_CHECK {
+                last_exist_check = Instant::now();
+                let gone: Vec<PathBuf> = watched
+                    .iter()
+                    .filter(|dir| !dir.exists())
+                    .cloned()
+                    .collect();
+                for dir in gone {
+                    let _ = watcher.unwatch(&dir);
+                    watched.remove(&dir);
+                }
+            }
+            // 定期原地重建句柄：删掉又建回同一路径时 exists() 仍是 true，
+            // 只靠上面的检查摘不掉失效句柄。
+            if last_rewatch.elapsed() >= REWATCH {
+                last_rewatch = Instant::now();
+                for dir in watched.clone() {
+                    let _ = watcher.unwatch(&dir);
+                    if watcher.watch(&dir, RecursiveMode::NonRecursive).is_err() {
+                        watched.remove(&dir);
+                    }
+                }
+            }
+
             let want: HashSet<PathBuf> = shared
                 .lock()
                 .map(|slot| slot.clone())

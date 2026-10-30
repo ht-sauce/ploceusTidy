@@ -9,6 +9,7 @@ import Modal from 'antd/es/modal'
 import Switch from 'antd/es/switch'
 import { FolderOpenOutlined } from '@ant-design/icons'
 import type { ThemeId, WorkspaceInfo } from '@/types/scene'
+import type { UpdateStatus } from '@/workspace/useAppUpdate'
 import { THEMES, normalizeTheme } from '@/lib/theme'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
 
@@ -24,6 +25,32 @@ interface SettingsDialogProps {
   /** 全量校验引用是否仍存在（文件被搬走后不必重启应用）。 */
   onRevalidateRefs: () => void
   onSceneCleared: () => void
+  /** 更新状态与动作：「关于」区据此显示检查结果、进度与安装入口。 */
+  update: {
+    status: UpdateStatus
+    onCheck: () => void
+    onInstall: () => void
+  }
+}
+
+/** 更新状态一句话说明：文案只描述后果与下一步，不暴露底层错误码。 */
+function updateHint(status: UpdateStatus): string {
+  switch (status.phase) {
+    case 'checking':
+      return '正在检查更新…'
+    case 'latest':
+      return '已是最新版本'
+    case 'available':
+      return `发现新版本 ${status.version}：下载后会自动重启完成安装，数据不受影响`
+    case 'downloading':
+      return `正在下载更新包 ${status.percent}%`
+    case 'ready':
+      return '更新包已就绪，正在重启安装…'
+    case 'error':
+      return `检查或安装失败：${status.error ?? '未知原因'}；可稍后重试`
+    default:
+      return '每次启动会自动检查一次，也可以现在手动检查'
+  }
 }
 
 /** 字节数转可读大小；只用于设置面板展示。 */
@@ -44,6 +71,7 @@ export default function SettingsDialog({
   onPauseWhenMinimizedChange,
   onRevalidateRefs,
   onSceneCleared,
+  update,
 }: SettingsDialogProps) {
   const { message, modal } = AntApp.useApp()
   // 本地刷新结果优先（迁移/重建后立即更新），否则用父组件传入的信息。
@@ -252,7 +280,27 @@ export default function SettingsDialog({
             <strong>络雀 {__APP_VERSION__}</strong>
             <span>Tauri 2 · React 19 · 纯本地，无云端与遥测</span>
           </div>
+          {update.status.phase === 'available' || update.status.phase === 'downloading' ? (
+            <Button
+              size="small"
+              type="primary"
+              loading={update.status.phase === 'downloading'}
+              onClick={update.onInstall}
+            >
+              {update.status.phase === 'downloading' ? '下载中' : '下载并安装'}
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              loading={update.status.phase === 'checking'}
+              disabled={update.status.phase === 'ready'}
+              onClick={update.onCheck}
+            >
+              检查更新
+            </Button>
+          )}
         </div>
+        <p className="settings-note">{updateHint(update.status)}</p>
       </section>
 
       <div className="settings-footer">

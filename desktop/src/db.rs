@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -41,6 +42,9 @@ pub struct AppState {
     /// `node_id → 缩略图元信息`；`None` 表示该节点无需缩略图（文字/链接）。
     /// relink / 引用校验后按 id 失效对应条目。
     pub thumb_meta: Mutex<HashMap<String, Option<ThumbMeta>>>,
+    /// 是否已处理过第一次全量保存请求；「空快照护栏」只对第一次生效（见 `scene_save`）。
+    /// 放在状态里而不是静态变量：每个工作空间实例（含测试）各自独立。
+    pub first_save: AtomicBool,
 }
 
 impl AppState {
@@ -291,6 +295,7 @@ pub fn initialize(app: &AppHandle) -> Result<AppState, String> {
         workspace: Mutex::new(workspace.clone()),
         assets: Mutex::new(assets),
         thumb_meta: Mutex::new(HashMap::new()),
+        first_save: AtomicBool::new(false),
     })
 }
 
@@ -745,6 +750,27 @@ pub fn scene_save(state: &AppState, scene: &SceneData) -> Result<(), String> {
     let transaction = connection
         .transaction()
         .map_err(|error| format!("开启事务失败：{error}"))?;
+
+    // 空快照护栏：若场景尚未加载完成（如 scene_load 失败）前端仍带着空场景保存，
+    // 下面「快照外清理」会删光整库。只拦本进程第一次全量保存——用户中途主动删空
+    // 画布是合法操作，第二次保存照常放行（否则会卡在永远存不下空画布的死角）。
+    let first_save = !state.first_save.swap(true, Ordering::Relaxed);
+    if first_save
+        && scene.nodes.is_empty()
+        && scene.groups.is_empty()
+        && scene.edges.is_empty()
+        && scene.annotations.is_empty()
+    {
+        let existing: i64 = transaction
+            .query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))
+            .map_err(|error| format!("检查现有节点失败：{error}"))?;
+        if existing > 0 {
+            return Err(format!(
+                "画布快照为空，已阻止覆盖 {existing} 个已有引用（场景可能未加载完成）；\
+                 确认要清空画布请再保存一次，或用「设置 → 数据 → 重建工作空间」"
+            ));
+        }
+    }
 
     // 连接级临时表记录本次快照包含的 ID；每次保存先清空，用于事后清理已删除对象。
     transaction
@@ -1372,6 +1398,28 @@ fn unique_export_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     dir.join(format!("{stem}-{}.{ext}", now_ms()))
 }
 
+/// 媒体导出落点：同名且大小一致视为上次导出的同一副本，直接复用（正文引用不必改）；
+/// 其余情况走查重改名——媒体名是 assets 里的 UUID，撞名基本只可能是用户的同名文件。
+fn export_media_path(dir: &Path, name: &str, source: &Path) -> PathBuf {
+    let target = dir.join(name);
+    let same_size = match (fs::metadata(&target), fs::metadata(source)) {
+        (Ok(existing), Ok(origin)) => existing.len() == origin.len(),
+        _ => false,
+    };
+    if same_size {
+        return target;
+    }
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin");
+    let stem = Path::new(name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("media");
+    unique_export_path(dir, stem, extension)
+}
+
 /// 收集富文本正文里引用的本地媒体名（`assets/<name>`），按出现顺序去重。
 fn collect_asset_names(html: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
@@ -1409,7 +1457,17 @@ pub fn export_contents(state: &AppState, request: &ExportRequest) -> Result<Expo
         let ext = if is_rich { "html" } else { "txt" };
         let stem = sanitize_export_name(&item.name);
         let target = match request.file_name.as_deref().filter(|_| single) {
-            Some(name) => dir.join(name),
+            // file_name 由前端透传：Path::join 遇绝对路径会整体替换、`..` 会越界，
+            // 因此只接受「纯文件名」（规范化后与原值一致）。
+            Some(name) => {
+                let bare = Path::new(name).file_name().and_then(|value| value.to_str());
+                if bare != Some(name) || name.is_empty() {
+                    return Err(format!(
+                        "导出文件名不合法：{name}（只允许纯文件名，不能含目录分隔符）"
+                    ));
+                }
+                dir.join(name)
+            }
             None => unique_export_path(&dir, &stem, ext),
         };
 
@@ -1420,7 +1478,15 @@ pub fn export_contents(state: &AppState, request: &ExportRequest) -> Result<Expo
                     warnings.push(format!("媒体缺失：assets/{name}"));
                     continue;
                 };
-                if let Err(error) = fs::copy(&source, dir.join(&name)) {
+                // 同名但大小不同说明是用户的同名文件：改名落盘并同步改写正文引用，
+                // 既避免覆盖用户文件，也不让导出的 HTML 指向旧图。
+                let media_target = export_media_path(&dir, &name, &source);
+                if let Some(exported) = media_target.file_name().and_then(|value| value.to_str()) {
+                    if exported != name {
+                        content = content.replace(&format!("assets/{name}"), exported);
+                    }
+                }
+                if let Err(error) = fs::copy(&source, &media_target) {
                     warnings.push(format!("媒体复制失败：assets/{name}（{error}）"));
                     continue;
                 }
@@ -2062,21 +2128,27 @@ pub fn thumb_get(state: &AppState, node_id: &str, size: u32) -> Result<Option<St
 /// 重建：清空所有业务数据，保留 `assets/` 与 `thumbnails/`（截图副本属于用户输入）。
 /// 原文件永远不动；调用方必须先做二次确认。
 pub fn workspace_rebuild(state: &AppState) -> Result<(), String> {
-    let connection = state.db.lock().map_err(|error| error.to_string())?;
-    connection
+    let mut connection = state.db.lock().map_err(|error| error.to_string())?;
+    // 用事务对象而不是裸 BEGIN/COMMIT：execute_batch 中途失败不会回滚，
+    // 连接会停在打开的事务里，之后所有保存都报「cannot start a transaction」。
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开启事务失败：{error}"))?;
+    transaction
         .execute_batch(
             r#"
-            BEGIN;
             DELETE FROM annotation_targets;
             DELETE FROM annotations;
             DELETE FROM edges;
             DELETE FROM nodes;
             DELETE FROM groups;
             DELETE FROM refs;
-            COMMIT;
             "#,
         )
         .map_err(|error| format!("重建工作空间失败：{error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交重建失败：{error}"))?;
     connection
         .execute_batch("VACUUM")
         .map_err(|error| format!("压缩数据库失败：{error}"))?;
@@ -2124,51 +2196,50 @@ pub fn workspace_migrate(state: &AppState, target: &Path) -> Result<WorkspaceInf
         }
     }
 
-    {
-        let connection = state.db.lock().map_err(|error| error.to_string())?;
-        connection
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
-            .map_err(|error| format!("刷新数据库失败：{error}"))?;
-    }
+    // 全程持有写锁：拷贝期间任何一次防抖保存都会写进「马上要被丢弃的旧库」，
+    // 切换后前端基线仍以为已保存，那笔改动就永久丢了。
+    // 读走独立连接（WAL 快照），界面与缩略图不受影响；只有写命令会排队等拷贝结束。
+    let mut guard = state.db.lock().map_err(|error| error.to_string())?;
+    guard
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .map_err(|error| format!("刷新数据库失败：{error}"))?;
 
     copy_dir(&current, target)?;
 
     let target_db = target.join("ploceus.db");
-    let connection =
+    // 先把新连接全部准备好并校验，任一步失败都直接返回，现有连接与路径原样保留。
+    let new_connection =
         Connection::open(&target_db).map_err(|error| format!("目标数据库不可用：{error}"))?;
-    connection
+    new_connection
         .execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
         .map_err(|error| format!("目标数据库不可用：{error}"))?;
-    let count: i64 = connection
+    let count: i64 = new_connection
         .query_row("SELECT COUNT(*) FROM nodes", [], |row| row.get(0))
         .map_err(|error| format!("目标数据库校验失败：{error}"))?;
-    drop(connection);
+    apply_pragmas(&new_connection).map_err(|error| format!("初始化目标数据库失败：{error}"))?;
+    let new_reader =
+        Connection::open(&target_db).map_err(|error| format!("打开目标只读连接失败：{error}"))?;
+    apply_pragmas(&new_reader).map_err(|error| format!("初始化目标只读连接失败：{error}"))?;
 
     let assets = target.join("assets");
     fs::create_dir_all(&assets).map_err(|error| format!("创建 assets 失败：{error}"))?;
     fs::create_dir_all(target.join("thumbnails"))
         .map_err(|error| format!("创建 thumbnails 失败：{error}"))?;
 
-    {
-        let mut guard = state.db.lock().map_err(|error| error.to_string())?;
-        let new_connection =
-            Connection::open(&target_db).map_err(|error| format!("打开目标数据库失败：{error}"))?;
-        apply_pragmas(&new_connection).map_err(|error| format!("初始化目标数据库失败：{error}"))?;
-        *guard = new_connection;
-    }
+    // 一次性替换：连接、路径、缓存同批切换，避免出现「写新库、读旧库」的半切换状态。
+    // 锁顺序固定为 db → reader → workspace → assets，与其它命令一致。
+    *guard = new_connection;
     {
         let mut reader_guard = state.reader.lock().map_err(|error| error.to_string())?;
-        let new_reader = Connection::open(&target_db)
-            .map_err(|error| format!("打开目标只读连接失败：{error}"))?;
-        apply_pragmas(&new_reader).map_err(|error| format!("初始化目标只读连接失败：{error}"))?;
         *reader_guard = new_reader;
     }
+    *state.workspace.lock().map_err(|error| error.to_string())? = target.to_path_buf();
+    *state.assets.lock().map_err(|error| error.to_string())? = assets;
     // 缩略图元信息缓存指向旧工作空间，整体失效。
     if let Ok(mut cache) = state.thumb_meta.lock() {
         cache.clear();
     }
-    *state.workspace.lock().map_err(|error| error.to_string())? = target.to_path_buf();
-    *state.assets.lock().map_err(|error| error.to_string())? = assets;
+    drop(guard);
 
     let _ = count;
     workspace_info(state)
@@ -2279,6 +2350,7 @@ mod tests {
                 workspace: Mutex::new(root.clone()),
                 assets: Mutex::new(root.join("assets")),
                 thumb_meta: Mutex::new(HashMap::new()),
+                first_save: AtomicBool::new(false),
             };
             Self { state, root }
         }
@@ -2425,7 +2497,8 @@ mod tests {
         fn new() -> Self {
             let root = std::env::temp_dir().join(format!("ploceus-db-test-{}", Uuid::new_v4()));
             fs::create_dir_all(root.join("assets")).expect("创建测试目录失败");
-            let db_path = root.join("test.db");
+            // 与真实工作空间同名：迁移等命令按 `ploceus.db` 定位库文件。
+            let db_path = root.join("ploceus.db");
             let mut connection = Connection::open(&db_path).expect("打开测试库失败");
             migrate(&mut connection).expect("建表失败");
             let reader = Connection::open(&db_path).expect("打开测试读连接失败");
@@ -2435,6 +2508,7 @@ mod tests {
                 workspace: Mutex::new(root.clone()),
                 assets: Mutex::new(root.join("assets")),
                 thumb_meta: Mutex::new(HashMap::new()),
+                first_save: AtomicBool::new(false),
             };
             Self { state, root }
         }
@@ -2642,5 +2716,94 @@ mod tests {
             loaded.edges.is_empty(),
             "指向已删除节点的悬空边应被清理"
         );
+    }
+
+    #[test]
+    fn empty_first_save_does_not_wipe_existing_scene() {
+        let fixture = DbFixture::new();
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![text_node(Some("正文"))],
+                groups: Vec::new(),
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("首次保存失败");
+
+        // 模拟重启：同一份库 + 全新的进程状态（first_save 重置），前端带着空快照保存。
+        let workspace = fixture.state.workspace_path().expect("读取工作空间失败");
+        let db_path = workspace.join("ploceus.db");
+        let mut connection = Connection::open(&db_path).expect("重新打开库失败");
+        migrate(&mut connection).expect("迁移失败");
+        let reader = Connection::open(&db_path).expect("打开读连接失败");
+        let state = AppState {
+            db: Mutex::new(connection),
+            reader: Mutex::new(reader),
+            workspace: Mutex::new(workspace.clone()),
+            assets: Mutex::new(workspace.join("assets")),
+            thumb_meta: Mutex::new(HashMap::new()),
+            first_save: AtomicBool::new(false),
+        };
+
+        let empty = || SceneData {
+            nodes: Vec::new(),
+            groups: Vec::new(),
+            edges: Vec::new(),
+            annotations: Vec::new(),
+        };
+        let error = scene_save(&state, &empty()).expect_err("空快照必须被拦下");
+        assert!(error.contains("已阻止覆盖"), "错误应说明拦截原因：{error}");
+        assert_eq!(
+            scene_load(&state).expect("读取场景失败").nodes.len(),
+            1,
+            "拦下之后库内数据必须原样保留"
+        );
+
+        // 第二次放行：用户确认清空画布是合法操作，不能被永久拦住。
+        scene_save(&state, &empty()).expect("确认清空应放行");
+        assert!(
+            scene_load(&state).expect("读取场景失败").nodes.is_empty(),
+            "确认后应真正清空"
+        );
+    }
+
+    #[test]
+    fn migrate_switches_connections_and_keeps_scene() {
+        let fixture = DbFixture::new();
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![text_node(Some("迁移前写入"))],
+                groups: Vec::new(),
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("首次保存失败");
+
+        let target = std::env::temp_dir().join(format!("ploceus-migrate-test-{}", Uuid::new_v4()));
+        let info = workspace_migrate(&fixture.state, &target).expect("迁移失败");
+        assert_eq!(info.node_count, 1, "迁移后节点数应保持一致");
+        assert_eq!(
+            scene_load(&fixture.state).expect("读取新工作空间失败").nodes.len(),
+            1,
+            "切换后读写连接都必须指向新库"
+        );
+        assert!(target.join("ploceus.db").exists(), "目标库文件应已生成");
+        // 迁移后新写入要落到新库：旧的连接若没换掉，这条会写进旧目录。
+        scene_save(
+            &fixture.state,
+            &SceneData {
+                nodes: vec![text_node(Some("迁移后写入"))],
+                groups: Vec::new(),
+                edges: Vec::new(),
+                annotations: Vec::new(),
+            },
+        )
+        .expect("迁移后保存失败");
+
+        let _ = fs::remove_dir_all(&target);
     }
 }

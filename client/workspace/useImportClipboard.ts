@@ -158,6 +158,12 @@ export function useImportClipboard({
   const importPaths = useCallback(
     async (paths: string[]) => {
       if (!isDesktopClient || paths.length === 0) return
+      // 进度条与「取消」都绑在单个 job 上：并发导入会互相覆盖，
+      // 先结束的那个还会把仍在跑的 job 的进度条清掉。这里直接拒绝第二次。
+      if (jobRef.current) {
+        message.info('上一批导入还在进行，完成后再试')
+        return
+      }
       const unique = Array.from(new Set(paths))
       const signature = unique.join('|')
       const now = Date.now()
@@ -171,7 +177,7 @@ export function useImportClipboard({
       let unlisten: (() => void) | undefined
       try {
         unlisten = await listen<ImportProgress>('import://progress', (event) => {
-          if (event.payload.jobId !== jobId) return
+          if (event.payload.jobId !== jobId || jobRef.current !== jobId) return
           setProgress({
             done: event.payload.done,
             total: event.payload.total,
@@ -222,8 +228,11 @@ export function useImportClipboard({
         message.error(`导入失败：${String(error)}`)
       } finally {
         unlisten?.()
-        setProgress(null)
-        jobRef.current = null
+        // 只清理自己的 job：别把别人的进度条与取消句柄一起清掉。
+        if (jobRef.current === jobId) {
+          jobRef.current = null
+          setProgress(null)
+        }
       }
     },
     [getImportCenter, locate, markHistory, message, onImportErrors, setNodes, setSelectedIds],

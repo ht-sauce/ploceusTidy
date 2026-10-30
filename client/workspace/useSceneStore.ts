@@ -126,6 +126,8 @@ export interface SceneStore {
   /** 手动调整空间框（四角拖拽提交）：只改框本身；下次成员变化时仍按内容自动贴合。 */
   resizeGroup: (id: string, box: { x: number; y: number; w: number; h: number }) => void
   connect: (from: string, to: string, fromHandle?: string, toHandle?: string) => void
+  /** 批量建线：一次记历史，返回真正新增的条数。 */
+  connectMany: (from: string, targets: string[]) => number
   /** 拖动连线端点改接目标；自连拒绝、同向重复忽略，进撤销栈。 */
   reconnectEdge: (edgeId: string, end: 'from' | 'to', targetId: string, handle: string) => void
   /** 叠放层级：置顶取当前最大 z + 1；置底取最小 z - 1。 */
@@ -579,6 +581,31 @@ export function useSceneStore(): SceneStore {
           toHandle: toHandle || undefined,
         },
       ])
+    },
+    [edges, markHistory],
+  )
+
+  /**
+   * 批量建线：一次记历史、一次写状态，返回真正新增的条数。
+   * 同一个事件循环里连续调 `connect` 会压入 N 份相同的「批前」快照
+   * （`latestRef` 要等渲染后才更新），撤销就得按 N 次才回得去。
+   */
+  const connectMany = useCallback(
+    (from: string, targets: string[]) => {
+      const existing = new Set(edges.map((edge) => `${edge.from}->${edge.to}`))
+      const added = targets
+        .filter((to) => to !== from && !existing.has(`${from}->${to}`))
+        .map((to) => ({
+          id: `edge-${crypto.randomUUID()}`,
+          from,
+          to,
+          fromHandle: undefined,
+          toHandle: undefined,
+        }))
+      if (added.length === 0) return 0
+      markHistory()
+      setEdges((previous) => [...previous, ...added])
+      return added.length
     },
     [edges, markHistory],
   )
@@ -1209,6 +1236,7 @@ export function useSceneStore(): SceneStore {
     moveGroup,
     resizeGroup,
     connect,
+    connectMany,
     reconnectEdge,
     raiseNode,
     updateNodeDataJson,

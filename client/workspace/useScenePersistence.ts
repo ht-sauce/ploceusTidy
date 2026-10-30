@@ -31,6 +31,9 @@ export function useScenePersistence({
   const { nodes, groups, edges, annotations, setNodes, setGroups, setEdges, setAnnotations } = store
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null)
   const [hydrated, setHydrated] = useState(!isDesktopClient)
+  /** 加载失败：场景没取到时绝不进入可写状态，否则空场景会把库写空。 */
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [reloadToken, setReloadToken] = useState(0)
   const [saveState, setSaveState] = useState<SaveState>('idle')
   // 校验任务读取最新节点，但不希望 nodes 变化触发重新校验。
   const nodesRef = useRef(nodes)
@@ -47,7 +50,8 @@ export function useScenePersistence({
     sceneRef.current = { nodes, groups, edges, annotations }
   })
 
-  // 首次加载：场景与工作空间信息一起取，失败时降级为空画布并提示。
+  // 首次加载：场景与工作空间信息一起取；失败时停在「不可写」状态等用户重试。
+  // 绝不能像早先那样把失败降级成空画布——350ms 后防抖保存会用空快照覆盖整库。
   useEffect(() => {
     if (!isDesktopClient) return
     let cancelled = false
@@ -65,13 +69,20 @@ export function useScenePersistence({
       .catch((error) => {
         if (cancelled) return
         message.error(`加载工作空间失败：${String(error)}`)
-        setHydrated(true)
-        onHydrated(true)
+        setLoadFailed(true)
       })
     return () => {
       cancelled = true
     }
-  }, [message, onHydrated, setAnnotations, setEdges, setGroups, setNodes])
+    // reloadToken 只用于「重试」触发同一条加载流程。
+  }, [message, onHydrated, reloadToken, setAnnotations, setEdges, setGroups, setNodes])
+
+  /** 重试加载：失败可能只是文件被占用或磁盘临时不可用。 */
+  const reload = useCallback(() => {
+    setLoadFailed(false)
+    setHydrated(false)
+    setReloadToken((value) => value + 1)
+  }, [])
 
   const saveNow = useCallback(async () => {
     // 未完成加载前禁止写库：此时 sceneRef 还是空场景，写进去等于清库。
@@ -104,15 +115,19 @@ export function useScenePersistence({
     }
   }, [annotations, edges, groups, hydrated, nodes, saveNow])
 
-  /** 立即落库：跳过防抖窗口。失败向上抛，由调用方决定是否阻止关闭。 */
+  /**
+   * 立即落库：跳过防抖窗口。返回是否真的写入了——未就绪时返回 false，
+   * 调用方据此提示「还在加载」，不能把「什么都没写」当成「已保存」。
+   */
   const flush = useCallback(async () => {
-    if (!isDesktopClient) return
+    if (!isDesktopClient || !hydrated) return false
     if (timerRef.current) {
       window.clearTimeout(timerRef.current)
       timerRef.current = null
     }
     await saveNow()
-  }, [saveNow])
+    return true
+  }, [hydrated, saveNow])
 
   const flushRef = useRef(flush)
   useEffect(() => {
@@ -265,21 +280,26 @@ export function useScenePersistence({
   }, [selectedKey, setNodes])
 
   // Tauri 拖入事件直接给绝对路径，导入与去重统一交给 Rust 侧处理。
+  // 订阅是异步的：cleanup 可能早于 dispose 返回，必须用 disposed 兜住，
+  // 否则每次重订阅都会残留一个原生监听器（同一次拖入被派发多次）。
   useEffect(() => {
     if (!isDesktopClient) return
     let unlisten: (() => void) | undefined
+    let disposed = false
     getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type === 'drop') onImportPaths(event.payload.paths)
       })
       .then((dispose) => {
-        unlisten = dispose
+        if (disposed) dispose()
+        else unlisten = dispose
       })
       .catch((error) => message.error(`监听拖入失败：${String(error)}`))
     return () => {
+      disposed = true
       unlisten?.()
     }
   }, [message, onImportPaths])
 
-  return { workspace, setWorkspace, hydrated, saveState, flush }
+  return { workspace, setWorkspace, hydrated, loadFailed, reload, saveState, flush }
 }

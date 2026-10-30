@@ -6,7 +6,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import AntApp from 'antd/es/app'
 import Button from 'antd/es/button'
 import { listen } from '@tauri-apps/api/event'
-import type { SceneNode, SearchEntry, ThemeId } from '@/types/scene'
+import type { ImportError, SceneNode, SearchEntry, ThemeId } from '@/types/scene'
 import CanvasBoard, { type CanvasBoardHandle } from '@/canvas/CanvasBoard'
 import { GROUP_PALETTE } from '@/canvas/constants'
 import { edgeColorOf } from '@/canvas/geometry'
@@ -33,6 +33,7 @@ import { useScenePersistence } from './useScenePersistence'
 import { useContextMenu } from './useContextMenu'
 import { useShortcuts } from './useShortcuts'
 import { useWindowSuspended } from './useWindowSuspended'
+import { useAppUpdate } from './useAppUpdate'
 
 interface WorkspaceProps {
   themeId: ThemeId
@@ -132,18 +133,31 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   // 这些回调会进入拖入/导入 hook 的依赖链，保持稳定，避免重复订阅拖放事件。
   const locateById = useCallback((id: string) => canvasRef.current?.locateTarget(id), [])
+  /**
+   * 正文按需加载的归属校验：取回时若用户已取消或改成编辑别的对象，就丢弃这次结果，
+   * 否则晚到的响应会把刚关掉的弹窗又弹出来。
+   */
+  const editorToken = useRef(0)
+  const closeContentEditor = useCallback(() => {
+    editorToken.current += 1
+    setContentEditor(null)
+  }, [])
   /** 打开内容弹窗：首屏不加载正文，这里按需取一次并交给弹窗。 */
   const openContentEditor = useCallback(
     (id: string) => {
       const node = store.nodeById.get(id)
       if (!node) return
+      const token = (editorToken.current += 1)
       if (node.body !== undefined) {
         setContentEditor({ id, body: node.body })
         return
       }
       void desktopApi
         .nodeBody(id)
-        .then((body) => setContentEditor({ id, body: body ?? '' }))
+        .then((body) => {
+          if (editorToken.current !== token) return
+          setContentEditor({ id, body: body ?? '' })
+        })
         .catch((error) => message.error(`读取内容失败：${String(error)}`))
     },
     [message, store.nodeById],
@@ -169,11 +183,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     select: selectById,
   })
 
-  const importers = useImportClipboard({
-    store,
-    message,
-    // 失败项交给界面层逐条列出：只报第一条会掩盖真实失败面（HC-14）。
-    onImportErrors: (errors) => {
+  // 失败项交给界面层逐条列出：只报第一条会掩盖真实失败面（HC-14）。
+  // 必须保持引用稳定：它会进入导入 hook 的回调链，进而影响拖入监听的订阅次数。
+  const reportImportErrors = useCallback(
+    (errors: ImportError[]) => {
       const limit = 8
       const shown = errors.slice(0, limit)
       modal.error({
@@ -191,6 +204,13 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         ),
       })
     },
+    [modal],
+  )
+
+  const importers = useImportClipboard({
+    store,
+    message,
+    onImportErrors: reportImportErrors,
     getLandingPoint,
     getImportCenter: getCenterWorld,
     locate: locateById,
@@ -206,12 +226,13 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     [importPaths],
   )
 
-  const { workspace, setWorkspace, hydrated, saveState, flush } = useScenePersistence({
-    store,
-    message,
-    onHydrated,
-    onImportPaths,
-  })
+  const { workspace, setWorkspace, hydrated, loadFailed, reload, saveState, flush } =
+    useScenePersistence({
+      store,
+      message,
+      onHydrated,
+      onImportPaths,
+    })
 
   // 场景加载完成后恢复上次视口；无记录时适配全部内容，避免启动后停在空白处。
   const viewportRestored = useRef(false)
@@ -223,6 +244,16 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       if (!restored) canvasRef.current?.fitView()
     })()
   }, [hydrated])
+
+  // ---------- 自动更新 ----------
+
+  const appUpdate = useAppUpdate({
+    message,
+    // 安装会重启进程：先把画布落库，失败则抛错中止（宁可晚点更新，也不丢最后一笔）。
+    onBeforeInstall: async () => {
+      await flush()
+    },
+  })
 
   // ---------- 右键菜单动作 ----------
 
@@ -421,8 +452,13 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   /** Ctrl+S：绕过去抖立即落库，不改变选中与弹窗状态。 */
   const saveNow = useCallback(() => {
+    if (!isDesktopClient) return
     void flush()
-      .then(() => message.success('已保存'))
+      .then((wrote) => {
+        // 未加载完时 flush 不会写库，不能报「已保存」。
+        if (wrote) message.success('已保存')
+        else message.info('画布还在加载，本次未写入；加载完成后再试')
+      })
       .catch(() => {
         // 失败提示已在持久化层弹出，这里不再重复。
       })
@@ -472,16 +508,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       return
     }
     const [source, ...targets] = ids
-    const existing = new Set(store.edges.map((edge) => `${edge.from}->${edge.to}`))
-    const additions = targets.filter(
-      (target) => target !== source && !existing.has(`${source}->${target}`),
-    )
-    if (additions.length === 0) {
-      message.info('这些对象之间已经存在同向连线')
-      return
-    }
-    additions.forEach((target) => store.connect(source, target))
-    message.success(`已建立 ${additions.length} 条有向连线`)
+    // 一次操作只记一步历史：批量建线走 connectMany，撤销一次即全部回退。
+    const added = store.connectMany(source, targets)
+    if (added === 0) message.info('这些对象之间已经存在同向连线')
+    else message.success(`已建立 ${added} 条有向连线`)
   }, [message, store])
 
   /** E 键：收起或重新打开空态引导（场景有内容时引导不会出现）。 */
@@ -536,7 +566,20 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
 
   // ---------- 快捷键 ----------
 
+  /**
+   * 有模态弹窗打开时，画布快捷键必须让位。
+   * 弹窗里焦点常落在按钮/容器上，`isTypingTarget` 判不出来，Delete 会删掉背后的对象。
+   */
+  const modalOpen =
+    settingsOpen ||
+    contentManagerOpen ||
+    Boolean(prompt) ||
+    Boolean(colorPicker) ||
+    Boolean(neighbors) ||
+    Boolean(contentEditor)
+
   useShortcuts({
+    blockCanvasKeys: modalOpen,
     onUndo: undo,
     onRedo: redo,
     onSave: saveNow,
@@ -550,6 +593,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
     onSettings: () => setSettingsOpen(true),
     onEscape: () => {
       if (settingsOpen) setSettingsOpen(false)
+      else if (contentManagerOpen) setContentManagerOpen(false)
       else if (contextMenu.menu) contextMenu.close()
       else if (store.selectedIds.length > 0 || store.selectedGroupId || store.selectedEdgeId) {
         store.clearSelection()
@@ -719,6 +763,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
         onToggleOutline={() => setOutlineOpen((previous) => !previous)}
         filter={searchFilter}
         onFilterChange={setSearchFilter}
+        hasUpdate={appUpdate.hasUpdate}
         onMinimize={() => void desktopWindow.minimize()}
         onMaximize={() => void desktopWindow.toggleMaximize()}
         onClose={() => void desktopWindow.close()}
@@ -833,7 +878,19 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           />
         ) : null}
 
-        {showEmpty ? <EmptyOverlay onDismiss={() => setEmptyDismissed(true)} /> : null}
+        {showEmpty && !loadFailed ? (
+          <EmptyOverlay onDismiss={() => setEmptyDismissed(true)} />
+        ) : null}
+
+        {loadFailed ? (
+          <div className="load-error" role="alert">
+            <strong>工作空间没能加载出来</strong>
+            <span>为避免空画布覆盖已有数据，本次不会写入数据库；修复原因后点「重试」。</span>
+            <Button size="small" onClick={reload}>
+              重试
+            </Button>
+          </div>
+        ) : null}
 
         {contextMenu.menu ? (
           <ContextMenu
@@ -875,6 +932,11 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           store.clearSelection()
           setEmptyDismissed(false)
         }}
+        update={{
+          status: appUpdate.status,
+          onCheck: appUpdate.checkNow,
+          onInstall: () => void appUpdate.install(),
+        }}
       />
       <TextPromptDialog
         key={prompt ? `${prompt.kind}-${prompt.id}` : 'no-prompt'}
@@ -908,7 +970,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
             <RichTextDialog
               key={contentNode.id}
               initialHtml={contentEditor?.body ?? ''}
-              onCancel={() => setContentEditor(null)}
+              onCancel={() => closeContentEditor()}
               onQuickSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
                 setContentEditor({ id: contentNode.id, body: html })
@@ -916,7 +978,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
               }}
               onSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
-                setContentEditor(null)
+                closeContentEditor()
                 message.success('富文本已保存')
               }}
             />
@@ -925,7 +987,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
           <TextContentDialog
             key={contentNode.id}
             initialText={contentEditor?.body ?? contentNode.subtitle ?? ''}
-            onCancel={() => setContentEditor(null)}
+            onCancel={() => closeContentEditor()}
             onQuickSave={(text) => {
               store.commitContent(contentNode.id, text, text)
               setContentEditor({ id: contentNode.id, body: text })
@@ -933,7 +995,7 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
             }}
             onSave={(text) => {
               store.commitContent(contentNode.id, text, text)
-              setContentEditor(null)
+              closeContentEditor()
               message.success('文字已保存')
             }}
           />
