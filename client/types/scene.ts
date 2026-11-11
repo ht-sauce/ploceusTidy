@@ -36,7 +36,8 @@ export interface SceneNode {
   name: string
   path?: string
   subtitle: string
-  body?: string
+  /** 正文：首屏紧凑索引为 null（未加载），按需通过 `node_body` 拉取；空字符串才是真正的空正文。 */
+  body?: string | null
   url?: string
   /** 所属分组框 ID；空字符串表示未分组。 */
   groupId: string

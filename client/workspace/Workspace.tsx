@@ -138,8 +138,14 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
    * 否则晚到的响应会把刚关掉的弹窗又弹出来。
    */
   const editorToken = useRef(0)
+  /**
+   * 自动保存是否已经记过撤销点：第一次改动记一步，后续静默合并，
+   * 否则每停顿一次就压一条历史，撤销栈很快被写满。
+   */
+  const contentHistoryStarted = useRef(false)
   const closeContentEditor = useCallback(() => {
     editorToken.current += 1
+    contentHistoryStarted.current = false
     setContentEditor(null)
   }, [])
   /** 打开内容弹窗：首屏不加载正文，这里按需取一次并交给弹窗。 */
@@ -148,7 +154,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
       const node = store.nodeById.get(id)
       if (!node) return
       const token = (editorToken.current += 1)
-      if (node.body !== undefined) {
+      contentHistoryStarted.current = false
+      // 首屏紧凑索引返回的正文是 null（Rust `Option::None`），不是 undefined；
+      // 只认字符串，否则会把「未加载」当成「正文为空」，打开后整篇看起来丢了。
+      if (typeof node.body === 'string') {
         setContentEditor({ id, body: node.body })
         return
       }
@@ -971,6 +980,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
               key={contentNode.id}
               initialHtml={contentEditor?.body ?? ''}
               onCancel={() => closeContentEditor()}
+              onAutoSave={(html, plain) => {
+                store.commitContent(contentNode.id, html, plain, contentHistoryStarted.current)
+                contentHistoryStarted.current = true
+              }}
               onQuickSave={(html, plain) => {
                 store.commitContent(contentNode.id, html, plain)
                 setContentEditor({ id: contentNode.id, body: html })
@@ -988,6 +1001,10 @@ export default function Workspace({ themeId, onThemeChange }: WorkspaceProps) {
             key={contentNode.id}
             initialText={contentEditor?.body ?? contentNode.subtitle ?? ''}
             onCancel={() => closeContentEditor()}
+            onAutoSave={(text) => {
+              store.commitContent(contentNode.id, text, text, contentHistoryStarted.current)
+              contentHistoryStarted.current = true
+            }}
             onQuickSave={(text) => {
               store.commitContent(contentNode.id, text, text)
               setContentEditor({ id: contentNode.id, body: text })

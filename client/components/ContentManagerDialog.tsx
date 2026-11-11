@@ -67,7 +67,8 @@ export default function ContentManagerDialog({
 
   /** 取正文：首屏不加载正文，导出前按需拉取。 */
   const loadBody = async (node: SceneNode) => {
-    if (node.body !== undefined) return node.body
+    // 首屏紧凑索引的正文是 null 而非 undefined，不能据此判定正文已加载。
+    if (typeof node.body === 'string') return node.body
     const body = await desktopApi.nodeBody(node.id)
     return body ?? ''
   }

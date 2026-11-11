@@ -1420,20 +1420,35 @@ fn export_media_path(dir: &Path, name: &str, source: &Path) -> PathBuf {
     unique_export_path(dir, stem, extension)
 }
 
-/// 收集富文本正文里引用的本地媒体名（`assets/<name>`），按出现顺序去重。
+/// 收集富文本正文里引用的本地媒体名（`src="assets/<name>"`），按出现顺序去重。
+/// 只扫描 `src` 属性：正文文本或普通链接里出现 `assets/` 不能被当成媒体。
 fn collect_asset_names(html: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
-    for (index, _) in html.match_indices("assets/") {
-        let rest = &html[index + "assets/".len()..];
-        let name: String = rest
-            .chars()
-            .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
-            .collect();
-        if !name.is_empty() && !names.iter().any(|item| item == &name) {
-            names.push(name);
+    for marker in ["src=\"assets/", "src='assets/"] {
+        for (index, _) in html.match_indices(marker) {
+            let rest = &html[index + marker.len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+                .collect();
+            if !name.is_empty() && !names.iter().any(|item| item == &name) {
+                names.push(name);
+            }
         }
     }
     names
+}
+
+/// 只改写 `src="assets/<name>"` / `src='assets/<name>'`，不碰正文里的同名文本。
+fn replace_asset_src(html: &str, name: &str, replacement: &str) -> String {
+    html.replace(&format!("src=\"assets/{name}\""), &format!("src=\"{replacement}\""))
+        .replace(&format!("src='assets/{name}'"), &format!("src='{replacement}'"))
+}
+
+/// 导出目录里媒体与 HTML 同级：去掉剩余 `src` 引用中的 `assets/` 前缀。
+fn strip_asset_src_prefix(html: &str) -> String {
+    html.replace("src=\"assets/", "src=\"")
+        .replace("src='assets/", "src='")
 }
 
 /// 导出文本/富文本到目标目录：
@@ -1483,7 +1498,7 @@ pub fn export_contents(state: &AppState, request: &ExportRequest) -> Result<Expo
                 let media_target = export_media_path(&dir, &name, &source);
                 if let Some(exported) = media_target.file_name().and_then(|value| value.to_str()) {
                     if exported != name {
-                        content = content.replace(&format!("assets/{name}"), exported);
+                        content = replace_asset_src(&content, &name, exported);
                     }
                 }
                 if let Err(error) = fs::copy(&source, &media_target) {
@@ -1492,7 +1507,7 @@ pub fn export_contents(state: &AppState, request: &ExportRequest) -> Result<Expo
                 }
                 media += 1;
             }
-            content = content.replace("assets/", "");
+            content = strip_asset_src_prefix(&content);
         }
 
         fs::write(&target, content.as_bytes())
@@ -2430,6 +2445,24 @@ mod tests {
         *fixture.state.assets.lock().expect("锁定测试状态失败") = outside.root.join("assets");
         assert!(save_rich_asset(&fixture.state, b"\x03pngX").is_err());
         assert!(rich_asset_file(&fixture.state, "a.png").is_err());
+    }
+
+    #[test]
+    fn rich_export_rewrites_only_src_attributes() {
+        let html = r#"<p>见 https://github.com/demo/assets/foo.png</p><img src="assets/foo.png"><video src='assets/bar.mp4'></video>"#;
+        assert_eq!(
+            collect_asset_names(html),
+            vec!["foo.png".to_string(), "bar.mp4".to_string()]
+        );
+
+        let renamed = replace_asset_src(html, "foo.png", "foo-1.png");
+        assert!(renamed.contains("https://github.com/demo/assets/foo.png"));
+        assert!(renamed.contains(r#"src="foo-1.png""#));
+        assert!(renamed.contains(r#"src='assets/bar.mp4'"#));
+
+        let stripped = strip_asset_src_prefix(&renamed);
+        assert!(stripped.contains("https://github.com/demo/assets/foo.png"));
+        assert!(stripped.contains(r#"src='bar.mp4'"#));
     }
 
     #[test]

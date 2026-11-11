@@ -8,7 +8,7 @@
  * - 保存时同时取出 HTML（正文）与纯文本（卡片名称、搜索用投影）；
  * - 图片/视频只走本地上传（Raw IPC 二进制直传到工作空间 assets），
  *   网络图/网络视频入口被移除，编辑器内不发任何网络请求（HC-13）；
- * - Ctrl+S 就地保存不关闭，「保存」按钮保存并关闭，取消时若有改动先确认。
+ * - 改动停顿后自动写回，关闭不弹二次确认；Ctrl+S 立即保存，「保存」按钮写回并关闭。
  */
 import { useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -18,19 +18,18 @@ import { createEditor, createToolbar } from '@wangeditor-next/editor'
 import type { IDomEditor, IEditorConfig, IToolbarConfig } from '@wangeditor-next/editor'
 import '@wangeditor-next/editor/dist/css/style.css'
 import { desktopApi, isDesktopClient } from '@/lib/tauri-api'
+import { toEditorHtml, toStoredHtml } from '@/lib/richTextHtml'
 
-/** HTML 里存储的媒体引用形如 `assets/<uuid>.<ext>`；展示时换成 richasset 协议 URL。 */
-const ASSET_REF_PATTERN = /assets\/([\w-]+\.[a-z0-9]+)/g
-/** 编辑器内的协议 URL（Windows 为 `http://richasset.localhost/<name>`），保存时还原。 */
-const PROTOCOL_URL_PATTERN = /https?:\/\/richasset\.localhost\/([\w-]+\.[a-z0-9]+)/g
+/** 输入停顿多久算一次自动保存；太短会频繁写库，太长又会让「输入后立刻关窗」丢字。 */
+const AUTOSAVE_DELAY = 600
 
 function htmlForEditor(html: string) {
   if (!isDesktopClient) return html
-  return html.replace(ASSET_REF_PATTERN, (_match, name: string) => desktopApi.richAssetUrl(name))
+  return toEditorHtml(html, desktopApi.richAssetUrl)
 }
 
 function htmlForSave(html: string) {
-  return html.replace(PROTOCOL_URL_PATTERN, (_match, name: string) => `assets/${name}`)
+  return toStoredHtml(html)
 }
 
 interface RichTextDialogProps {
@@ -40,6 +39,8 @@ interface RichTextDialogProps {
   onSave: (html: string, plain: string) => void
   /** 就地保存：写回内容但不关闭弹窗，方便边看画布边继续写。 */
   onQuickSave: (html: string, plain: string) => void
+  /** 自动保存：静默写回，不关闭弹窗、不提示。 */
+  onAutoSave: (html: string, plain: string) => void
 }
 
 export default function RichTextDialog({
@@ -47,18 +48,29 @@ export default function RichTextDialog({
   onCancel,
   onSave,
   onQuickSave,
+  onAutoSave,
 }: RichTextDialogProps) {
   const editorHost = useRef<HTMLDivElement>(null)
   const toolbarHost = useRef<HTMLDivElement>(null)
   const editorRef = useRef<IDomEditor | null>(null)
   // 初始内容只在挂载时读取一次：编辑器自身持有文档状态，不必让 React 参与回流。
   const initialRef = useRef(initialHtml)
-  /**
-   * 是否有未保存改动：由编辑器的 change 事件标记，而不是比对 HTML 字符串——
-   * wangEditor 会把初始 HTML 规范化（补 <p> 等），字符串比对会一打开就判定为「已修改」。
-   */
-  const dirtyRef = useRef(false)
-  const { message, modal } = AntApp.useApp()
+  /** 已写回的 HTML：用来跳过没有实际变化的自动保存。 */
+  const savedHtmlRef = useRef(initialHtml)
+  const timerRef = useRef(0)
+  const { message } = AntApp.useApp()
+
+  /** 取出当前编辑器内容并立即写回；没有变化则什么也不做。 */
+  const flush = () => {
+    window.clearTimeout(timerRef.current)
+    timerRef.current = 0
+    const editor = editorRef.current
+    if (!editor) return
+    const html = htmlForSave(editor.getHtml())
+    if (html === savedHtmlRef.current) return
+    savedHtmlRef.current = html
+    onAutoSave(html, editor.getText())
+  }
 
   useEffect(() => {
     let editor: IDomEditor | null = null
@@ -111,9 +123,10 @@ export default function RichTextDialog({
       const editorConfig: Partial<IEditorConfig> = {
         placeholder: '写点什么：结论、方案、会议记录都可以',
         MENU_CONF: menuConf,
-        // 内容变化只打一个标记：用于 Ctrl+S 幂等与取消时确认，不参与渲染。
+        // 内容变化即排一次自动保存；编辑器是唯一的文档状态源。
         onChange: () => {
-          dirtyRef.current = true
+          window.clearTimeout(timerRef.current)
+          timerRef.current = window.setTimeout(flush, AUTOSAVE_DELAY)
         },
       }
       editor = createEditor({
@@ -128,13 +141,16 @@ export default function RichTextDialog({
       }
       createToolbar({ editor, selector: toolbar, mode: 'default', config: toolbarConfig })
       editorRef.current = editor
-      // 初始化过程可能触发一次 change，这里归零，避免空改动也弹确认。
-      dirtyRef.current = false
+      // 初始化可能触发一次 change：把基线推进到规范化后的 HTML，避免刚打开就写回。
+      savedHtmlRef.current = htmlForSave(editor.getHtml())
+      window.clearTimeout(timerRef.current)
+      timerRef.current = 0
     }
     attempt(10)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
+      window.clearTimeout(timerRef.current)
       editor?.destroy()
       editorRef.current = null
     }
@@ -144,35 +160,27 @@ export default function RichTextDialog({
   const handleSave = () => {
     const editor = editorRef.current
     if (!editor) return
-    onSave(htmlForSave(editor.getHtml()), editor.getText())
+    const html = htmlForSave(editor.getHtml())
+    savedHtmlRef.current = html
+    window.clearTimeout(timerRef.current)
+    onSave(html, editor.getText())
   }
 
-  /** 当前编辑器内容是否与打开时不同；用于 Ctrl+S 的幂等判断与取消时确认。 */
-  const isDirty = () => dirtyRef.current
-
+  /** Ctrl+S：立即写回并给出反馈，弹窗保持打开。 */
   const handleQuickSave = () => {
     const editor = editorRef.current
-    if (!editor || !dirtyRef.current) return
+    if (!editor) return
     const html = htmlForSave(editor.getHtml())
+    if (html === savedHtmlRef.current) return
+    savedHtmlRef.current = html
+    window.clearTimeout(timerRef.current)
     onQuickSave(html, editor.getText())
-    // 就地保存后把基线推进到当前内容：再点取消不该提示「有未保存修改」。
-    initialRef.current = html
-    dirtyRef.current = false
   }
 
-  const requestCancel = () => {
-    if (!isDirty()) {
-      onCancel()
-      return
-    }
-    modal.confirm({
-      title: '放弃未保存的修改？',
-      content: '这篇富文本还有改动没有保存，关闭后会丢失。',
-      okText: '放弃修改',
-      okButtonProps: { danger: true },
-      cancelText: '继续编辑',
-      onOk: onCancel,
-    })
+  /** 自动保存已经把改动写回，关闭时不再二次确认，只把未落下的那次补上。 */
+  const handleCancel = () => {
+    flush()
+    onCancel()
   }
 
   /** 编辑器是 contenteditable，keydown 会冒泡到外层容器，在这里接住 Ctrl+S。 */
@@ -189,16 +197,16 @@ export default function RichTextDialog({
       title="富文本"
       width={880}
       okText="保存"
-      cancelText="取消"
+      cancelText="关闭"
       onOk={handleSave}
-      onCancel={requestCancel}
+      onCancel={handleCancel}
       styles={{ body: { paddingTop: 8 } }}
     >
       <div className="rich-editor" onKeyDown={handleKeyDown}>
         <div ref={toolbarHost} className="rich-editor-toolbar" />
         <div ref={editorHost} className="rich-editor-body" />
       </div>
-      <p className="rich-editor-hint">Ctrl+S 保存但不关闭；点「保存」写回画布并关闭。</p>
+      <p className="rich-editor-hint">改动会自动保存；关闭不会丢失，Ctrl+S 可立即保存。</p>
     </Modal>
   )
 }
