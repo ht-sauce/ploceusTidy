@@ -11,7 +11,7 @@
  * - 改动停顿后自动写回，关闭不弹二次确认；Ctrl+S 立即保存，「保存」按钮写回并关闭。
  */
 import { useEffect, useRef } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import Modal from 'antd/es/modal'
 import { App as AntApp } from 'antd'
 import { createEditor, createToolbar } from '@wangeditor-next/editor'
@@ -102,7 +102,8 @@ export default function RichTextDialog({
           ) {
             try {
               const { url } = await desktopApi.saveRichAsset(file)
-              insertFn(url, file.name, url)
+              // 第三个参数是图片链接：留空，避免点击图片时被 WebView 当链接打开（链接会走系统浏览器）。
+              insertFn(url, file.name, '')
             } catch (error) {
               message.error(`图片上传失败：${String(error)}`)
             }
@@ -191,6 +192,22 @@ export default function RichTextDialog({
     handleQuickSave()
   }
 
+  /**
+   * 点击图片/视频只用于选中后调整尺寸，不能触发系统浏览器打开。
+   * 旧版本上传的图片带了 href（媒体地址），点击会被 WebView 按链接跳转；
+   * 这里只拦指向工作空间本地媒体的链接，正文里的外部链接保持可点。
+   */
+  const handleContentClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    const anchor = target.closest('a[href]')
+    if (!anchor) return
+    const href = anchor.getAttribute('href') ?? ''
+    if (href.includes('richasset.localhost') || href.startsWith('assets/')) {
+      event.preventDefault()
+    }
+  }
+
   return (
     <Modal
       open
@@ -202,7 +219,7 @@ export default function RichTextDialog({
       onCancel={handleCancel}
       styles={{ body: { paddingTop: 8 } }}
     >
-      <div className="rich-editor" onKeyDown={handleKeyDown}>
+      <div className="rich-editor" onKeyDown={handleKeyDown} onClick={handleContentClick}>
         <div ref={toolbarHost} className="rich-editor-toolbar" />
         <div ref={editorHost} className="rich-editor-body" />
       </div>

@@ -93,7 +93,7 @@ ploceusTidy/
 │   │   ├── EmptyOverlay.tsx        # 空画布引导
 │   │   ├── TextPromptDialog.tsx    # 连线标签 / 空间标题单行文本编辑
 │   │   ├── TextContentDialog.tsx   # 文字卡内容弹窗（多行文本；Ctrl+S 就地保存、取消确认）
-│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor；Ctrl+S 就地保存、取消确认；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换
+│   │   ├── RichTextDialog.tsx      # 富文本弹窗：按需加载的 wangEditor；Ctrl+S 就地保存、取消确认；图片/视频本地上传（Raw IPC 二进制直传）与 src 双向转换；媒体不生成外链，点击只选中/调尺寸
 │   │   ├── OutlinePanel.tsx        # 左侧大纲树：按空间分组，可逐个展开/收起并定位
 │   │   ├── ContentManagerDialog.tsx # 内容管理：文字/富文本列表、移动到空间末尾、导出 txt / html+媒体
 │   │   ├── ColorPickerDialog.tsx   # 空间与连线取色器

@@ -105,6 +105,7 @@ ploceusTidy/
 - NEVER 边读边改、边对话边改；方案确认后一次性批量改动。
 - NEVER 单条命令阻塞超过 5 分钟仍死等；必须中断，改用非阻塞执行、缩小范围或拆分验证。
 - NEVER 未经明确要求执行 `git commit` / `git push`。
+- NEVER 让 spec 滞后于实现：功能、行为、界面、数据模型、配置或文件结构一旦变更，必须在同一批改动里同步对应 spec、`REQUIREMENTS.md` 与 `project-overview.md`（`docs/README.md` HC-18）。
 - NEVER 改了需求或修了 bug 却不升版本号：每次需求更新与 bug 修复都要在同一批改动里 `pnpm version:bump` 并补 `release/log.md`（`docs/README.md` HC-17）。
 
 ## 6. 文档索引
